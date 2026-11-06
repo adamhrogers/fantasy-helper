@@ -43,6 +43,20 @@ def fetch_rosters(client: httpx.Client, league_id: str) -> RawResponse:
     return _get(client, "rosters", f"/league/{league_id}/rosters")
 
 
+def fetch_users(client: httpx.Client, league_id: str) -> RawResponse:
+    """League members. Display names and team names are personal: redact before recording."""
+    return _get(client, "users", f"/league/{league_id}/users")
+
+
+def fetch_matchups(client: httpx.Client, league_id: str, week: int) -> RawResponse:
+    """One week's matchups with points per player. No lock-in data (M1 spike, Q4)."""
+    return _get(client, f"matchups_{week}", f"/league/{league_id}/matchups/{week}")
+
+
+def fetch_transactions(client: httpx.Client, league_id: str, week: int) -> RawResponse:
+    return _get(client, f"transactions_{week}", f"/league/{league_id}/transactions/{week}")
+
+
 def summarize(league: Any, rosters: Any, user_id: str | None) -> SleeperLeagueSummary:
     if league.get("sport") not in (None, "nba"):
         raise SleeperLookupError(f"league is a {league.get('sport')} league, not NBA")

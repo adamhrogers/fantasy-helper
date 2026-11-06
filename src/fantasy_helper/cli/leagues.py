@@ -4,64 +4,35 @@ League IDs and cookies never go in `.env`. ESPN cookies are typed at a hidden pr
 against ESPN, then stored encrypted.
 """
 
-from collections.abc import Iterator
-from contextlib import contextmanager
 from enum import StrEnum
 from typing import Annotated
 
 import typer
 from pydantic import SecretStr
-from sqlalchemy import pool
 from sqlalchemy.orm import Session
 
 from fantasy_helper.adapters._http import make_client
 from fantasy_helper.adapters.espn.league import EspnAccessError
 from fantasy_helper.adapters.sleeper.league import SleeperLookupError
-from fantasy_helper.config import Settings, get_settings
+from fantasy_helper.cli._common import fail as _fail
+from fantasy_helper.cli._common import require_db_and_key as _require
+from fantasy_helper.cli._common import transaction as _transaction
+from fantasy_helper.config import get_settings
 from fantasy_helper.domain.calendar import season_end_year
 from fantasy_helper.domain.league import Platform
 from fantasy_helper.domain.ports import SystemClock
 from fantasy_helper.domain.users import EspnCredentials, User
 from fantasy_helper.pipeline import onboarding
-from fantasy_helper.storage import crypto
-from fantasy_helper.storage.db import make_engine
 from fantasy_helper.storage.repositories import credentials, leagues, users
 
 app = typer.Typer(help="Add and list your fantasy leagues.", no_args_is_help=True)
 
-COOKIE_HELP = "docs/runbooks/espn-cookies.md"
+COOKIE_HELP = "docs/runbooks/adding-leagues.md"
 
 
 class PlatformChoice(StrEnum):
     ESPN = "espn"
     SLEEPER = "sleeper"
-
-
-def _fail(message: str) -> typer.Exit:
-    typer.echo(f"✗ {message}", err=True)
-    return typer.Exit(code=1)
-
-
-def _require(settings: Settings) -> tuple[str, bytes]:
-    if settings.database_url is None:
-        raise _fail("DATABASE_URL is not set (see .env.example)")
-    if settings.encryption_key is None:
-        raise _fail("FH_ENCRYPTION_KEY is not set (generate one: uv run fh keygen)")
-    try:
-        key = crypto.load_key(settings.encryption_key.get_secret_value())
-    except crypto.CryptoError as exc:
-        raise _fail(f"FH_ENCRYPTION_KEY is invalid: {exc}") from exc
-    return settings.database_url.get_secret_value(), key
-
-
-@contextmanager
-def _transaction(url: str) -> Iterator[Session]:
-    engine = make_engine(url, poolclass=pool.NullPool)
-    try:
-        with Session(engine) as session, session.begin():
-            yield session
-    finally:
-        engine.dispose()
 
 
 def _resolve_user(session: Session, email: str | None) -> User:

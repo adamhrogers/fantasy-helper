@@ -1,0 +1,28 @@
+{
+  "recorded_at": "2026-11-06T17:09:32.773702+00:00",
+  "how": "uv run fh fixtures record (redacted; see src/fantasy_helper/adapters/redaction.py)",
+  "files": {
+    "espn_points/settings.json": "views mSettings + mStatus",
+    "espn_points/teams_rosters.json": "views mTeam + mRoster; players' stat arrays emptied for size",
+    "espn_points/matchups.json": "views mMatchupScore + mScoreboard; player stats emptied, delayed roster copies dropped",
+    "espn_points/transactions.json": "mTransactions2 per scoring period 1-18, type-filtered",
+    "espn_categories/settings.json": "views mSettings + mStatus",
+    "espn_categories/teams_rosters.json": "views mTeam + mRoster; players' stat arrays emptied for size",
+    "espn_categories/matchups.json": "views mMatchupScore + mScoreboard; player stats emptied, delayed roster copies dropped",
+    "espn_categories/transactions.json": "mTransactions2 per scoring period 1-18, type-filtered",
+    "sleeper_points/league.json": "",
+    "sleeper_points/users.json": "",
+    "sleeper_points/rosters.json": "",
+    "sleeper_points/matchups_1.json": "",
+    "sleeper_points/transactions_1.json": "",
+    "sleeper_points/matchups_2.json": "",
+    "sleeper_points/transactions_2.json": "",
+    "sleeper_points/matchups_3.json": "",
+    "sleeper_points/transactions_3.json": "",
+    "espn_public/players_projections.json": "top 40 players by ownership",
+    "espn_public/pro_schedule.json": "trimmed to the first 6 of 31 teams for size",
+    "sleeper_public/state.json": "",
+    "sleeper_public/players.json": "142 of 2176 players: recorded rosters and ESPN sample",
+    "sleeper_public/projections_week.json": "week 3 projections for the kept players"
+  }
+}

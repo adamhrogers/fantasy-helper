@@ -7,10 +7,12 @@ from pydantic import SecretStr, ValidationError
 from fantasy_helper.domain.evaluations import EvaluationPoint, SubjectType
 from fantasy_helper.domain.league import (
     LeagueFormat,
+    LeagueRules,
     LeagueSettings,
     LineupMode,
     Platform,
     RosterSlot,
+    ScoringBonus,
     ScoringRules,
     ScoringType,
 )
@@ -68,11 +70,8 @@ def make_recommendation(**overrides: object) -> Recommendation:
     return Recommendation.model_validate(fields | overrides)
 
 
-def make_settings(**overrides: object) -> LeagueSettings:
+def make_rules(**overrides: object) -> LeagueRules:
     fields: dict[str, object] = {
-        "league_id": uuid4(),
-        "version": 1,
-        "effective_from": NOW,
         "team_count": 10,
         "scoring": ScoringRules(
             scoring_type=ScoringType.POINTS, weights={Stat.POINTS: 1, Stat.ASSISTS: 4}
@@ -82,7 +81,13 @@ def make_settings(**overrides: object) -> LeagueSettings:
             RosterSlot(slot="G", count=1, eligible_positions=(Position.PG, Position.SG)),
         ),
     }
-    return LeagueSettings.model_validate(fields | overrides)
+    return LeagueRules.model_validate(fields | overrides)
+
+
+def make_settings(**overrides: object) -> LeagueSettings:
+    return LeagueSettings(
+        league_id=uuid4(), version=1, effective_from=NOW, rules=make_rules(**overrides)
+    )
 
 
 class TestTimeAndImmutability:
@@ -162,8 +167,11 @@ class TestTakes:
 
 class TestLeagueSettings:
     def test_hash_ignores_version_and_date(self) -> None:
-        a = make_settings()
-        b = make_settings(league_id=a.league_id, version=2, effective_from=NOW + timedelta(days=3))
+        rules = make_rules()
+        a = LeagueSettings(league_id=uuid4(), version=1, effective_from=NOW, rules=rules)
+        b = LeagueSettings(
+            league_id=a.league_id, version=2, effective_from=NOW + timedelta(days=3), rules=rules
+        )
         assert a.content_hash == b.content_hash
 
     def test_hash_changes_when_scoring_changes(self) -> None:
@@ -247,3 +255,25 @@ def test_espn_cookies_are_hidden_in_repr() -> None:
     creds = EspnCredentials(espn_s2=SecretStr("s2-cookie-value"), swid=SecretStr("{SWID}"))
     assert "s2-cookie-value" not in repr(creds)
     assert "{SWID}" not in repr(creds)
+
+
+def test_named_slots_know_their_positions() -> None:
+    util = RosterSlot.named("UTIL", 3)
+    assert util.starting
+    assert len(util.eligible_positions) == 5
+    assert not RosterSlot.named("BENCH", 4).starting
+    assert RosterSlot.named("G", 1).eligible_positions == (Position.PG, Position.SG)
+    with pytest.raises(ValueError, match="unknown roster slot"):
+        RosterSlot.named("BE", 4)
+
+
+def test_bonuses_change_the_rules_hash() -> None:
+    plain = make_rules()
+    with_bonus = make_rules(
+        scoring=ScoringRules(
+            scoring_type=ScoringType.POINTS,
+            weights={Stat.POINTS: 1, Stat.ASSISTS: 4},
+            bonuses=(ScoringBonus(stat=Stat.POINTS, threshold=40, points=2),),
+        )
+    )
+    assert plain.content_hash != with_bonus.content_hash
