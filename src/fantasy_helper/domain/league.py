@@ -39,15 +39,34 @@ class LeagueFormat(StrEnum):
 
 
 class CategoryRule(DomainModel):
-    stat: Stat
+    """One scoring category: a counting stat (PTS) or a ratio of two (FG% is FGM / FGA)."""
+
+    name: str = Field(min_length=1)  # as shown to the user: "PTS", "FG%"
+    stat: Stat | None = None
+    ratio_of: tuple[Stat, Stat] | None = None
     higher_is_better: bool = True  # False for turnovers
-    ratio_of: tuple[Stat, Stat] | None = None  # FG% is (FGM, FGA)
+
+    @model_validator(mode="after")
+    def _one_kind(self) -> Self:
+        if (self.stat is None) == (self.ratio_of is None):
+            raise ValueError("a category is either one stat or a ratio of two")
+        return self
+
+
+class ScoringBonus(DomainModel):
+    """Extra points when one game's stat reaches a threshold (Sleeper's bonus_pt_40p is
+    `ScoringBonus(stat=POINTS, threshold=40, points=2)`)."""
+
+    stat: Stat
+    threshold: float
+    points: float
 
 
 class ScoringRules(DomainModel):
     scoring_type: ScoringType
     weights: StatLine = Field(default_factory=dict)  # points leagues: fantasy points per stat
     categories: tuple[CategoryRule, ...] = ()  # categories leagues
+    bonuses: tuple[ScoringBonus, ...] = ()
 
     @model_validator(mode="after")
     def _matches_scoring_type(self) -> Self:
@@ -58,8 +77,28 @@ class ScoringRules(DomainModel):
         return self
 
 
+# Canonical slot names every adapter maps into.
+SLOT_POSITIONS: dict[str, tuple[Position, ...]] = {
+    "PG": (Position.PG,),
+    "SG": (Position.SG,),
+    "SF": (Position.SF,),
+    "PF": (Position.PF,),
+    "C": (Position.C,),
+    "G": (Position.PG, Position.SG),
+    "F": (Position.SF, Position.PF),
+    "SG/SF": (Position.SG, Position.SF),
+    "G/F": (Position.PG, Position.SG, Position.SF, Position.PF),
+    "PF/C": (Position.PF, Position.C),
+    "F/C": (Position.SF, Position.PF, Position.C),
+    "UTIL": tuple(Position),
+    "BENCH": tuple(Position),
+    "IR": tuple(Position),
+}
+NON_STARTING_SLOTS = frozenset({"BENCH", "IR"})
+
+
 class RosterSlot(DomainModel):
-    slot: str = Field(min_length=1)  # "PG", "G", "UTIL", "BE", "IR", …
+    slot: str = Field(min_length=1)  # one of SLOT_POSITIONS
     count: int = Field(ge=0)
     eligible_positions: tuple[Position, ...] = ()
     starting: bool = True
@@ -69,19 +108,28 @@ class RosterSlot(DomainModel):
     def _sorted(cls, value: tuple[Position, ...]) -> tuple[Position, ...]:
         return tuple(sorted(set(value)))  # deterministic, so the settings hash is stable
 
+    @classmethod
+    def named(cls, slot: str, count: int) -> "RosterSlot":
+        if slot not in SLOT_POSITIONS:
+            raise ValueError(f"unknown roster slot {slot!r}")
+        return cls(
+            slot=slot,
+            count=count,
+            eligible_positions=SLOT_POSITIONS[slot],
+            starting=slot not in NON_STARTING_SLOTS,
+        )
+
 
 class AcquisitionLimits(DomainModel):
+    per_season: int | None = Field(default=None, ge=0)  # None means unlimited
     per_matchup: int | None = Field(default=None, ge=0)
-    per_season: int | None = Field(default=None, ge=0)
+    # ESPN can scale the matchup limit by the matchup's length: 0.571 a day is 4 per 7-day week.
+    per_matchup_per_day: float | None = Field(default=None, ge=0)
 
 
-class LeagueSettings(DomainModel):
-    """One version of a league's rules. A new version is stored whenever `content_hash` changes,
-    so every call can be graded against the settings that existed when it was made."""
+class LeagueRules(DomainModel):
+    """Everything about a league that changes how a call is valued."""
 
-    league_id: UUID
-    version: int = Field(ge=1)
-    effective_from: UtcDatetime
     team_count: int = Field(ge=2)
     scoring: ScoringRules
     lineup_mode: LineupMode
@@ -91,10 +139,7 @@ class LeagueSettings(DomainModel):
     @computed_field  # type: ignore[prop-decorator]
     @property
     def content_hash(self) -> str:
-        payload = self.model_dump(
-            mode="json",
-            include={"team_count", "scoring", "lineup_mode", "roster_slots", "acquisition_limits"},
-        )
+        payload = self.model_dump(mode="json", exclude={"content_hash"})
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode()).hexdigest()
 
@@ -103,6 +148,24 @@ class LeagueSettings(DomainModel):
         if self.lineup_mode is LineupMode.LOCK_IN:
             return LeagueFormat.LOCK_IN
         return LeagueFormat(self.scoring.scoring_type.value)
+
+
+class LeagueSettings(DomainModel):
+    """One version of a league's rules. A new version is stored whenever the rules' hash
+    changes, so every call is graded against the settings that existed when it was made."""
+
+    league_id: UUID
+    version: int = Field(ge=1)
+    effective_from: UtcDatetime
+    rules: LeagueRules
+
+    @property
+    def content_hash(self) -> str:
+        return self.rules.content_hash
+
+    @property
+    def format(self) -> LeagueFormat:
+        return self.rules.format
 
 
 class League(DomainModel):

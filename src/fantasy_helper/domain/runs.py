@@ -11,6 +11,7 @@ from fantasy_helper.domain._base import DomainModel, UtcDatetime, new_id
 
 
 class RunKind(StrEnum):
+    SNAPSHOT = "snapshot"
     INGEST = "ingest"
     DAILY = "daily"
     WEEKLY = "weekly"

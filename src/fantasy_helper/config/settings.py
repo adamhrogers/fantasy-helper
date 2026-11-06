@@ -8,6 +8,7 @@ Claude API key cannot leak into the shell you run Claude Code in.
 """
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, SecretStr
@@ -40,6 +41,9 @@ class Settings(BaseSettings):
 
     ntfy_topic: SecretStr | None = Field(default=None, alias="FH_NTFY_TOPIC")
     ntfy_server: str = Field(default="https://ntfy.sh", alias="FH_NTFY_SERVER")
+
+    # Local raw payload store (daily snapshots) until it moves to R2 in M3. Git-ignored.
+    data_dir: Path = Field(default=Path("data"), alias="FH_DATA_DIR")
 
     # Used from M4. Deliberately not ANTHROPIC_API_KEY (spec: Cost and tokens).
     anthropic_api_key: SecretStr | None = Field(default=None, alias="FH_ANTHROPIC_API_KEY")

@@ -1,5 +1,7 @@
 # Fantasy Helper: working guide
 
+**Starting a new session? Read [docs/session-handoff.md](docs/session-handoff.md) first.** It has the current state, how we work with Adam, what we learned the hard way, and exactly what's next.
+
 A fantasy basketball assistant: a daily report and weekly plan with specific moves, tuned to each league's scoring, built on the user's own takes, and graded on every call it makes. Read `docs/architecture.md` (system design), `docs/roadmap.md` (milestones and current status) and `docs/decisions/` (ADRs) before changing anything structural.
 
 ## Commands
@@ -13,6 +15,10 @@ uv run lint-imports                       # architecture contracts
 uv run alembic upgrade head               # migrate DATABASE_URL
 uv run alembic revision --autogenerate --rev-id 0002 -m "..."   # new migration
 uv run fh doctor                          # check config, encryption, DB, tracing, alerts
+uv run fh snapshot                        # save today's raw public data (launchd runs it twice a day)
+uv run fh ingest                          # load leagues + snapshots into the database (idempotent)
+uv run fh fixtures record                 # re-record redacted fixtures (then update contract test counts)
+scripts/snapshot-schedule.sh status       # snapshot schedule state and logs
 ```
 
 ## Rules that are never broken
@@ -44,3 +50,5 @@ uv run fh doctor                          # check config, encryption, DB, tracin
 - **Ops alerts** go through `observability.alerts` and never contain secrets or league data.
 - **Tests** never read the real `.env` (an autouse fixture isolates them). DB tests only run against a database whose name contains `test`.
 - **Dates in docs** are absolute (2026-11-02), never relative.
+- **Adapters** return platform records keyed by the platform's own player IDs (`domain.records`); only ingest resolves them to canonical players through `identity`.
+- **Player identity** is matched by name and team (ADR 0018). When ingest reports an unlinked rostered player, add a link to `identity/overrides.py`.

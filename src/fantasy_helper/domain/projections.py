@@ -4,6 +4,7 @@ Grades and timeline graphs use the snapshot that existed at the time, so nothing
 updated in place (docs/architecture.md §5.2). A day that isn't snapshotted can't be recovered.
 """
 
+from datetime import date
 from enum import StrEnum
 from uuid import UUID
 
@@ -45,6 +46,7 @@ class ProjectionRow(DomainModel):
     player_id: UUID
     games: float | None = Field(default=None, ge=0)
     per_game: StatLine
+    game_date: date | None = None  # set for one game's projection (Sleeper's weekly rows)
 
 
 class InjuryStatus(StrEnum):
