@@ -19,6 +19,10 @@ One short entry per architecture choice: what was decided, why, and what was rej
 | [0013](0013-gradable-takes.md) | Gradable takes: direction, horizon and conviction | Accepted · 2026-10-19 |
 | [0014](0014-timelines-from-snapshots.md) | Timeline graphs computed from stored snapshots | Accepted · 2026-10-19 |
 | [0015](0015-native-structured-outputs.md) | Native structured outputs: always `method="json_schema"` | Accepted · 2026-10-25 (the M0 check) |
+| [0016](0016-espn-direct-http.md) | Call ESPN's API directly; use espn-api only as a reference | Accepted · 2026-11-06 (changed from the spec) |
+| [0017](0017-raw-zone-and-interim-snapshots.md) | Raw snapshots on the laptop until M3; ingest loads from them | Accepted · 2026-11-06 |
+| [0018](0018-identity-by-name.md) | Match players across platforms by name, conservatively | Accepted · 2026-11-06 |
+| [0019](0019-espn-trades-from-activity-feed.md) | Every league trade comes from ESPN's activity feed | Accepted · 2026-11-06 (for the trade tracker, P9) |
 
 ## Template
 

@@ -1,10 +1,12 @@
 from collections import Counter
+from datetime import UTC, datetime
 
 import pytest
 
 from fantasy_helper.adapters.espn import mapper
 from fantasy_helper.domain.league import LeagueRules, LineupMode, ScoringType
-from fantasy_helper.domain.player import IdSource
+from fantasy_helper.domain.player import NBA_TEAMS, IdSource, Position
+from fantasy_helper.domain.projections import InjuryStatus
 from fantasy_helper.domain.records import ItemAction, TransactionKind, TransactionStatus
 from fantasy_helper.domain.stats import Stat
 from tests.contract.conftest import recorded
@@ -108,3 +110,48 @@ class TestCategoriesLeague:
         )
         records, _ = mapper.map_transactions(responses)
         assert records
+
+
+class TestPublicPlayerData:
+    def test_players_use_standard_team_codes_and_positions(self) -> None:
+        players = mapper.map_players(recorded("espn_public/players_projections.json"))
+        assert len(players) == 40
+        assert all(p.nba_team in NBA_TEAMS or p.nba_team is None for p in players)
+        wemby = next(p for p in players if p.full_name == "Victor Wembanyama")
+        assert wemby.nba_team == "SAS"
+        assert wemby.positions == (Position.C,)
+        assert wemby.key.source is IdSource.ESPN
+
+    def test_injuries(self) -> None:
+        injuries = mapper.map_injuries(recorded("espn_public/players_projections.json"))
+        assert Counter(i.status for i in injuries) == {
+            InjuryStatus.ACTIVE: 35,
+            InjuryStatus.DAY_TO_DAY: 3,
+            InjuryStatus.OUT: 2,
+        }
+
+    def test_season_projections_are_per_game_with_games(self) -> None:
+        data = recorded("espn_public/players_projections.json")
+        projections = {p.player.external_id: p for p in mapper.map_projections(data, 2027)}
+        wemby_id = next(
+            str(e["player"]["id"]) for e in data["players"]
+            if e["player"]["fullName"] == "Victor Wembanyama"
+        )  # fmt: skip
+        wemby = projections[wemby_id]
+        assert wemby.per_game[Stat.POINTS] == pytest.approx(26.85, abs=0.01)
+        assert wemby.games == 67
+        assert wemby.game_date is None
+        assert len(projections) >= 35
+
+    def test_schedule_is_deduplicated_with_utc_tip_times(self) -> None:
+        games = mapper.map_schedule(recorded("espn_public/pro_schedule.json"))
+        assert len({g.external_id for g in games}) == len(games)
+        assert all(g.home_team in NBA_TEAMS and g.away_team in NBA_TEAMS for g in games)
+        first = next(g for g in games if g.external_id == "401909839")
+        assert first.tip_utc == datetime(2026, 10, 22, 0, 0, tzinfo=UTC)  # 8 p.m. ET, Oct 21
+        assert first.scoring_period == 2
+
+    def test_roster_players_carry_identity_fields(self) -> None:
+        players = mapper.map_roster_players(recorded("espn_points/teams_rosters.json"))
+        assert len(players) == 155
+        assert all(p.full_name for p in players)

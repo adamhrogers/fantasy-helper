@@ -12,6 +12,7 @@ from fantasy_helper import __version__
 from fantasy_helper.adapters._http import make_client
 from fantasy_helper.cli import fixtures, leagues
 from fantasy_helper.cli.doctor import Check, Status, run_checks
+from fantasy_helper.cli.ingest import ingest as ingest_command
 from fantasy_helper.config import Settings, get_settings
 from fantasy_helper.domain.runs import RunRecord, RunStatus
 from fantasy_helper.observability.alerts import notifier_from_settings
@@ -32,6 +33,7 @@ app = typer.Typer(
 
 app.add_typer(leagues.app, name="league")
 app.add_typer(fixtures.app, name="fixtures")
+app.command("ingest")(ingest_command)
 
 _SYMBOLS = {Status.OK: "✓", Status.SKIP: "-", Status.FAIL: "✗"}
 

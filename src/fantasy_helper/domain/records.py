@@ -5,13 +5,16 @@ player through the identity crosswalk. Adapters never import the identity layer,
 response stays a pure function of the response (docs/architecture.md §3).
 """
 
+from datetime import date
 from enum import StrEnum
 
 from pydantic import Field
 
 from fantasy_helper.domain._base import DomainModel, UtcDatetime
 from fantasy_helper.domain.league import LeagueRules
-from fantasy_helper.domain.player import IdSource
+from fantasy_helper.domain.player import IdSource, Position
+from fantasy_helper.domain.projections import InjuryStatus
+from fantasy_helper.domain.stats import StatLine
 
 
 class RulesRecord(DomainModel):
@@ -97,3 +100,34 @@ class TransactionRecord(DomainModel):
     @property
     def is_completed_trade(self) -> bool:
         return self.kind is TransactionKind.TRADE and self.status is TransactionStatus.EXECUTED
+
+
+class SourcePlayer(DomainModel):
+    """A player as one platform describes them. Identity links these across platforms."""
+
+    key: PlayerKey
+    full_name: str = Field(min_length=1)
+    nba_team: str | None = None  # a code from domain.player.NBA_TEAMS; None for free agents
+    positions: tuple[Position, ...] = ()
+    active: bool = True
+
+
+class InjuryRecord(DomainModel):
+    player: PlayerKey
+    status: InjuryStatus
+    note: str | None = None
+
+
+class ProjectionRecord(DomainModel):
+    player: PlayerKey
+    per_game: StatLine
+    games: float | None = None  # projected games, when the provider gives them
+    game_date: date | None = None  # set when the projection is for one game
+
+
+class ScheduledGameRecord(DomainModel):
+    external_id: str  # ESPN's game ID
+    scoring_period: int  # ESPN's scoring day (1 = opening night)
+    tip_utc: UtcDatetime
+    home_team: str
+    away_team: str

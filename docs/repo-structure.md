@@ -43,19 +43,19 @@ fantasy-helper/
 │   │
 │   ├── adapters/
 │   │   ├── _http.py                  # shared client: retries, backoff, rate limits, raw capture hook
-│   │   ├── _recorder.py              # fixture capture + REDACTION (cookies, headers, leaguemate names)
-│   │   ├── espn/                     # client.py (espn-api wrapper) · mapper.py · settings.py
-│   │   ├── sleeper/                  # client.py · mapper.py · projections.py
+│   │   ├── redaction.py              # pseudonymize leaguemates + verify nothing identifying remains
+│   │   ├── espn/                     # public.py (no login) · league.py (cookies) · mapper.py (ADR 0016)
+│   │   ├── sleeper/                  # public.py · league.py · mapper.py
 │   │   ├── news/              (M4)   # injury / role-change feeds
 │   │   └── yahoo/             (off)  # OAuth adapter, offseason
 │   │
-│   ├── identity/                     # canonical player registry + cross-platform ID crosswalk
+│   ├── identity/                     # names.py · matching.py (pure) · crosswalk.py · overrides.py (ADR 0018)
 │   │
 │   ├── storage/
 │   │   ├── db.py                     # engine/session factory (Supabase Postgres)
 │   │   ├── crypto.py                 # AES-GCM encrypt/decrypt for platform credentials
 │   │   ├── tables.py                 # SQLAlchemy 2.0 typed tables
-│   │   ├── repositories/             # one per aggregate; every user-scoped query takes user_id
+│   │   ├── repositories/             # users · leagues · credentials · players · league_data · nba · runs
 │   │   ├── raw_store.py              # immutable gzipped payloads (disk → R2 at M3)
 │   │   └── migrations/               # Alembic
 │   │
@@ -97,7 +97,10 @@ fantasy-helper/
 │   ├── delivery/              (M3)   # publish · web push (VAPID)
 │   │
 │   ├── pipeline/
-│   │   ├── ingest.py                 # (M1) pull → raw → normalize; daily snapshots
+│   │   ├── snapshot.py               # (M1) daily raw snapshots of public data (ADR 0017)
+│   │   ├── ingest.py                 # (M1) snapshots + fresh league data → database
+│   │   ├── onboarding.py             # (M1) fh league add
+│   │   ├── fixtures.py               # (M1) fh fixtures record
 │   │   ├── weekly.py                 # (M2)
 │   │   ├── daily.py           (M4)
 │   │   ├── grade.py           (M6)   # grade + evaluate (trajectory points)

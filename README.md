@@ -4,7 +4,7 @@ A personal fantasy basketball brain that tells you what to do, not just what hap
 
 Every morning it sends a short briefing to your phone: what happened last night, what moved in your league, and the moves to make today, all built on your league's own scoring rules. Tell it which players you believe in and it watches them for you. It keeps score on every call it makes, so by the end of the season you know exactly how much it helped.
 
-**Status:** M0 (foundation) · see [docs/roadmap.md](docs/roadmap.md)
+**Status:** M1 (data) done; M2 (scoring) and M3 (phone app) next · see [docs/roadmap.md](docs/roadmap.md)
 
 ## How it's built
 
@@ -42,6 +42,26 @@ Check everything:
 ```bash
 uv run fh doctor --alert
 ```
+
+Then add your leagues ([docs/runbooks/adding-leagues.md](docs/runbooks/adding-leagues.md)), start the daily snapshots, and load everything:
+
+```bash
+uv run fh league add espn YOUR_LEAGUE_ID
+scripts/snapshot-schedule.sh install
+uv run fh snapshot
+uv run fh ingest
+```
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `fh doctor [--alert]` | Checks config, encryption, database, LangSmith tracing and ops alerts |
+| `fh league add espn\|sleeper ID` / `fh league list` | Adds a league (ESPN cookies at a hidden prompt, stored encrypted) |
+| `fh snapshot [--set morning\|evening]` | Saves today's raw projections and injury statuses (scheduled twice a day) |
+| `fh ingest` | Loads every league, the schedule, projections and injuries into the database |
+| `fh fixtures record` | Records redacted real responses as test fixtures |
+| `scripts/snapshot-schedule.sh status` | Shows the snapshot schedule and recent runs |
 
 ## Development
 

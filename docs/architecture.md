@@ -90,8 +90,8 @@ All of these live in one Python package, `src/fantasy_helper/`, with strict inte
 |---|---|---|
 | `config` | Typed settings (pydantic-settings), role→model map, feature flags | Holds **only the system's own secrets and settings** (§12.1). League IDs, platform credentials and anything per-user live in the database. The app's key is **`FH_ANTHROPIC_API_KEY`**, never `ANTHROPIC_API_KEY`, so it can't leak into the Claude Code shell. |
 | `domain` | Pydantic v2 models, IDs, enums, value objects, ports | Zero I/O |
-| `adapters` | One package per source: `client` (HTTP, retries, rate limits), `recorder` (captures and redacts fixtures), `mapper` (raw → domain) | ESPN wraps `espn-api`. Sleeper uses httpx. A mapper validation failure means schema drift and raises an alert. |
-| `identity` | Canonical player registry and cross-platform ID crosswalk (ESPN ↔ Sleeper ↔ provider IDs ↔ normalized names) | **Gap in the spec.** Needed for second-source comparison, portable watchlists and multi-platform users. |
+| `adapters` | One package per source: `client` (HTTP, retries, rate limits), `recorder` (captures and redacts fixtures), `mapper` (raw → domain) | ESPN is called directly over httpx, with `espn-api` as a reference (ADR 0016). Mappers are pure functions, tested against recorded fixtures. A validation failure means schema drift and raises an alert. |
+| `identity` | Canonical player registry and cross-platform ID crosswalk (ESPN ↔ Sleeper ↔ provider IDs ↔ normalized names) | **Gap in the spec.** Sleeper has no ESPN IDs for NBA players, so links are made by normalized name and team, conservatively, with manual overrides (ADR 0018). |
 | `storage` | SQLAlchemy 2.0 tables, repositories, Alembic migrations, raw payload store | Supabase Postgres from M0. CI tests against a Postgres service container. |
 | `engine` | Deterministic math (see §6) | Pure functions. Each result carries provenance (the snapshot and settings IDs it used). |
 | `facts` | Builds one **FactSheet** per league per run: compact facts with IDs, plus engine-generated **candidate moves** with EV and baseline | Stored and hashed. **It's the replay unit for regression evals and shadow runs.** |
@@ -275,7 +275,7 @@ The path follows the spec, with one change of timing.
 
 | Stage | Pipeline | Database | Raw store | PWA | API |
 |---|---|---|---|---|---|
-| **M0–M2** | Laptop, `fh` CLI, manual | **Supabase** Postgres (dev project) | Local disk | — | — |
+| **M0–M2** | Laptop: launchd runs `fh snapshot` twice a day; `fh ingest` by hand (ADR 0017) | **Supabase** Postgres (dev project) | Local disk | — | — |
 | **M3 → beta** | GitHub Actions cron | **Supabase** Postgres (prod project) + Supabase Auth | Cloudflare R2 | Cloudflare Pages | Cloud Run |
 | **If Actions is late** | Cloud Run Jobs + Cloud Scheduler | (same) | (same) | (same) | (same) |
 | **Paid launch** | Revisit everything | | | | |

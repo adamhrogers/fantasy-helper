@@ -16,6 +16,16 @@ class Position(StrEnum):
     C = "C"
 
 
+# Standard NBA team codes. Every adapter maps its own codes into these.
+NBA_TEAMS = frozenset(
+    {
+        "ATL", "BKN", "BOS", "CHA", "CHI", "CLE", "DAL", "DEN", "DET", "GSW",
+        "HOU", "IND", "LAC", "LAL", "MEM", "MIA", "MIL", "MIN", "NOP", "NYK",
+        "OKC", "ORL", "PHI", "PHX", "POR", "SAC", "SAS", "TOR", "UTA", "WAS",
+    }
+)  # fmt: skip
+
+
 class IdSource(StrEnum):
     ESPN = "espn"
     SLEEPER = "sleeper"

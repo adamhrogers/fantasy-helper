@@ -1,8 +1,10 @@
 # Fantasy Helper — Phased Roadmap
 
-**Status:** v0.3, re-baselined 2026-10-25 when M0 started · companion to [architecture.md](architecture.md)
+**Status:** v0.4, re-baselined 2026-11-06 when M1 finished · companion to [architecture.md](architecture.md)
 
-**Friends beta: Nov 22 (was Nov 15). Hard stop: Dec 15.** Each milestone ends with something Adam uses the next morning and an automated check that proves it works. Lanes (A, B, …) inside a milestone have no dependencies on each other, so they can run as parallel sub-agents or sessions once you approve.
+**Friends beta: Nov 29 (planned Nov 15, then Nov 22). Hard stop: Dec 15.** Each milestone ends with something Adam uses the next morning and an automated check that proves it works. Lanes (A, B, …) inside a milestone have no dependencies on each other, so they can run as parallel sub-agents or sessions once you approve.
+
+**What changed in v0.4 (Nov 6):** M1 finished on Nov 6, about five days after the v0.3 plan, so M2 onward moves five to seven days and the beta moves to **Nov 29**, the Sunday after Thanksgiving and still two weeks inside the hard stop. Game logs (box scores) moved from M1 to M2, where the distributions first need them.
 
 **What changed in v0.3 (Oct 25):** M0 started on Oct 25 instead of Oct 19, so every milestone moves about six days and the beta moves to **Nov 22**, still three weeks inside the Dec 15 hard stop. To win back Nov 15, see the levers at the end.
 
@@ -16,24 +18,24 @@
 ## Timeline at a glance
 
 ```
-Oct 25 ─ M0 Foundation (started; NBA tip-off was Oct 20)
-Oct 27 ─ M1 Data spike + daily snapshots begin ────────┐  critical path: per-stat projections
-Nov 2  ─ M2 Scoring + weekly overview                   │
+Oct 25 ─ M0 Foundation ─────────────────────────────── done Nov 6 (NBA tip-off was Oct 20)
+Nov 6  ─ M1 Data spike ─────────────────────────────── done Nov 6; snapshots since Nov 6
+Nov 7  ─ M2 Scoring + weekly overview (+ game logs)    ┐ critical path
        ║ M3 Phone app + delivery  (in parallel with M2) │
-Nov 8  ─ M4 Daily report + registry (5-day streak Nov 10–14)
-Nov 15 ─ M5 Watchlist · signals · lock-in               │
-Nov 17 ─ M6 Grading + timeline graphs                   │
-Nov 22 ─ ◆ FRIENDS BETA (M7) ───────────────────────────┘  (hard stop Dec 15)
-Nov 23 ─ M8 Multi-agent orchestration ───────────────── Dec 31
+Nov 13 ─ M4 Daily report + registry (5-day streak Nov 15–19)
+Nov 20 ─ M5 Watchlist · signals · lock-in              │
+Nov 23 ─ M6 Grading + timeline graphs                  │
+Nov 29 ─ ◆ FRIENDS BETA (M7) ──────────────────────────┘  (hard stop Dec 15)
+Nov 30 ─ M8 Multi-agent orchestration ─────────────── Dec 31
 Dec    ─ P9 Trade tracker + trade graphs · categories leagues
-Jan 1  ─ P10 Iterate on evidence ────────────────────── Mar 15
+Jan 1  ─ P10 Iterate on evidence ──────────────────── Mar 15
 Mar 15 ─ ◆ Season ends ─ P11 Case study
 Apr–Sep 2027 ─ P12 Offseason: Yahoo, sign-up, pricing ─ fall 2027 launch
 ```
 
 ---
 
-## M0 — Foundation · Oct 25–26
+## M0 — Foundation · Oct 25–Nov 6 (done)
 
 **Goal:** a repo where the spec's rules are enforced by tooling before any feature exists.
 
@@ -52,9 +54,11 @@ Apr–Sep 2027 ─ P12 Offseason: Yahoo, sign-up, pricing ─ fall 2027 launch
 
 ---
 
-## M1 — Data spike · Oct 27–Nov 1
+## M1 — Data spike · Nov 6 (done)
 
 **Goal:** all three leagues load with one command, and history starts accumulating.
+
+**Status (Nov 6): done.** `fh snapshot` runs twice a day on launchd; `fh league add` stored all three leagues; `fh ingest` loads everything in about 30 seconds and is idempotent. First live run: 1,100 ESPN players, 142/142 Sleeper-rostered players linked to ESPN, 1,200 scheduled games, 9 projection snapshots (8,490 rows), 226 injury status changes, and full rosters, matchups and transactions for each league. Answers in [the spike doc](spikes/m1-data-sources.md). **Moved to M2:** game logs (box scores), which the distributions need first.
 
 | Lane | Work |
 |---|---|
@@ -75,7 +79,7 @@ Apr–Sep 2027 ─ P12 Offseason: Yahoo, sign-up, pricing ─ fall 2027 launch
 
 ---
 
-## M2 — Scoring layer and weekly overview · Nov 2–7
+## M2 — Scoring layer and weekly overview · Nov 7–12
 
 **Goal:** the first useful output, the weekly overview, built entirely by code with no AI.
 
@@ -89,7 +93,7 @@ Apr–Sep 2027 ─ P12 Offseason: Yahoo, sign-up, pricing ─ fall 2027 launch
 
 ---
 
-## M3 — Phone app and delivery · Nov 2–7 (in parallel with M2)
+## M3 — Phone app and delivery · Nov 7–12 (in parallel with M2)
 
 **Goal:** prove the whole path from scheduled job to sign-in to push before any LLM work starts.
 
@@ -103,7 +107,7 @@ Apr–Sep 2027 ─ P12 Offseason: Yahoo, sign-up, pricing ─ fall 2027 launch
 
 ---
 
-## M4 — Daily report and registry · Nov 8–14
+## M4 — Daily report and registry · Nov 13–19
 
 **Goal:** a daily report on Adam's phone every morning, with every call logged.
 
@@ -112,11 +116,11 @@ Apr–Sep 2027 ─ P12 Offseason: Yahoo, sign-up, pricing ─ fall 2027 launch
 | A — Brain baseline | LLM gateway, `baseline` graph (one Claude model), structured `ReportDraft`, guardrails (schema, numeric grounding, candidate set), graceful degradation to the engine-only report, prompt manifest, MCP server v1 (read-only tools) |
 | B — Registry + daily pipeline | Append-only registry with tip-off guard, `pipeline/daily.py`, preflight checks, news adapter v1, daily `ReportDocument` |
 
-**Done when** (spec): the report reaches Adam's phone by 8 a.m. five days in a row (Nov 10–14), and every call in it is in the registry. **Plus:** every LLM call has a LangSmith trace ID on its registry row, and the run log shows cost per report.
+**Done when** (spec): the report reaches Adam's phone by 8 a.m. five days in a row (Nov 15–19), and every call in it is in the registry. **Plus:** every LLM call has a LangSmith trace ID on its registry row, and the run log shows cost per report.
 
 ---
 
-## M5 — Watchlist, belief signals, lock-in · Nov 15–17
+## M5 — Watchlist, belief signals, lock-in · Nov 20–22
 
 | Lane | Work |
 |---|---|
@@ -128,7 +132,7 @@ Apr–Sep 2027 ─ P12 Offseason: Yahoo, sign-up, pricing ─ fall 2027 launch
 
 ---
 
-## M6 — Grading and timeline graphs · Nov 17–21
+## M6 — Grading and timeline graphs · Nov 23–28
 
 | Lane | Work |
 |---|---|
@@ -140,7 +144,7 @@ Apr–Sep 2027 ─ P12 Offseason: Yahoo, sign-up, pricing ─ fall 2027 launch
 
 ---
 
-## M7 — Friends beta · from Nov 22
+## M7 — Friends beta · from Nov 29
 
 | Work |
 |---|
@@ -153,7 +157,7 @@ Apr–Sep 2027 ─ P12 Offseason: Yahoo, sign-up, pricing ─ fall 2027 launch
 
 ---
 
-## M8 — Multi-agent orchestration · Nov 23–Dec 31
+## M8 — Multi-agent orchestration · Nov 30–Dec 31
 
 **Goal:** prove or disprove that the council beats one model.
 
@@ -188,10 +192,10 @@ Yahoo adapter (OAuth, which also solves sign-up for Yahoo users), self-serve ESP
 ## Critical path and the levers if it slips
 
 ```
-M1 snapshots + per-stat projections ─► M2 scoring ─► M4 daily report ─► M6 grading ─► Nov 22 beta
+M1 snapshots + per-stat projections ─► M2 scoring ─► M4 daily report ─► M6 grading ─► Nov 29 beta
                                        M3 phone path ──┘ (parallel)
 ```
 
-**To pull the beta back to Nov 15:** run M1's ESPN and Sleeper adapters as parallel sessions, start M5's take-entry form during M4's streak week, and accept the first cut below.
+**To pull the beta earlier:** run M2 and M3 as parallel sessions (they share no files), start M5's take-entry form during M4's streak week, and accept the first cut below.
 
 If the beta date is at risk, cut in this order (keeping the Dec 15 hard stop): (1) PWA polish, keeping plain cards; (2) Sleeper lock-in moves to the first beta week; (3) the timeline graph ships as a plain line, with event markers added the next week; (4) the beta starts with the Sleeper league only. **Never cut:** daily snapshots, the registry, the tip-off guard or tracing. Without them the season produces no evidence and the graphs have no history.

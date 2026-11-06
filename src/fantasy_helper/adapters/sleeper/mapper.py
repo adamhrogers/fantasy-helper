@@ -2,7 +2,7 @@
 
 import re
 from collections import Counter
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from fantasy_helper.domain.league import (
@@ -14,14 +14,18 @@ from fantasy_helper.domain.league import (
     ScoringRules,
     ScoringType,
 )
-from fantasy_helper.domain.player import IdSource
+from fantasy_helper.domain.player import NBA_TEAMS, IdSource, Position
+from fantasy_helper.domain.projections import InjuryStatus
 from fantasy_helper.domain.records import (
+    InjuryRecord,
     ItemAction,
     MatchupRecord,
     MatchupSide,
     PlayerKey,
+    ProjectionRecord,
     RosterEntryRecord,
     RulesRecord,
+    SourcePlayer,
     TeamRecord,
     TransactionItem,
     TransactionKind,
@@ -61,6 +65,16 @@ SLOTS = {
     "PG": "PG", "SG": "SG", "SF": "SF", "PF": "PF", "C": "C", "G": "G", "F": "F",
     "UTIL": "UTIL", "BN": "BENCH", "IR": "IR",
 }  # fmt: skip
+_INJURY: dict[str, InjuryStatus] = {
+    "out": InjuryStatus.OUT,
+    "gtd": InjuryStatus.DAY_TO_DAY,
+    "dtd": InjuryStatus.DAY_TO_DAY,
+    "questionable": InjuryStatus.DAY_TO_DAY,
+    "doubtful": InjuryStatus.DAY_TO_DAY,
+    "probable": InjuryStatus.DAY_TO_DAY,
+    "sus": InjuryStatus.SUSPENDED,
+    "suspended": InjuryStatus.SUSPENDED,
+}
 LOCK_IN_GAME_MODE = 1  # observed on the lock-in test league (M1 spike, Q4)
 _KINDS = {
     "free_agent": TransactionKind.FREE_AGENT,
@@ -231,6 +245,70 @@ def map_transactions(data: Any) -> list[TransactionRecord]:
                 proposed_at=_from_ms(t.get("created")),
                 scoring_period=t.get("leg"),
                 items=tuple(items),
+            )
+        )
+    return records
+
+
+# ---------------------------------------------------------------- players and projections
+
+
+def _positions(player: dict[str, Any]) -> tuple[Position, ...]:
+    names = player.get("fantasy_positions") or [player.get("position")]
+    return tuple(sorted({Position(p) for p in names if p in Position.__members__}))
+
+
+def map_players(players: Any, *, include: set[str] | None = None) -> list[SourcePlayer]:
+    """Active players, plus any in `include` (rostered players Sleeper marks inactive)."""
+    keep = include or set()
+    return [
+        SourcePlayer(
+            key=_key(pid),
+            full_name=p.get("full_name")
+            or f"{p.get('first_name', '')} {p.get('last_name', '')}".strip(),
+            nba_team=p.get("team") if p.get("team") in NBA_TEAMS else None,
+            positions=_positions(p),
+            active=bool(p.get("active")),
+        )
+        for pid, p in players.items()
+        if (p.get("active") or pid in keep)
+        and (p.get("full_name") or p.get("last_name"))
+        and p.get("position") != "DEF"
+    ]
+
+
+def map_injuries(players: Any) -> list[InjuryRecord]:
+    return [
+        InjuryRecord(
+            player=_key(pid),
+            status=_INJURY.get(str(p.get("injury_status") or "").lower(), InjuryStatus.ACTIVE),
+            note=p.get("injury_notes") or p.get("injury_body_part"),
+        )
+        for pid, p in players.items()
+        if p.get("active")
+    ]
+
+
+def map_projections(rows: Any, *, per_game_rows: bool) -> list[ProjectionRecord]:
+    """Season projections (already per-game averages) or weekly rows (one game each).
+
+    A weekly row with no stats means the player isn't expected to play that game (usually
+    injured). It's kept as a projection of 0 games, which streaming and lock-in decisions need.
+    """
+    records = []
+    for row in rows or []:
+        stats = row.get("stats") or {}
+        per_game = {STATS[k]: float(v) for k, v in stats.items() if k in STATS and v is not None}
+        if not per_game and not per_game_rows:
+            continue
+        records.append(
+            ProjectionRecord(
+                player=_key(row["player_id"]),
+                per_game=per_game,
+                games=(1.0 if per_game else 0.0) if per_game_rows else None,
+                game_date=date.fromisoformat(row["date"])
+                if per_game_rows and row.get("date")
+                else None,
             )
         )
     return records

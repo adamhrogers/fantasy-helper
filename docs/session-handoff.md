@@ -1,0 +1,174 @@
+# Session handoff: everything a new session needs
+
+**Last updated:** 2026-11-06, at the end of M1 (the session that built M0 and M1).
+**Read this first**, then `CLAUDE.md` (rules), `docs/roadmap.md` (milestones), `docs/architecture.md` (design) and `docs/decisions/` (ADRs). This file is the narrative glue: what exists, how we work, what we learned the hard way, and exactly what comes next.
+
+The repo is **public**, so this file holds no secrets or personal data. League names and IDs, the owner's email, the Supabase project ID and the ntfy topic live in `.env` and the database. `uv run fh league list` shows the leagues.
+
+---
+
+## 1. The project in one paragraph
+
+A fantasy basketball assistant for Adam (customer one), then a friends beta, then a paid launch for 2027-28. Every morning it sends a short briefing to his phone, with specific moves tuned to each league's own scoring, built on his own takes (a watchlist of beliefs), and it **grades every call it makes** against a baseline, all season. It doubles as a portfolio case study (deployment strategist; "the Blitzy pattern scaled down": an orchestrator with specialized agents and validation). The source spec is *Fantasy Basketball Helper: Product Spec* (2026-10-15, 25 pages; it lives outside the repo).
+
+**Core principles** (never broken; details in CLAUDE.md):
+- **Code computes every number; models only argue.** The engine makes candidate moves with expected values; LLMs read a FactSheet, select, explain and challenge; guardrails reject ungrounded numbers.
+- **Evidence over opinion.** Every call is logged before tip-off and never edited; inputs are versioned snapshots; grades come later, against a baseline.
+- **Adapters isolate platforms.** ESPN's API is unofficial; when it changes, only `adapters/espn/` changes.
+
+## 2. Where things stand (2026-11-06)
+
+| Milestone | Status |
+|---|---|
+| M0 Foundation | **Done, merged** (PR #1) |
+| M1 Data spike | **Done**: branch `m1-data-spike`, PR #2 |
+| M2 Scoring + weekly overview | **Next** (Nov 7–12) |
+| M3 Phone app + delivery | **Next, in parallel with M2** (Nov 7–12) |
+| M4–M8, P9–P12 | See `docs/roadmap.md` v0.4. Friends beta **Nov 29**, hard stop **Dec 15**. |
+
+### What runs today
+- **`fh snapshot`** runs on Adam's Mac through launchd: the morning set at **06:30** and the pre-tip evening set at **17:30** local time (America/New_York). It saves raw ESPN and Sleeper public data to `data/raw/` (git-ignored). History has accumulated since **2026-11-06**. Check it with `scripts/snapshot-schedule.sh status`; logs are in `~/Library/Logs/fantasy-helper/` (JSON lines). A sleeping Mac runs missed jobs on wake; a Mac that's shut down skips them, until M3 moves this to the cloud.
+- **`fh ingest`** is run by hand for now. It loads every not-yet-loaded snapshot plus fresh league data into Supabase, takes about 30 seconds, and is idempotent. First live run: 1,100 ESPN players; **142/142 Sleeper-rostered players linked to ESPN**; 1,200 games; 9 projection snapshots (8,490 rows); 226 injury changes; full rosters, matchups and transactions for all three leagues.
+- **Supabase dev project**, migrated to **0002**. There's no prod project yet (M3).
+- **LangSmith tracing** works (`fh doctor` sends a smoke trace). **ntfy ops alerts** reach Adam's phone. iPhone notifications needed a settings fix, which is done.
+- **GitHub:** `adamhrogers/fantasy-helper`, public. CI runs lint, mypy, contracts, tests on Postgres 17, `alembic check`, and a gitleaks full-history scan. Adam was asked to run `gh secret set LANGSMITH_API_KEY` so CI sends a smoke trace; **unconfirmed**, and the step is skipped (not failed) without it.
+
+### Adam's three leagues (all 10 teams, season 2026-27 = `season 2027`)
+| Fixture alias | Platform / format | Adam's team | Key rules |
+|---|---|---|---|
+| `espn_points` | ESPN, H2H points | team **13** | PTS +1, AST +2, REB +1, STL +4, BLK +4, TO −2, FGM +2, FGA −1, FTM +1, FTA −1, 3PM +1. Daily lineups (`INDIVIDUAL_GAME`). Adds: **0.571 a day** (4 per 7-day matchup). Slots: PG, SG, SF, PF, C, G, F, 3 UTIL, 4 BENCH, 2 IR. |
+| `espn_categories` | ESPN, H2H most categories (9-cat) | team **12** | PTS, BLK, STL, AST, REB, TO (reversed), 3PM, FG%, FT%. Adds 1.0 a day. 3 BENCH, 3 IR. |
+| `sleeper_points` | Sleeper, points, **lock-in** (`game_mode 1`, confirmed by Adam) | roster **1** | PTS +1, REB +1, AST **+2** (the spec said 4; the settings win), STL +3, BLK +3, TO −2, FGM +1, FGA −0.5, FTM +1, FTA −1, 3PM +0.5; **bonuses +2 at 40 points and +2 more at 50**. Slots: PG, SG, G, SF, PF, F, C, 3 UTIL, 3 BENCH, 2 IR. |
+
+The spec said "friends beta not in Adam's competitive ESPN leagues; possibly the Sleeper league."
+
+## 3. How we work with Adam
+
+- **Plans first, explicit approval for anything big or outward-facing.** He reviews plans and says "go for it" before code. **Every commit, push, PR and installed background job was explicitly approved** ("Commit it", "Install it"). Ask with a short question and buttons; don't assume. Approval doesn't carry over to the next action.
+- **One branch and one PR per milestone** (`m0-foundation`, `m1-data-spike`), merged into `main` **by Adam**. Commits within a milestone are made at checkpoints he approves ("M1 (part 1)", "part 2", …).
+- **Commit footer:** `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. **PR body footer:** `🤖 Generated with [Claude Code](https://claude.com/claude-code)`. After opening a PR, use the app's PR tools (get_status / bind) and offer Auto-fix; Adam turned it on for PR #1.
+- **Secrets never pass through chat.**
+  - Keys are generated straight into `.env` without being printed.
+  - ESPN cookies are typed at `fh league add`'s hidden prompt.
+  - GitHub secrets are set by Adam with `gh secret set`.
+  - Scripts that touch real league data print **structure and counts only**, never member names.
+- **Style he likes:** plain language, concise, step-by-step for anything he has to do by hand, with commands in their own fenced `bash` blocks. He asks "what is X?" questions; answer them directly. He isn't attached to specific tools and accepts reasoned recommendations.
+- **He wants the reasoning and the honest state:** what was verified, what wasn't, and false alarms called false alarms. He specifically asked for a leak audit before merging M0. It was clean: `.env` never committed, none of his secret values in history or the PR, gitleaks and GitHub secret scanning clean.
+- **Parallelism:** sub-agents and parallel sessions are fine once a plan is approved. M2 and M3 are the natural pair to split (they share no files).
+
+## 4. Architecture as built (quick map)
+
+Layers, enforced by import-linter in CI: `cli` → `api | mcp_server` → `pipeline` → `evaluation` → `brain | reports | delivery` → `facts | registry` → `engine | identity` → `storage | adapters` → `observability` → `config` → `domain`. The engine is pure (no storage, adapters or I/O); the brain sees only FactSheets and MCP tools. **A new top-level package must be added to the contracts in `pyproject.toml`.**
+
+| Area | What exists (M0 + M1) |
+|---|---|
+| `domain/` | Frozen Pydantic models, UTC-only (`UtcDatetime`). `league.py`: `LeagueRules` (hashed), `ScoringRules` with `bonuses`, ratio `CategoryRule`s (FG%), named `RosterSlot`s (`SLOT_POSITIONS`), `AcquisitionLimits.per_matchup_per_day`. `records.py`: **platform records keyed by each platform's own IDs** (`PlayerKey`, `SourcePlayer`, `RosterEntryRecord`, `MatchupRecord`, `TransactionRecord`, `ProjectionRecord`, `InjuryRecord`, `ScheduledGameRecord`, `RulesRecord`). Also recommendations (tip-off guard), takes, trades, evaluations (timeline points), reports (`ReportDocument`), runs, ports. |
+| `adapters/` | `_http.py`: `get_raw` with retries, `secret_headers` (sent, never recorded) and list-valued params. `espn/public.py` (no login), `espn/league.py` (cookies), `espn/mapper.py`; the same three for `sleeper/`. `redaction.py`: the fixture redactor and leak checker. **Mappers are pure functions.** |
+| `identity/` | `names.py` (normalization), `matching.py` (pure matcher), `crosswalk.py` (`sync_players`, `Resolver`), `overrides.py` (manual Sleeper → ESPN links; empty so far). |
+| `storage/` | SQLAlchemy 2.1, Alembic `0001` + `0002`, `crypto.py` (AES-GCM bound to the owner), `raw_store.py` (append-only), repositories: users, leagues, credentials, players, league_data, nba, runs. |
+| `pipeline/` | `snapshot.py`, `onboarding.py` (`fh league add`), `fixtures.py` (`fh fixtures record`), `ingest.py`. |
+| `observability/` | `logs.py` (structlog with secret redaction), `tracing.py` (LangSmith), `alerts.py` (ntfy). |
+| `cli/` | `fh version | keygen | doctor | snapshot | league add/list | fixtures record | ingest`. |
+| Empty, waiting | `engine`, `facts`, `brain`, `registry`, `reports`, `delivery`, `evaluation`, `api`, `mcp_server` (docstring only). |
+
+### Database (Supabase Postgres; every table has RLS on with no policies)
+- **0001:** `users`, `leagues`, `platform_credentials` (encrypted), `runs` (run log).
+- **0002:**
+  - `players` and `player_external_ids` (the crosswalk; `match_method` is primary | name_team | name_unique | override | unmatched)
+  - `nba_games` (ESPN game ID, scoring period, tip UTC, standard team codes)
+  - `league_settings_versions` (new row only when the rules' hash changes)
+  - `teams`, and `roster_entries` (one snapshot per league per local date)
+  - `matchups` (detail JSONB: daily points for ESPN, per-player weekly points for Sleeper)
+  - `transactions` (items keep platform IDs; resolve through the crosswalk when reading)
+  - `projection_snapshots` (unique `raw_key`) and `projection_rows` (per-game stats JSONB, `games`, `game_date` for per-game rows)
+  - `injury_observations` (changes only)
+
+### Raw store layout
+`data/raw/<source>/<dataset>/<YYYY-MM-DD>/<HHMMSSffffff>Z.json.gz` plus a `.meta.json` sidecar. League data lives under the dataset `leagues/<league_id>/<name>`. Never overwrite. It moves to R2 in M3.
+
+## 5. Data source facts (learned the hard way, M1 spike)
+
+Full write-up: `docs/spikes/m1-data-sources.md`.
+
+**ESPN** (unofficial; base `https://lm-api-reads.fantasy.espn.com/apis/v3/games/fba/seasons/{2027}`):
+- **Public, no login:**
+  - `…/segments/0/leaguedefaults/3?view=kona_player_info` with an `x-fantasy-filter` header: players, ownership, injury status, and **season** projections (`statSourceId 1`, split 0: `stats` totals with stat 42 = GP, `averageStats` per game). Projects only about 350 of 1,100 players. The filter `filterStatsForTopScoringPeriodIds {value:N, additionalValue:["002027","102027"]}` trims payloads; per-game actuals are `statSourceId 0, statSplitTypeId 5`.
+  - `?view=proTeamSchedules_wl`: the schedule. Tips are UTC; **scoring period 1 = opening night, 2026-10-20**.
+- **No per-day projections anywhere**, in league context or with projection filters. Per-game projections come from Sleeper.
+- **League (cookies `espn_s2` and `SWID`):** views `mSettings+mStatus`, `mTeam+mRoster`, `mMatchupScore+mScoreboard`. Transactions: `mTransactions2` **one scoring period at a time with a type filter**, since the unfiltered view returns only recent lineup moves.
+- **Accepted trades have no items**: they're on the proposal (`relatedTransactionId`), and **ESPN shows proposals only to the teams involved**. 6 of 10 trades resolve (all involving team 13). For every league trade, use the **activity feed**: `…/communication/?view=kona_league_communication`, topic `ACTIVITY_TRANSACTIONS`, message type 244 (ADR 0019, built in P9).
+- **Code tables** (from `espn-api`, ADR 0016):
+  - stat IDs: 0 PTS, 1 BLK, 2 STL, 3 AST, 6 REB, 11 TO, 13 FGM, 14 FGA, 15 FTM, 16 FTA, 17 3PM, 18 3PA, 19 FG%, 20 FT%, 42 GP
+  - slots: 0–4 positions, 5 G, 6 F, 11 UTIL, 12 BENCH, 13 IR
+  - team IDs 1–30 → standard codes; the schedule's abbreviations differ (GS, NO, NY, SA, UTAH, WSH)
+- Transaction IDs are UUIDs (the redactor pseudonymizes them consistently). Add limits are a per-day rate when `matchupLimitPerScoringPeriod` is set.
+
+**Sleeper** (official `/v1` plus undocumented `api.sleeper.com/projections`):
+- `/v1/state/nba` (season "2026", week). `/v1/players/nba`: **at most once a day** (Sleeper's request). **`espn_id`/`yahoo_id` are empty for every NBA player.**
+- Projections are **RotoWire's**:
+  - `projections/nba/2026` holds season **per-game averages** (`gp: 1`)
+  - `projections/nba/2026/{week}` holds **one row per game** with a date; an **empty `stats` row means not expected to play** (kept as 0 games)
+- League: `/league/{id}`, `/users` (display and team names: redact), `/rosters` (`starters` align with non-BN `roster_positions`; `reserve` = IR; `taxi` excluded), `/matchups/{week}` (only weekly points per player; **no lock-in data**, so M5 needs the "I locked / I passed" button), `/transactions/{week}`.
+
+## 6. Engineering practices and gotchas
+
+**Commands:** `uv sync`, `uv run pytest`, `uv run ruff check . && uv run ruff format .`, `uv run mypy` (strict), `uv run lint-imports`, `uv run alembic upgrade head`, `uv run fh doctor`. There are 140 tests: unit, contract (`tests/contract/`) and integration (DB).
+
+**Database tests locally** need a throwaway Postgres. Homebrew's `postgresql@17` is installed but **isn't a service**:
+```bash
+PGBIN=/usr/local/opt/postgresql@17/bin; export LC_ALL=en_US.UTF-8; D=<scratch dir>/pg
+"$PGBIN/initdb" -D "$D/data" -U fh --auth=trust -E UTF8
+"$PGBIN/pg_ctl" -D "$D/data" -o "-p 54329 -c unix_socket_directories='' -c listen_addresses=localhost" -l "$D/server.log" -w start
+"$PGBIN/createdb" -h localhost -p 54329 -U fh fh_test
+FH_TEST_DATABASE_URL=postgresql://fh@localhost:54329/fh_test uv run pytest
+"$PGBIN/pg_ctl" -D "$D/data" -m fast stop
+```
+TCP only, because long scratch paths exceed the 103-byte Unix socket limit. `LC_ALL` is required, or the postmaster refuses to start. DB tests refuse any database whose name lacks "test".
+
+**Fixtures:** `uv run fh fixtures record` re-records 22 redacted fixtures to `tests/fixtures/recorded/`. It verifies its own output (no original name, ID, cookie or league ID may remain) and writes nothing otherwise. An independent check found 0 of 148 identifying values. **Contract tests pin exact counts from the 2026-11-06 recording** (155 rostered, 118 transactions, 90 matchups, …), so re-recording means updating those numbers in the same change. Fixture files must stay under 500 KB (pre-commit hook): the recorder empties player stat arrays in roster and matchup files.
+
+**Migrations:** numbered by hand (`--rev-id 0003`), generated with autogenerate against a scratch DB at the previous head. Every new table needs `ALTER TABLE … ENABLE ROW LEVEL SECURITY` (a test enforces it). CI runs `alembic check`.
+
+**Gotchas that already bit us (don't relearn them):**
+1. **pydantic-settings with `populate_by_name=True` matches env vars by field name too.** The shell's `ANTHROPIC_API_KEY` filled `anthropic_api_key`. Settings match by **alias only**, plus `env_ignore_empty=True` (`KEY=` means unset). Tests cover both.
+2. **httpx drops a URL's own query string whenever `params=` is passed, even `{}`.** `get_raw` passes `params or None`; repeated keys go as lists (`{"view": ["mSettings", "mTeam"]}`).
+3. **SQLAlchemy doesn't order inserts by foreign key without `relationship()`.** The crosswalk uses bulk Core inserts: players, then links.
+4. **Typer's pretty tracebacks show local variables**, which can hold secrets, so they're disabled.
+5. **Redaction false positives:** a 4-letter team abbreviation inside the ESPN field `isAutoReactivate`, and leaguemates' first names matching NBA players. Values under 8 characters only match as whole words; members are tracked by full name and display name.
+6. **gitleaks `generic-api-key`** treats an empty `KEY=` followed by a long-token line as a secret. In `.env.example`, empty secret keys sit at the end of their block, followed by a blank line or comment.
+7. **zsh doesn't word-split `$VAR`.** Inline `$(git rev-list --all)` instead.
+8. **The Supabase direct connection is IPv6-only** and unreachable here and from GitHub Actions. Use the **session pooler** URL. psycopg never prepares statements (`prepare_threshold=None`), so the transaction pooler would work too.
+9. **langchain-anthropic defaults `with_structured_output` to forced tool calls**, which current Sonnet/Opus reject. Always pass `method="json_schema"` (ADR 0015).
+10. **Ruff S105** flags enum values containing "pass" (lock-or-pass); the code uses targeted `# noqa: S105` with a reason. Curly apostrophes in strings trip RUF001, so write `’`.
+11. Scripts that read downloaded or raw data run with `uv run python -I` from a scratch folder, and print structure only.
+
+## 7. Exactly what's next
+
+**First:** Adam reviews and merges PR #2 (M1). Then:
+
+### M2: Scoring layer and weekly overview (Nov 7–12), this repo, `engine/` + `facts/` + `reports/`
+1. **Game logs (moved here from M1).** Add an ESPN per-game actuals dataset (`kona_player_info` with `filterStatsForTopScoringPeriodIds`; entries `statSourceId 0, split 5` carry `externalId` = the ESPN game ID). Add a `player_game_stats` table (migration 0003, with RLS) linked to `nba_games`. Backfill from opening night, then pull daily in snapshot or ingest.
+2. **`engine/scoring.py`:** per-game fantasy points = Σ stat × weight + bonuses (threshold per game). Golden tests: **five players hand-calculated in each points league** (the M2 exit criterion), kept forever in `tests/golden/`.
+3. **`engine/schedule.py`:** games per week from `nba_games`; **startable** games under roster slots and daily locks. Sleeper lock-in counts one game per starter per week.
+   - Open item: map ESPN matchup periods to scoring days. `scheduleSettings.matchupPeriods` and the matchups' `pointsByScoringPeriod` keys both carry this; weeks run Monday to Sunday, and the All-Star break makes a long week.
+4. **`engine/valuation.py`:** replacement level = the best free agent at the slot in *this* league. Free agents = players with projections minus today's `roster_entries`.
+5. **`engine/distributions.py`** (from game logs, shrunk toward the projection), `streaming.py` (greedy plan within the per-day add rate), `win_probability.py` (normal approximation), `baselines.py`.
+6. **`facts/`:** FactSheet v1. **`reports/`:** the weekly `ReportDocument`, rendered locally (CLI to HTML). Categories-league valuation is P8, so the 9-cat league gets games and roster facts only in M2.
+- The engine must stay pure: load data in `facts`/`pipeline`, pass plain domain objects into `engine`. Use hypothesis property tests for the math.
+
+### M3: Phone app and delivery (Nov 7–12, parallel), best as its own session and worktree
+FastAPI on Google Cloud Run; Supabase **prod** project and Supabase Auth (magic link, invite-only, Adam is user one); PWA (Vite + React + TS + vite-plugin-pwa) on Cloudflare Pages; Web Push (VAPID); move snapshot + ingest from launchd to **GitHub Actions** cron with the raw store on **Cloudflare R2** (then uninstall the launchd jobs, and upload the local `data/raw` backlog to R2 first); ntfy alerts for failed or late runs. **Adam must create accounts first:** Supabase prod project, Cloudflare (Pages + R2), a Google Cloud project with billing (Cloud Run free tier). Plus GitHub secrets (prod `DATABASE_URL`, `FH_ENCRYPTION_KEY` for **prod, a different key**, VAPID keys, ntfy topic, R2 credentials). Done when a scheduled run, with the laptop closed, pushes the weekly overview to his phone.
+
+### Open items
+- **Q6:** how fast projections react to injuries. Analyze `projection_rows` against `injury_observations` once a week or so of snapshots exists.
+- Beta friends and leagues (needed by M7). The RatBall note goes out only if RatBall data is used.
+- The 821 unmatched Sleeper players are all non-rostered. Overrides stay empty until ingest warns about a rostered one.
+- ESPN activity-feed trades: P9. Categories-league logic: P8.
+- Confirm Adam set the `LANGSMITH_API_KEY` GitHub secret.
+
+## 8. Session history (for orientation)
+
+- **2026-10-16:** read the 25-page spec; architecture, repo structure and roadmap drafted.
+- **2026-10-19:** Adam's review. User and league data go in the database behind auth (not `.env`); timeline graphs for takes, calls and trades added; M3 split; Supabase from day one; decisions D1–D10.
+- **2026-10-25 to 11-06:** M0 built. Supabase dev, LangSmith and ntfy set up together (pooler URL, iPhone notification fix); PR #1 audited for leaks and merged.
+- **2026-11-06:** M1. Snapshots started and scheduled; `fh league add` for three leagues; ESPN and Sleeper explored; the redacting recorder; mappers; identity; tables; `fh ingest` run live twice; ADRs 0016–0019; roadmap v0.4; this handoff doc.

@@ -17,14 +17,19 @@ from fantasy_helper.domain.league import (
     ScoringRules,
     ScoringType,
 )
-from fantasy_helper.domain.player import IdSource
+from fantasy_helper.domain.player import IdSource, Position
+from fantasy_helper.domain.projections import InjuryStatus
 from fantasy_helper.domain.records import (
+    InjuryRecord,
     ItemAction,
     MatchupRecord,
     MatchupSide,
     PlayerKey,
+    ProjectionRecord,
     RosterEntryRecord,
     RulesRecord,
+    ScheduledGameRecord,
+    SourcePlayer,
     TeamRecord,
     TransactionItem,
     TransactionKind,
@@ -62,6 +67,28 @@ SLOTS: dict[int, str] = {
     0: "PG", 1: "SG", 2: "SF", 3: "PF", 4: "C", 5: "G", 6: "F",
     7: "SG/SF", 8: "G/F", 9: "PF/C", 10: "F/C", 11: "UTIL", 12: "BENCH", 13: "IR",
 }  # fmt: skip
+# ESPN's numeric team IDs to standard NBA codes (espn-api's PRO_TEAM_MAP, with PHL/PHO
+# normalized). The schedule's abbreviations (GS, NO, NY, SA, UTAH, WSH) aren't used.
+PRO_TEAMS: dict[int, str] = {
+    1: "ATL", 2: "BOS", 3: "NOP", 4: "CHI", 5: "CLE", 6: "DAL", 7: "DEN", 8: "DET",
+    9: "GSW", 10: "HOU", 11: "IND", 12: "LAC", 13: "LAL", 14: "MIA", 15: "MIL", 16: "MIN",
+    17: "BKN", 18: "NYK", 19: "ORL", 20: "PHI", 21: "PHX", 22: "POR", 23: "SAC", 24: "SAS",
+    25: "OKC", 26: "UTA", 27: "WAS", 28: "TOR", 29: "MEM", 30: "CHA",
+}  # fmt: skip
+POSITION_SLOTS: dict[int, Position] = {
+    0: Position.PG, 1: Position.SG, 2: Position.SF, 3: Position.PF, 4: Position.C,
+}  # fmt: skip
+GAMES_PLAYED = "42"
+_INJURY: dict[str, InjuryStatus] = {
+    "ACTIVE": InjuryStatus.ACTIVE,
+    "DAY_TO_DAY": InjuryStatus.DAY_TO_DAY,
+    "QUESTIONABLE": InjuryStatus.DAY_TO_DAY,
+    "PROBABLE": InjuryStatus.DAY_TO_DAY,
+    "DOUBTFUL": InjuryStatus.DAY_TO_DAY,
+    "OUT": InjuryStatus.OUT,
+    "INJURY_RESERVE": InjuryStatus.OUT,
+    "SUSPENSION": InjuryStatus.SUSPENDED,
+}
 POINTS_TYPES = frozenset({"H2H_POINTS", "POINTS"})
 CATEGORY_TYPES = frozenset({"H2H_CATEGORY", "H2H_MOST_CATEGORIES", "ROTO"})
 _WINNERS = {"HOME": "home", "AWAY": "away", "TIE": "tie"}
@@ -297,3 +324,100 @@ def _items(t: dict[str, Any]) -> tuple[TransactionItem, ...]:
         for item in t.get("items", [])
         if item.get("type") in actions
     )
+
+
+# ---------------------------------------------------------------- players and projections
+
+
+def _player_key(player: dict[str, Any]) -> PlayerKey:
+    return PlayerKey(source=IdSource.ESPN, external_id=str(player["id"]))
+
+
+def _source_player(player: dict[str, Any]) -> SourcePlayer:
+    positions = tuple(
+        POSITION_SLOTS[slot]
+        for slot in sorted(player.get("eligibleSlots") or [])
+        if slot in POSITION_SLOTS
+    )
+    return SourcePlayer(
+        key=_player_key(player),
+        full_name=player["fullName"],
+        nba_team=PRO_TEAMS.get(int(player.get("proTeamId") or 0)),
+        positions=positions,
+        active=bool(player.get("active", True)),
+    )
+
+
+def map_players(data: Any) -> list[SourcePlayer]:
+    """Players from the public kona_player_info view ({"players": [{"player": {...}}]})."""
+    return [_source_player(entry["player"]) for entry in data.get("players", [])]
+
+
+def map_roster_players(data: Any) -> list[SourcePlayer]:
+    """Players embedded in league rosters (views mTeam + mRoster)."""
+    return [
+        _source_player(entry["playerPoolEntry"]["player"])
+        for team in data.get("teams", [])
+        for entry in team.get("roster", {}).get("entries", [])
+        if entry.get("playerPoolEntry", {}).get("player")
+    ]
+
+
+def map_injuries(data: Any) -> list[InjuryRecord]:
+    return [
+        InjuryRecord(
+            player=_player_key(entry["player"]),
+            status=_INJURY.get(str(entry["player"].get("injuryStatus")), InjuryStatus.ACTIVE),
+        )
+        for entry in data.get("players", [])
+    ]
+
+
+def map_projections(data: Any, season: int) -> list[ProjectionRecord]:
+    """Season projections: per-game averages for every mapped stat, and projected games."""
+    records = []
+    for entry in data.get("players", []):
+        player = entry["player"]
+        projected = next(
+            (
+                s for s in player.get("stats", [])
+                if s.get("statSourceId") == 1 and s.get("statSplitTypeId") == 0
+                and s.get("seasonId") == season
+            ),
+            None,
+        )  # fmt: skip
+        if projected is None:
+            continue
+        averages = projected.get("averageStats") or {}
+        per_game = {STATS[int(k)][1]: float(v) for k, v in averages.items() if int(k) in STATS}
+        games = (projected.get("stats") or {}).get(GAMES_PLAYED)
+        records.append(
+            ProjectionRecord(
+                player=_player_key(player),
+                per_game=per_game,
+                games=float(games) if games is not None else None,
+            )
+        )
+    return records
+
+
+def map_schedule(data: Any) -> list[ScheduledGameRecord]:
+    """Every NBA game from the pro-team schedules. Each game is listed under both teams."""
+    games: dict[str, ScheduledGameRecord] = {}
+    for team in data.get("settings", {}).get("proTeams", []):
+        for period_games in (team.get("proGamesByScoringPeriod") or {}).values():
+            for game in period_games:
+                home, away = (
+                    PRO_TEAMS.get(game["homeProTeamId"]),
+                    PRO_TEAMS.get(game["awayProTeamId"]),
+                )
+                if home is None or away is None or str(game["id"]) in games:
+                    continue
+                games[str(game["id"])] = ScheduledGameRecord(
+                    external_id=str(game["id"]),
+                    scoring_period=int(game["scoringPeriodId"]),
+                    tip_utc=datetime.fromtimestamp(game["date"] / 1000, UTC),
+                    home_team=home,
+                    away_team=away,
+                )
+    return sorted(games.values(), key=lambda g: (g.tip_utc, g.external_id))

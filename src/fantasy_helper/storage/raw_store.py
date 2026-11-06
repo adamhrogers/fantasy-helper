@@ -35,6 +35,8 @@ class RawStore(Protocol):
 
     def meta(self, key: str) -> dict[str, Any]: ...
 
+    def keys(self, source: str, dataset: str) -> list[str]: ...
+
 
 def make_key(source: str, dataset: str, fetched_at: datetime) -> str:
     if fetched_at.tzinfo is None:
@@ -83,6 +85,14 @@ class LocalRawStore:
     def meta(self, key: str) -> dict[str, Any]:
         data: dict[str, Any] = json.loads((self._root / f"{key}.meta.json").read_text())
         return data
+
+    def keys(self, source: str, dataset: str) -> list[str]:
+        """Every stored payload for a dataset, oldest first."""
+        base = self._root / source / dataset
+        return sorted(
+            str(path.relative_to(self._root)).removesuffix(".json.gz")
+            for path in base.glob("*/*.json.gz")
+        )
 
 
 def _write_atomic(path: Path, data: bytes) -> None:
