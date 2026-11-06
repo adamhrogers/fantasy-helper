@@ -1,0 +1,132 @@
+[project]
+name = "fantasy-helper"
+version = "0.1.0"
+description = "A fantasy basketball assistant that tells you what to do, then grades its own advice."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.20.1",
+    "cryptography>=50.0.2",
+    "httpx>=0.28.1",
+    "langsmith>=0.14.12",
+    "psycopg[binary]>=3.3.6",
+    "pydantic>=2.14.1",
+    "pydantic-settings>=2.16.1",
+    "sqlalchemy>=2.1.6",
+    "structlog>=26.1.0",
+    "typer>=0.27.3",
+]
+
+[project.scripts]
+fh = "fantasy_helper.cli.main:app"
+
+[build-system]
+requires = ["uv_build>=0.9.9,<0.10.0"]
+build-backend = "uv_build"
+
+# ---------------------------------------------------------------------------
+# Ruff: lint + format
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F",  # pycodestyle, pyflakes
+    "I",            # import order
+    "B",            # bugbear
+    "UP",           # pyupgrade
+    "SIM",          # simplify
+    "RUF",          # ruff-specific
+    "N",            # naming
+    "S",            # bandit (security)
+    "DTZ",          # no naive datetimes: everything is UTC (architecture §5.2)
+    "T20",          # no print(); use the logger or typer.echo
+    "PT",           # pytest style
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]  # pytest uses assert
+
+# ---------------------------------------------------------------------------
+# mypy: strict everywhere
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src", "tests"]
+plugins = ["pydantic.mypy"]
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--strict-markers", "--strict-config", "-ra"]
+markers = ["db: needs a dedicated Postgres test database (FH_TEST_DATABASE_URL)"]
+
+# ---------------------------------------------------------------------------
+# import-linter: the architecture's dependency rules, enforced in CI
+# (docs/architecture.md §3)
+# ---------------------------------------------------------------------------
+[tool.importlinter]
+root_package = "fantasy_helper"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Layers: each layer imports only from layers below it"
+type = "layers"
+layers = [
+    "fantasy_helper.cli",
+    "fantasy_helper.api | fantasy_helper.mcp_server",
+    "fantasy_helper.pipeline",
+    "fantasy_helper.evaluation",
+    "fantasy_helper.brain | fantasy_helper.reports | fantasy_helper.delivery",
+    "fantasy_helper.facts | fantasy_helper.registry",
+    "fantasy_helper.engine | fantasy_helper.identity",
+    "fantasy_helper.storage | fantasy_helper.adapters",
+    "fantasy_helper.observability",
+    "fantasy_helper.config",
+    "fantasy_helper.domain",
+]
+
+[[tool.importlinter.contracts]]
+name = "Engine is pure: no storage, no adapters, no I/O libraries"
+type = "forbidden"
+source_modules = ["fantasy_helper.engine"]
+forbidden_modules = [
+    "fantasy_helper.storage",
+    "fantasy_helper.adapters",
+    "fantasy_helper.identity",
+    "fantasy_helper.observability",
+    "sqlalchemy",
+    "httpx",
+]
+
+[[tool.importlinter.contracts]]
+name = "Brain sees only FactSheets and MCP tools: no storage, no adapters"
+type = "forbidden"
+source_modules = ["fantasy_helper.brain"]
+forbidden_modules = [
+    "fantasy_helper.storage",
+    "fantasy_helper.adapters",
+    "fantasy_helper.identity",
+    "sqlalchemy",
+    "httpx",
+]
+
+[dependency-groups]
+dev = [
+    "import-linter>=2.15",
+    "mypy>=2.4.0",
+    "pre-commit>=4.7.0",
+    "pytest>=9.1.1",
+    "ruff>=0.17.2",
+]

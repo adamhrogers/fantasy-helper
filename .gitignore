@@ -1,0 +1,29 @@
+# Secrets: only .env.example is committed (docs/architecture.md §12.1)
+.env
+.env.*
+!.env.example
+
+# Local runtime data (raw payload store until R2 at M3)
+data/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+dist/
+build/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+.import_linter_cache/
+
+# Node (web/, from M3)
+node_modules/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
