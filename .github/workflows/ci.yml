@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Lint, types, contracts, tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: fh
+          POSTGRES_PASSWORD: fh
+          POSTGRES_DB: fh_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U fh -d fh_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      FH_TEST_DATABASE_URL: postgresql://fh:fh@localhost:5432/fh_test
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install
+        run: uv sync --locked
+
+      - name: Ruff lint
+        run: uv run ruff check .
+
+      - name: Ruff format
+        run: uv run ruff format --check .
+
+      - name: mypy (strict)
+        run: uv run mypy
+
+      - name: Import contracts
+        run: uv run lint-imports
+
+      - name: Tests
+        run: uv run pytest
+
+      - name: Migrations match models
+        env:
+          DATABASE_URL: ${{ env.FH_TEST_DATABASE_URL }}
+        run: |
+          uv run alembic upgrade head
+          uv run alembic check
+
+      - name: Check for a LangSmith key
+        id: langsmith
+        run: echo "configured=${{ secrets.LANGSMITH_API_KEY != '' }}" >> "$GITHUB_OUTPUT"
+
+      - name: LangSmith smoke trace
+        if: steps.langsmith.outputs.configured == 'true'
+        env:
+          LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
+          LANGSMITH_TRACING: "true"
+          FH_ENV: test
+        run: uv run fh doctor --only tracing
+
+  secrets:
+    name: Secret scan (full history)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write  # gitleaks comments on the PR if it finds a leak
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # personal account: no license needed
