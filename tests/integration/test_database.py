@@ -1,14 +1,17 @@
 import json
 import uuid
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import Engine, inspect, select, text
 from sqlalchemy.orm import Session
 
 from fantasy_helper.domain.league import Platform
+from fantasy_helper.domain.runs import RunKind, RunRecord, RunStatus, SourceFreshness
 from fantasy_helper.storage import crypto, migrate
-from fantasy_helper.storage.tables import LeagueRow, PlatformCredentialRow, UserRow
+from fantasy_helper.storage.repositories.runs import record_run
+from fantasy_helper.storage.tables import LeagueRow, PlatformCredentialRow, RunRow, UserRow
 
 pytestmark = pytest.mark.db
 
@@ -107,3 +110,23 @@ def test_downgrade_then_upgrade_is_clean(database_url: str, engine: Engine) -> N
     assert "users" not in inspect(engine).get_table_names()
     migrate.upgrade(database_url, "head")
     assert migrate.current_revision(engine) == migrate.head_revision()
+
+
+def test_run_log_records_a_snapshot(session: Session) -> None:
+    started = datetime(2026, 11, 6, 11, 30, tzinfo=UTC)
+    run = RunRecord(
+        kind=RunKind.SNAPSHOT,
+        status=RunStatus.DEGRADED,
+        started_at=started,
+        ended_at=started + timedelta(seconds=40),
+        sources=(SourceFreshness(source="espn.players_projections", pulled_at=started, rows=600),),
+        rows_loaded=600,
+        errors=("sleeper.players: HTTP 503",),
+    )
+    record_run(session, run)
+    session.flush()
+    row = session.get(RunRow, run.id)
+    assert row is not None
+    assert (row.kind, row.status, row.rows_loaded) == ("snapshot", "degraded", 600)
+    assert row.sources[0]["source"] == "espn.players_projections"
+    assert row.errors == ["sleeper.players: HTTP 503"]
