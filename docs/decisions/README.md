@@ -23,6 +23,8 @@ One short entry per architecture choice: what was decided, why, and what was rej
 | [0017](0017-raw-zone-and-interim-snapshots.md) | Raw snapshots on the laptop until M3; ingest loads from them | Accepted · 2026-11-06 |
 | [0018](0018-identity-by-name.md) | Match players across platforms by name, conservatively | Accepted · 2026-11-06 |
 | [0019](0019-espn-trades-from-activity-feed.md) | Every league trade comes from ESPN's activity feed | Accepted · 2026-11-06 (for the trade tracker, P9) |
+| [0020](0020-read-models-and-latency.md) | Low-latency reads: computed ahead, few tools, same region | Accepted · 2026-11-06 |
+| [0021](0021-storage-budget-and-season-archive.md) | Storage budget: Postgres holds the current season, R2 keeps everything | Accepted · 2026-11-06 |
 
 ## Template
 

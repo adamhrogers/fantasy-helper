@@ -1,6 +1,8 @@
 # Fantasy Helper — Technical Architecture
 
-**Status:** Draft v0.2, revised after Adam's review · **Date:** 2026-10-19 · **Source:** *Fantasy Basketball Helper: Product Spec* (Oct 15, 2026, 25 pp.)
+**Status:** Draft v0.3 · **Date:** 2026-11-06 (v0.2: 2026-10-19) · **Source:** *Fantasy Basketball Helper: Product Spec* (Oct 15, 2026, 25 pp.)
+
+**Changes in v0.3 (2026-11-06):** a read path built for low latency: pre-computed read models, few batched tools, in-process MCP, one region (§5.4, ADR 0020). A storage budget that keeps Postgres inside the free tier, with every season archived to R2 for future years and nightly backups of the irreplaceable tables (§5.5, ADR 0021). Sleeper lock-in moves to M2, inside an engine-only daily report (roadmap v0.5).
 
 **Changes in v0.2:** user and league data live in the database from M1, behind auth from M3 (§12.1). Supabase replaces SQLite from day one (§11). Takes, calls and trades get timeline graphs (§8.1). The decisions are resolved (§15).
 
@@ -96,7 +98,7 @@ All of these live in one Python package, `src/fantasy_helper/`, with strict inte
 | `engine` | Deterministic math (see §6) | Pure functions. Each result carries provenance (the snapshot and settings IDs it used). |
 | `facts` | Builds one **FactSheet** per league per run: compact facts with IDs, plus engine-generated **candidate moves** with EV and baseline | Stored and hashed. **It's the replay unit for regression evals and shadow runs.** |
 | `brain` | LangGraph graphs (`baseline`, `council`), agents, versioned prompts, structured output schemas, guardrails, LLM gateway | See §7 |
-| `mcp_server` | One FastMCP server over our data model, **read-only** tools | stdio in the pipeline; streamable HTTP later for chat |
+| `mcp_server` | One FastMCP server over our data model, **read-only** tools | Our own agents (pipeline, chat API) call it **in-process** (in-memory transport); stdio or streamable HTTP only for outside clients (ADR 0020) |
 | `registry` | Append-only recommendation log, tip-off guard, follow detection | See §8 |
 | `evaluation` | Grader, outcomes, baselines comparison, metrics, report cards, slicing, miss causes, **trajectories**, replay (regression and shadow) | See §8 |
 | `reports` | Builds the `ReportDocument` card model for daily, weekly and scorecard views | Rendering contract shared with the PWA |
@@ -115,9 +117,10 @@ All of these live in one Python package, `src/fantasy_helper/`, with strict inte
 
 | Zone | What it holds | Where it lives | Rule |
 |---|---|---|---|
-| **raw** | Every source response as received (gzipped JSON), keyed by source, endpoint, league and `pulled_at` | Local disk now; **Cloudflare R2** (10 GB free) from M3 | Immutable. Kept **out of Postgres**, because ESPN payloads would use up a 500 MB free tier in weeks. |
-| **core** | Normalized domain data | Supabase Postgres from M0 (separate dev and prod projects) | Versioned where grading depends on it |
-| **derived** | FactSheets, reports, recommendations, grades, report cards, run log | Same database | Recommendations are insert-only. Grades go in a separate table. |
+| **raw** | Every source response as received (gzipped JSON), keyed by source, endpoint, league and `pulled_at` | Local disk now; **Cloudflare R2** (10 GB free) from M3, **kept forever** | Immutable. Kept **out of Postgres**, because ESPN payloads would use up a 500 MB free tier in weeks. |
+| **core** | Normalized domain data | Supabase Postgres from M0 (separate dev and prod projects), **current season only** | Versioned where grading depends on it. Past seasons live in the archive (§5.5). |
+| **derived** | FactSheets, reports, recommendations, grades, report cards, run log, **read models** (§5.4) | Same database | Recommendations are insert-only. Grades go in a separate table. Read models are rebuilt each run. |
+| **archive** | Each finished season's tables as Parquet, plus nightly backups of the tables that can't be rebuilt from raw | Cloudflare R2 | Written once per season (archive) or nightly (backups). Read with DuckDB, no database needed. |
 
 ### 5.2 Versioning rules (from "Same snapshot")
 
@@ -137,10 +140,52 @@ All of these live in one Python package, `src/fantasy_helper/`, with strict inte
 | NBA | `players` (canonical), `player_external_ids`, `nba_games` (schedule, tip times), `player_game_stats` (box scores) |
 | Inputs | `projection_snapshots`, `projection_rows`, `news_items` |
 | Judgment | `watchlist_entries`, `takes` (player, claim text, **direction**, conviction 1–5, horizon, created_at) |
-| Brain | `runs` (the run log), `fact_sheets`, `agent_setups`, `reports` |
+| Brain | `runs` (the run log), `fact_sheets`, `league_player_values` (read model, §5.4), `agent_setups`, `reports` |
 | Evidence | `recommendations` (every field from the spec's registry table, plus `is_shadow`, `first_tip_utc`, `fact_sheet_id`), `recommendation_follows`, `grades` (outcome, metric, baseline, lift, grade, miss cause and its source), **`evaluation_points`** (one per open take, call or trade per night; §8.1), `report_cards`, `feedback` |
 
 **Gradable takes (refinement):** a free-text take can't be graded mechanically. The phone form asks for a **direction** (will beat or trail projections), a **horizon** (7, 14 or 30 days) and conviction, and keeps the one-line text for color. Code can then grade every take with no LLM.
+
+### 5.4 Read path and latency (ADR 0020)
+
+There are two kinds of reads, and they're stored differently:
+
+| | Who reads | What | Where | Rule |
+|---|---|---|---|---|
+| **Hot** | Agents, MCP tools, the phone app, chat later | Today's facts for one league | `fact_sheets` (append-only), `league_player_values` (replaced each run), latest snapshot rows | Pre-computed by code. One indexed lookup per tool call. Small enough to stay in memory however much history piles up. |
+| **History** | Grading, trajectories, replays, season analysis | Every snapshot and box score | `projection_rows`, `roster_entries`, `player_game_stats`, then the archive | Append-only, read in batch at night. Indexed for "as of pull X" and "one player over time". |
+
+**Measured 2026-11-06:**
+- Supabase dev from Adam's Mac: 0.3–2.7 ms on the server per hot query, about 34 ms per round trip, about 600 ms per new connection.
+- A synthetic full season on a local Postgres 17 (720,000 projection rows): every hot query stayed under 5 ms.
+- At five seasons (3.6 million rows), two queries reached about 25 ms until composite indexes such as `(snapshot_id, player_id)` brought them back down.
+
+**What dominates latency, biggest first:** model round trips (about 1–3 s per tool call), cold starts, new connections, then the network (about 1–5 ms when the server and database share a region). The query itself is the smallest cost. So:
+- Agents get **few, coarse, batched tools**, and the FactSheet answers the nightly report with **zero** tool calls, held to a token budget by a test.
+- The API keeps a connection pool open and runs in the database's region: Supabase `us-east-1` and Cloud Run `us-east4`, both in Northern Virginia.
+- No cache tier, vector database or second database.
+
+### 5.5 Storage budget and history (ADR 0021)
+
+**Supabase Free, confirmed 2026-11-06:**
+- 500 MB database size per project. Going over is a billing-quota breach that brings Fair Use restrictions.
+- 2 GB fixed disk, read-only at 95%.
+- 500 MB RAM.
+- Two active projects.
+- Pauses after a week with no activity.
+- **No automatic backups.**
+
+**What fits:**
+- Measured at the real snapshot cadence, projections alone would reach about 275 MB by mid-April as JSONB, and the whole database 350–400 MB.
+- With **one `REAL` column per stat** (measured 173 bytes a row against about 380), projections take about 125 MB a season and the database ends the season around 200–250 MB, even with about 10 beta leagues.
+- A daily size check alerts at 60% and 80%.
+- The next levers, if needed, are storing only changed projection rows and only roster changes.
+
+**History for future years:** nothing is ever lost.
+- Raw payloads stay in R2 forever, about 0.3 GB a season.
+- After each season (P11, then every April), its tables are exported to Parquet in R2 (`archive/season=YYYY/<table>.parquet`, about 13 MB for a season of projections). They stay queryable with DuckDB for multi-year work: projection accuracy by provider, aging curves, our own call history. The season's bulky rows then leave Postgres. Small, high-value tables (players and the crosswalk, game logs, registry, takes, grades) stay.
+- Every season-scoped table carries a season, directly or through its league.
+
+**Backups:** a nightly job (M3) copies the tables that can't be rebuilt from raw (users, leagues, credential ciphertext, takes, recommendations, grades, feedback, FactSheets, reports) to R2. Everything else can be rebuilt with `fh ingest`.
 
 ---
 
@@ -188,12 +233,20 @@ council  (M8):   load FactSheet → ┌ Analyst ┐
 - **Role→model map in config.** The spec leaves the final assignment open. Starting point from the spec: **Claude Haiku 5.5** (`claude-haiku-5-5`, $0.10/$0.50 per MTok) for routine agents, and **Claude Sonnet 5.5** (`claude-sonnet-5-5`, $2/$10) for Editor and baseline. The Skeptic comes from a **different model family** (a second provider key, needed by M8).
 - **Structured outputs:** use native structured outputs (`output_config.format`), **not forced tool calls**. Current Sonnet and Opus models return a 400 on forced `tool_choice`. **M0 checks** that the installed `langchain-anthropic` structured-output method uses native JSON schema.
 - **Refusals and errors:** always check `stop_reason`. Retryable and non-retryable errors are handled separately, and a failure falls through to graceful degradation.
-- **Prompt caching:** stable content (system prompt, scoring rubric, output schema) goes first with a cache breakpoint, and the volatile FactSheet goes after it. Shared prefixes must exceed the model's minimum cacheable length to cache at all. Check `cache_read_input_tokens` in LangSmith.
+- **Prompt caching:** stable content (system prompt, scoring rubric, output schema) goes first with a cache breakpoint, and the volatile FactSheet goes after it. Shared prefixes must exceed the model's minimum cacheable length to cache at all. Check `cache_read_input_tokens` in LangSmith. **In the council (M8),** shared rules and the FactSheet come before each role's instructions, and agents share one tool list. Agents on the same model then reuse one cached FactSheet, so they answer faster and cost less (ADR 0020).
 - **Batch API: recommend deferring** (a departure from the spec). At this scale a Sonnet daily report costs roughly $0.05–0.10 per league, so Batch would save cents per day. The costs are real, though: an asynchronous window that fights the 8 a.m. deadline, debate rounds that each become a batch stage, and LLM calls that LangSmith no longer traces automatically. The gateway exposes an executor interface so Batch can be added in one place once cost data justifies it.
 
 ### 7.4 MCP server (one, read-only)
 
-Tools: `get_roster`, `get_free_agents`, `get_projections`, `get_watchlist`, `get_takes`, `get_news`, `get_player_trend`, `get_call_history`, `evaluate_move`. LangGraph agents reach them through `langchain-mcp-adapters`. **There are no write tools in v1**: the app never acts on a league, and writes to the registry are done by pipeline code after guardrails, not by agents. That keeps "log before outcome" deterministic and limits the damage from prompt injection in news text.
+Tools are **few, coarse and batched**, because every tool call costs a model round trip (ADR 0020):
+- `search_players(name)` resolves names to IDs.
+- `get_player_cards([ids], league)` returns the projection, recent form, injury status, league value and roster status in one call.
+- `get_league_context(league)`
+- `get_free_agents(league, slot, limit)`
+- `get_takes`, `get_news`, `get_call_history`
+- `evaluate_move`
+
+Each reads the read models (§5.4) with one query and returns compact, ID'd JSON with a size cap. LangGraph agents reach them through `langchain-mcp-adapters`, in-process. **There are no write tools in v1**: the app never acts on a league, and writes to the registry are done by pipeline code after guardrails, not by agents. That keeps "log before outcome" deterministic and limits the damage from prompt injection in news text.
 
 ---
 
@@ -260,8 +313,12 @@ daily (≈04:30 ET):  ingest all leagues + snapshots (raw saved) → normalize �
                     → grade (close windows) → evaluate (append trajectory points for open takes/calls/trades)
                     → engine → FactSheets → brain (+ shadow setups) → guardrails → registry (frozen)
                     → ReportDocument → publish → push → run log record
+                    → backup irreplaceable tables to R2 → database size check (alert at 60% / 80%)
 weekly (Mon AM):    same spine + weekly overview + report card per league
+season end (Apr):   export the season to Parquet in R2 → verify counts → remove its bulky rows (§5.5)
 ```
+
+Until M4 adds the brain, the daily run is **engine-only**: code writes every card, including Sleeper lock-or-pass cards (M2). M4 adds the model-written prose around the same cards.
 
 - **Preflight checks (fail closed):** every rostered player has a projection; today's games are loaded; scoring settings match the league; the identity crosswalk covers 100% of rostered players; sources are fresher than the threshold.
 - **Idempotent** per (job, league, date), and stages can be resumed.
@@ -276,11 +333,13 @@ The path follows the spec, with one change of timing.
 | Stage | Pipeline | Database | Raw store | PWA | API |
 |---|---|---|---|---|---|
 | **M0–M2** | Laptop: launchd runs `fh snapshot` twice a day; `fh ingest` by hand (ADR 0017) | **Supabase** Postgres (dev project) | Local disk | — | — |
-| **M3 → beta** | GitHub Actions cron | **Supabase** Postgres (prod project) + Supabase Auth | Cloudflare R2 | Cloudflare Pages | Cloud Run |
+| **M3 → beta** | GitHub Actions cron | **Supabase** Postgres (prod project, `us-east-1`) + Supabase Auth | Cloudflare R2 (raw, archive, backups) | Cloudflare Pages | Cloud Run (`us-east4`) |
 | **If Actions is late** | Cloud Run Jobs + Cloud Scheduler | (same) | (same) | (same) | (same) |
 | **Paid launch** | Revisit everything | | | | |
 
 **No SQLite stage (a change from the spec).** The spec starts on SQLite and moves to hosted infrastructure before the beta. Two things favor starting on Postgres instead. Leagues and encrypted credentials live in the database from M1 (§12.1), and GitHub Actions runners don't keep files between runs, so scheduled jobs need a hosted database anyway. Starting on Supabase removes a migration from the busiest stretch of the build. **Supabase over Neon**, because it bundles Auth. The free tier allows two projects (dev and prod), and its 7-day idle pause can't trigger while a job runs every night.
+
+**Regions and connections (ADR 0020):** the database and the API share a metro (Supabase `us-east-1`, Cloud Run `us-east4`, both Northern Virginia), which turns about 34 ms per query from a laptop into a few milliseconds. The API keeps one connection pool per process. **Offseason gotchas:** Supabase Free pauses after a week idle, and GitHub disables scheduled workflows in a public repo after 60 days without a commit. Either would stop snapshots, so M3's ops alerts watch for a missing run. Account setup: [runbooks/m3-account-setup.md](runbooks/m3-account-setup.md).
 
 **Repository visibility (decided: public).** The fixture recorder **must redact** cookies and headers and pseudonymize leaguemates' names and team names before anything is committed. gitleaks runs before every commit and in CI.
 
@@ -334,6 +393,9 @@ Nothing sensitive is ever in the code or in git. There are three kinds of config
 | Small samples leave cells "Incomplete" for weeks | Certain / Low | Expected and shown honestly in the report card |
 | Leaguemates' data in a public repo | Medium / Medium | Redacting recorder, a review checklist, gitleaks |
 | iOS push needs a Home Screen install | Certain / Low | An onboarding step in the beta guide |
+| The free-tier database fills up (500 MB) | Medium / High | Typed projection columns (M2), a daily size alert at 60% and 80%, current season only in Postgres with past seasons archived to R2. Next levers: store only changed rows; Supabase Pro ($25 a month) as the last resort (§5.5) |
+| Database loss on a plan with no backups | Low / **Critical** for the registry, takes and grades | Nightly backup of the irreplaceable tables to R2 (M3). Everything else rebuilds from raw. |
+| Agent and chat latency | Medium / Medium | Read models, few batched tools, in-process MCP, one region (§5.4) |
 
 ---
 

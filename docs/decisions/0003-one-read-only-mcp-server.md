@@ -11,3 +11,6 @@ Pulling and cleaning platform data stays plain, tested code that runs the same w
 ## Rejected
 - **One MCP server per platform:** duplicates tools and leaks platform differences into the agents.
 - **Write tools for agents:** "log before the outcome" would depend on model behavior.
+
+## Consequences
+**Update, 2026-11-06 (ADR 0020):** our own agents (pipeline and chat API) reach the server in-process, over the in-memory transport; stdio and streamable HTTP are for outside clients. Tools are few, coarse and batched (for example `get_player_cards([ids])`) rather than one per table, because every tool call costs a model round trip.

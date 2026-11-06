@@ -67,7 +67,7 @@ fantasy-helper/
 │   │   ├── streaming.py              # add/drop/day plan within acquisition limits
 │   │   ├── win_probability.py
 │   │   ├── trajectory.py      (M6)   # realized-so-far + projected-remaining for a take/call/trade on a date
-│   │   ├── lock_in.py         (M5)   # Sleeper optimal stopping
+│   │   ├── lock_in.py         (M2)   # Sleeper optimal stopping (v2 in M5)
 │   │   ├── signals.py         (M5)   # belief signals
 │   │   └── baselines.py              # baseline call per call type
 │   │
@@ -81,8 +81,8 @@ fantasy-helper/
 │   │   ├── agents/            (M8)   # analyst · scout · voice · skeptic · editor
 │   │   └── prompts/                  # versioned prompt files + manifest (hash → prompt_version)
 │   │
-│   ├── mcp_server/            (M4)   # FastMCP; read-only tools over services
-│   ├── registry/              (M4)   # append-only call log · tip-off guard · follow detection
+│   ├── mcp_server/            (M4)   # FastMCP; few batched read-only tools, in-process for our agents (ADR 0020)
+│   ├── registry/              (M2)   # append-only call log · tip-off guard (M2) · follow detection (M4)
 │   │
 │   ├── evaluation/            (M6)
 │   │   ├── grader.py                 # closes windows, computes outcomes
@@ -93,7 +93,7 @@ fantasy-helper/
 │   │   ├── slicing.py                # platform × format × call type × confidence × user × setup
 │   │   └── replay.py                 # regression + shadow runs over stored FactSheets
 │   │
-│   ├── reports/                      # ReportDocument builders: weekly (M2) · daily (M4) · scorecard (M6)
+│   ├── reports/                      # ReportDocument builders: weekly (M2) · daily (M2 engine-only, M4 brain) · scorecard (M6)
 │   ├── delivery/              (M3)   # publish · web push (VAPID)
 │   │
 │   ├── pipeline/
@@ -102,7 +102,7 @@ fantasy-helper/
 │   │   ├── onboarding.py             # (M1) fh league add
 │   │   ├── fixtures.py               # (M1) fh fixtures record
 │   │   ├── weekly.py                 # (M2)
-│   │   ├── daily.py           (M4)
+│   │   ├── daily.py           (M2)   # engine-only until M4 adds the brain
 │   │   ├── grade.py           (M6)   # grade + evaluate (trajectory points)
 │   │   ├── preflight.py              # data checks that stop the run (fail closed)
 │   │   └── runlog.py                 # one record per run

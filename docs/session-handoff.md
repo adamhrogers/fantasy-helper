@@ -1,6 +1,6 @@
 # Session handoff: everything a new session needs
 
-**Last updated:** 2026-11-06, at the end of M1 (the session that built M0 and M1).
+**Last updated:** 2026-11-06, after the pre-M2 review of latency and storage (ADRs 0020, 0021; roadmap v0.5). M1 was merged as PR #2.
 **Read this first**, then `CLAUDE.md` (rules), `docs/roadmap.md` (milestones), `docs/architecture.md` (design) and `docs/decisions/` (ADRs). This file is the narrative glue: what exists, how we work, what we learned the hard way, and exactly what comes next.
 
 The repo is **public**, so this file holds no secrets or personal data. League names and IDs, the owner's email, the Supabase project ID and the ntfy topic live in `.env` and the database. `uv run fh league list` shows the leagues.
@@ -21,10 +21,11 @@ A fantasy basketball assistant for Adam (customer one), then a friends beta, the
 | Milestone | Status |
 |---|---|
 | M0 Foundation | **Done, merged** (PR #1) |
-| M1 Data spike | **Done**: branch `m1-data-spike`, PR #2 |
-| M2 Scoring + weekly overview | **Next** (Nov 7–12) |
-| M3 Phone app + delivery | **Next, in parallel with M2** (Nov 7–12) |
-| M4–M8, P9–P12 | See `docs/roadmap.md` v0.4. Friends beta **Nov 29**, hard stop **Dec 15**. |
+| M1 Data spike | **Done, merged** (PR #2) |
+| Pre-M2 review | **Done**: latency (ADR 0020), storage budget and season archive (ADR 0021), lock-in moved to M2 |
+| M2 Scoring, weekly overview, **Sleeper lock-in** | **Next** (Nov 7–12) |
+| M3 Phone app + delivery | **Next, in parallel with M2** (Nov 7–12). Adam is creating the accounts ([runbooks/m3-account-setup.md](runbooks/m3-account-setup.md)). |
+| M4–M8, P9–P12 | See `docs/roadmap.md` v0.5. Friends beta **Nov 29**, hard stop **Dec 15**. |
 
 ### What runs today
 - **`fh snapshot`** runs on Adam's Mac through launchd: the morning set at **06:30** and the pre-tip evening set at **17:30** local time (America/New_York). It saves raw ESPN and Sleeper public data to `data/raw/` (git-ignored). History has accumulated since **2026-11-06**. Check it with `scripts/snapshot-schedule.sh status`; logs are in `~/Library/Logs/fantasy-helper/` (JSON lines). A sleeping Mac runs missed jobs on wake; a Mac that's shut down skips them, until M3 moves this to the cloud.
@@ -142,34 +143,69 @@ TCP only, because long scratch paths exceed the 103-byte Unix socket limit. `LC_
 9. **langchain-anthropic defaults `with_structured_output` to forced tool calls**, which current Sonnet/Opus reject. Always pass `method="json_schema"` (ADR 0015).
 10. **Ruff S105** flags enum values containing "pass" (lock-or-pass); the code uses targeted `# noqa: S105` with a reason. Curly apostrophes in strings trip RUF001, so write `’`.
 11. Scripts that read downloaded or raw data run with `uv run python -I` from a scratch folder, and print structure only.
+12. **Supabase Free, checked against its docs on 2026-11-06:**
+    - 500 MB database size, a billing quota with Fair Use restrictions when exceeded
+    - 2 GB fixed disk, read-only at 95%
+    - 500 MB RAM; two active projects
+    - pauses after a week idle
+    - **no automatic backups**
+
+    The dev project is in `us-east-1`.
+13. **Measured latency and size (2026-11-06; ADRs 0020, 0021):**
+    - **From the Mac:** about 34 ms per query round trip and about 600 ms per new connection. Hot queries take 0.3–2.7 ms on the server.
+    - **One synthetic season:** 720,000 projection rows. At JSONB's real size (about 380 bytes a row) that's about 275 MB; typed columns cut it to 173 bytes a row.
+    - **Five seasons:** 2 GB, so past seasons go to Parquet in R2 (about 13 MB a season of projections).
+    - **Bloat:** a bulk insert that fails and rolls back leaves dead rows that inflate table size until `VACUUM FULL`. Measure sizes on a clean load.
 
 ## 7. Exactly what's next
 
-**First:** Adam reviews and merges PR #2 (M1). Then:
-
-### M2: Scoring layer and weekly overview (Nov 7–12), this repo, `engine/` + `facts/` + `reports/`
-1. **Game logs (moved here from M1).** Add an ESPN per-game actuals dataset (`kona_player_info` with `filterStatsForTopScoringPeriodIds`; entries `statSourceId 0, split 5` carry `externalId` = the ESPN game ID). Add a `player_game_stats` table (migration 0003, with RLS) linked to `nba_games`. Backfill from opening night, then pull daily in snapshot or ingest.
-2. **`engine/scoring.py`:** per-game fantasy points = Σ stat × weight + bonuses (threshold per game). Golden tests: **five players hand-calculated in each points league** (the M2 exit criterion), kept forever in `tests/golden/`.
-3. **`engine/schedule.py`:** games per week from `nba_games`; **startable** games under roster slots and daily locks. Sleeper lock-in counts one game per starter per week.
+### M2: Scoring, weekly overview and Sleeper lock-in (Nov 7–12), this repo, `engine/` + `facts/` + `reports/` + `registry/`
+The order matters: 1 → 2 → the distributions in 5 → 7 (lock-in), then the rest. Roadmap v0.5 has the step table.
+1. **Game logs and migration 0003 (ADRs 0020, 0021).**
+   - Add an ESPN per-game actuals dataset (`kona_player_info` with `filterStatsForTopScoringPeriodIds`; entries `statSourceId 0, split 5` carry `externalId` = the ESPN game ID), with the fixture recorded first.
+   - Add `player_game_stats`: typed stat columns, a `season`, indexed on `(player_id, game_date)`, linked to `nba_games`, with RLS.
+   - In the same migration: convert `projection_rows.per_game` JSONB to one `REAL` column per stat; add composite indexes (`projection_rows (snapshot_id, player_id)`, `projection_snapshots (provider, scope, pulled_at)`, `injury_observations (player_id, provider, observed_at)`, `transactions (league_id, proposed_at)`); add the read-model tables `fact_sheets` and `league_player_values`.
+   - Show the database size in `fh doctor` and the ingest summary.
+   - Backfill box scores from opening night, then pull them daily.
+2. **`engine/scoring.py`:** per-game fantasy points = Σ stat × weight + bonuses (threshold per game). Golden tests: **five players hand-calculated in each points league** (the M2 exit criterion), kept forever in `tests/golden/`. **Cross-check** our scores of real box scores against the per-player points Sleeper and ESPN report in matchups. While doing it, check whether Sleeper's weekly player points reveal which game was locked: a locked player's points freeze at that game. If they do, locks can be read from the API and no button is needed.
+3. **`engine/schedule.py`:** games per week from `nba_games`; **startable** games under roster slots and daily locks. Sleeper lock-in counts one game per player per week.
    - Open item: map ESPN matchup periods to scoring days. `scheduleSettings.matchupPeriods` and the matchups' `pointsByScoringPeriod` keys both carry this; weeks run Monday to Sunday, and the All-Star break makes a long week.
 4. **`engine/valuation.py`:** replacement level = the best free agent at the slot in *this* league. Free agents = players with projections minus today's `roster_entries`.
 5. **`engine/distributions.py`** (from game logs, shrunk toward the projection), `streaming.py` (greedy plan within the per-day add rate), `win_probability.py` (normal approximation), `baselines.py`.
-6. **`facts/`:** FactSheet v1. **`reports/`:** the weekly `ReportDocument`, rendered locally (CLI to HTML). Categories-league valuation is P8, so the 9-cat league gets games and roster facts only in M2.
+6. **`facts/`:** FactSheet v1, held to a token budget by a test, so the nightly report needs zero tool calls (ADR 0020), plus `league_player_values`. **`reports/`:** the weekly `ReportDocument` and the engine-only daily one, rendered locally (CLI to HTML) until M3 delivers them. Categories-league valuation is P8, so the 9-cat league gets games and roster facts only in M2.
+7. **Sleeper lock-in, moved from M5 (Adam asked on 2026-11-06; he's playing the league now).**
+   - **`engine/lock_in.py`:** backward induction per player. V(last) = E[last game], counted even if he doesn't play (projection 0 when Sleeper's row is empty); V(k) = E[max(Xₖ, V(k+1))]. Lock if last night's score ≥ the value of waiting. Use the closed form for the expected maximum of a normal and a constant.
+   - **Sleeper's rules:** one game per player a week; lock after the game and before his next tip; no undo; only starters can lock; if you never lock, his final game of the week counts.
+   - **Lock-or-pass cards in the engine-only daily report**, made by `fh run daily`. Adam doesn't want a separate lock-in command. Each card shows last night's score, the value of waiting and the inputs.
+   - **The registry's core** (append-only `recommendations` table and the tip-off guard; the domain model already exists), because every call is logged before tip-off.
+   - **Version 2 is M5:** decisions across the roster, matchup-aware risk, and an evening ruled-out alert.
 - The engine must stay pure: load data in `facts`/`pipeline`, pass plain domain objects into `engine`. Use hypothesis property tests for the math.
 
 ### M3: Phone app and delivery (Nov 7–12, parallel), best as its own session and worktree
-FastAPI on Google Cloud Run; Supabase **prod** project and Supabase Auth (magic link, invite-only, Adam is user one); PWA (Vite + React + TS + vite-plugin-pwa) on Cloudflare Pages; Web Push (VAPID); move snapshot + ingest from launchd to **GitHub Actions** cron with the raw store on **Cloudflare R2** (then uninstall the launchd jobs, and upload the local `data/raw` backlog to R2 first); ntfy alerts for failed or late runs. **Adam must create accounts first:** Supabase prod project, Cloudflare (Pages + R2), a Google Cloud project with billing (Cloud Run free tier). Plus GitHub secrets (prod `DATABASE_URL`, `FH_ENCRYPTION_KEY` for **prod, a different key**, VAPID keys, ntfy topic, R2 credentials). Done when a scheduled run, with the laptop closed, pushes the weekly overview to his phone.
+- **Build:**
+  - FastAPI on Google Cloud Run in **`us-east4`**, with one pooled engine per process.
+  - Supabase **prod** project in **`us-east-1`**, with Supabase Auth (magic link, invite-only, Adam is user one).
+  - PWA (Vite + React + TS + vite-plugin-pwa) on Cloudflare Pages, with Web Push (VAPID).
+- **Move the schedule:** snapshot, ingest and the daily run go from launchd to **GitHub Actions** cron, with the raw store on **Cloudflare R2**. Upload the local `data/raw` backlog to R2 first, then uninstall the launchd jobs.
+- **Ops:**
+  - a **nightly backup** of the tables that can't be rebuilt, to R2 (ADR 0021)
+  - ntfy alerts for failed, missing or late runs and for database size
+- **Adam's account setup** is a checklist he works through during M2: [runbooks/m3-account-setup.md](runbooks/m3-account-setup.md). Production secrets live in the GitHub environment `prod`: `DATABASE_URL`, `FH_ENCRYPTION_KEY` (**a different key from dev**), `FH_NTFY_TOPIC`, `LANGSMITH_API_KEY` and `FH_R2_*`. VAPID keys are generated in M3.
+- **Done when:** a scheduled run, with the laptop closed, pushes the daily report (lock-or-pass cards) and the weekly overview to his phone.
 
 ### Open items
 - **Q6:** how fast projections react to injuries. Analyze `projection_rows` against `injury_observations` once a week or so of snapshots exists.
 - Beta friends and leagues (needed by M7). The RatBall note goes out only if RatBall data is used.
 - The 821 unmatched Sleeper players are all non-rostered and **aren't in ESPN Fantasy's player pool**, so there's nothing to link them to. Overrides stay empty until ingest warns about a rostered one. Ingest reports linked pairs with conflicting birth dates (2 known data errors: Gortman, Edey); that's informational.
 - ESPN activity-feed trades: P9. Categories-league logic: P8.
-- Confirm Adam set the `LANGSMITH_API_KEY` GitHub secret.
+- Confirm Adam set the `LANGSMITH_API_KEY` GitHub secret (now step 1 of the M3 setup runbook).
+- **Storage levers (ADR 0021),** if the 60% size alert fires: store only changed projection rows, and store only roster changes. Season rollover to the R2 archive: P11.
+- **Before M7:** friend invites need a custom email sender for Supabase Auth (the built-in one only reaches organization members, 2 emails an hour), which needs a domain Adam owns.
 
 ## 8. Session history (for orientation)
 
 - **2026-10-16:** read the 25-page spec; architecture, repo structure and roadmap drafted.
 - **2026-10-19:** Adam's review. User and league data go in the database behind auth (not `.env`); timeline graphs for takes, calls and trades added; M3 split; Supabase from day one; decisions D1–D10.
 - **2026-10-25 to 11-06:** M0 built. Supabase dev, LangSmith and ntfy set up together (pooler URL, iPhone notification fix); PR #1 audited for leaks and merged.
-- **2026-11-06:** M1. Snapshots started and scheduled; `fh league add` for three leagues; ESPN and Sleeper explored; the redacting recorder; mappers; identity; tables; `fh ingest` run live twice; ADRs 0016–0019; roadmap v0.4; this handoff doc.
+- **2026-11-06:** M1. Snapshots started and scheduled; `fh league add` for three leagues; ESPN and Sleeper explored; the redacting recorder; mappers; identity; tables; `fh ingest` run live twice; ADRs 0016–0019; roadmap v0.4; this handoff doc. PR #2 merged.
+- **2026-11-06 (pre-M2 review):** Adam asked for low latency for agents and a future chat, and for room to keep history for future years. Latency was measured against Supabase dev, and one and five synthetic seasons were benchmarked locally. Result: ADR 0020 (read models, few batched tools, in-process MCP, one region) and ADR 0021 (typed projection columns, a size alert, the season archive to R2, nightly backups). Sleeper lock-in moved to M2, as cards in the daily report. The M3 account-setup runbook was written for Adam.

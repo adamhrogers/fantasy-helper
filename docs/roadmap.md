@@ -1,8 +1,15 @@
 # Fantasy Helper — Phased Roadmap
 
-**Status:** v0.4, re-baselined 2026-11-06 when M1 finished · companion to [architecture.md](architecture.md)
+**Status:** v0.5, 2026-11-06 · companion to [architecture.md](architecture.md)
 
 **Friends beta: Nov 29 (planned Nov 15, then Nov 22). Hard stop: Dec 15.** Each milestone ends with something Adam uses the next morning and an automated check that proves it works. Lanes (A, B, …) inside a milestone have no dependencies on each other, so they can run as parallel sub-agents or sessions once you approve.
+
+**What changed in v0.5 (Nov 6):**
+- **Sleeper lock-in moves from M5 to M2,** so Adam uses it in his live league from about Nov 11 instead of about Nov 23. It needs no AI, only M2's scoring and distributions. It arrives as lock-or-pass cards in an **engine-only daily report**, not a separate command. The registry's core (append-only table, tip-off guard) moves with it, because every call is logged. Lock-in v2 stays in M5.
+- **M2 also lays the low-latency read path and the storage budget** (ADRs 0020 and 0021): typed projection columns, read-path indexes, the read-model tables and a database size check.
+- **M3 gains** fixed regions, nightly backups to R2 and a size alert. Adam's account setup is in [runbooks/m3-account-setup.md](runbooks/m3-account-setup.md).
+- **P11 gains the season archive.**
+- The beta date doesn't move: M2 grows by about 1.5 days, and M5 gives them back.
 
 **What changed in v0.4 (Nov 6):** M1 finished on Nov 6, about five days after the v0.3 plan, so M2 onward moves five to seven days and the beta moves to **Nov 29**, the Sunday after Thanksgiving and still two weeks inside the hard stop. Game logs (box scores) moved from M1 to M2, where the distributions first need them.
 
@@ -20,10 +27,10 @@
 ```
 Oct 25 ─ M0 Foundation ─────────────────────────────── done Nov 6 (NBA tip-off was Oct 20)
 Nov 6  ─ M1 Data spike ─────────────────────────────── done Nov 6; snapshots since Nov 6
-Nov 7  ─ M2 Scoring + weekly overview (+ game logs)    ┐ critical path
+Nov 7  ─ M2 Scoring, weekly overview, lock-in          ┐ critical path
        ║ M3 Phone app + delivery  (in parallel with M2) │
 Nov 13 ─ M4 Daily report + registry (5-day streak Nov 15–19)
-Nov 20 ─ M5 Watchlist · signals · lock-in              │
+Nov 20 ─ M5 Watchlist · signals · lock-in v2           │
 Nov 23 ─ M6 Grading + timeline graphs                  │
 Nov 29 ─ ◆ FRIENDS BETA (M7) ──────────────────────────┘  (hard stop Dec 15)
 Nov 30 ─ M8 Multi-agent orchestration ─────────────── Dec 31
@@ -79,17 +86,27 @@ Apr–Sep 2027 ─ P12 Offseason: Yahoo, sign-up, pricing ─ fall 2027 launch
 
 ---
 
-## M2 — Scoring layer and weekly overview · Nov 7–12
+## M2 — Scoring, weekly overview and Sleeper lock-in · Nov 7–12
 
-**Goal:** the first useful output, the weekly overview, built entirely by code with no AI.
+**Goal:** the first useful outputs, built entirely by code with no AI. That means the weekly overview, plus an **engine-only daily report** whose first cards are Sleeper **lock-or-pass** calls (moved from M5 in v0.5). Adam uses lock-in in his live league from about Nov 11.
 
-| Lane | Work |
+These steps depend on each other, so they're ordered. B and C run in parallel at the end.
+
+| Step | Work |
 |---|---|
-| A — Engine core | `scoring`, `valuation` (replacement level), `schedule` (startable games), `distributions` v1, `baselines` |
+| 0 — Data and storage | **Game logs:** ESPN per-game actuals, with the fixture recorded first. **Migration 0003** adds `player_game_stats` (typed stat columns, a season, indexed on `(player_id, game_date)`), converts `projection_rows` to typed columns, adds composite indexes for the read paths, and adds the read-model tables `fact_sheets` and `league_player_values` (ADRs 0020, 0021). Backfill box scores from opening night (2026-10-20). Database size goes into `fh doctor` and the ingest summary. |
+| A — Engine core | `scoring` (Sleeper's 40/50-point bonuses included; **cross-checked against the points ESPN and Sleeper report**), `distributions` v1, `schedule` (startable games; ESPN matchup periods mapped to days), `valuation` (replacement level), `baselines` |
+| D — Lock-in | `engine/lock_in.py`, by backward induction under Sleeper's rules: one game per player a week, lock after a game and before his next tip, no undo, and his final game counts if you never lock, even one he doesn't play. **Lock-or-pass cards** in the engine-only daily `ReportDocument` (`fh run daily`), showing last night's score, the value of waiting and the inputs. **The registry's core**, moved from M4: an append-only table and the tip-off guard. Locks are recorded from Sleeper's weekly points if those reveal them; otherwise Adam tells it. |
 | B — Engine planning | `streaming` (greedy plan within acquisition limits), `win_probability` (normal approximation) |
-| C — Facts + report | FactSheet v1, weekly `ReportDocument` builder |
+| C — Facts and reports | FactSheet v1 (held to a token budget by a test), `league_player_values`, the weekly `ReportDocument`. Both reports render as local pages until M3 delivers them to the phone. |
 
-**Done when** (spec): fantasy point values for five players match a hand calculation in each league. **Plus:** those cases live permanently in `tests/golden/`, and property tests on scoring are green.
+**If M2 runs past Nov 12,** B moves to the first day of M4, so the Nov 15 streak isn't touched.
+
+**Done when** (spec): fantasy point values for five players match a hand calculation in each points league. **Plus:**
+- The golden cases live permanently in `tests/golden/`.
+- The scoring and lock-in property tests are green.
+- Our scores of real box scores match what Sleeper and ESPN report.
+- Every Sleeper starter who played last night and has a game left gets a lock-or-pass card, logged in the registry before his next tip.
 
 ---
 
@@ -99,11 +116,16 @@ Apr–Sep 2027 ─ P12 Offseason: Yahoo, sign-up, pricing ─ fall 2027 launch
 
 | Lane | Work |
 |---|---|
-| A — API + auth | FastAPI on Cloud Run, **Supabase Auth** (magic link; Adam is user one), reports and push-subscription routes, Supabase prod project |
-| B — PWA | Vite + React shell, sign-in, Today and This Week tabs rendering `ReportDocument` cards, Web Push (VAPID), Cloudflare Pages, iOS Home Screen install |
-| C — Scheduling + ops | `daily.yml` and `weekly.yml` on GitHub Actions, raw store moves to R2, **ops alerts via ntfy** (failed run, stale source, expired cookies, late report) |
+| A — API + auth | FastAPI on Cloud Run in **`us-east4`** with one pooled database engine per process, **Supabase Auth** (magic link; Adam is user one), reports and push-subscription routes, Supabase prod project in **`us-east-1`** (ADR 0020) |
+| B — PWA | Vite + React shell, sign-in, Today and This Week tabs rendering `ReportDocument` cards (the daily lock-or-pass cards and the weekly overview), Web Push (VAPID), Cloudflare Pages, iOS Home Screen install |
+| C — Scheduling + ops | `daily.yml` and `weekly.yml` on GitHub Actions; the raw store moves to R2; a **nightly backup** of the tables that can't be rebuilt to R2 (ADR 0021); **ops alerts via ntfy** (failed or missing run, stale source, expired cookies, late report, database size over 60% or 80%) |
 
-**Done when:** a scheduled run, with the laptop closed, pushes the weekly overview to Adam's phone, and it opens after sign-in. A deliberately broken run produces an ops alert.
+**Done when:**
+- A scheduled run, with the laptop closed, pushes the daily report and the weekly overview to Adam's phone, and they open after sign-in.
+- A deliberately broken run produces an ops alert.
+- A backup restores into a scratch database.
+
+**Needed from Adam:** the accounts and secrets in [runbooks/m3-account-setup.md](runbooks/m3-account-setup.md), done while M2 runs.
 
 ---
 
@@ -113,22 +135,22 @@ Apr–Sep 2027 ─ P12 Offseason: Yahoo, sign-up, pricing ─ fall 2027 launch
 
 | Lane | Work |
 |---|---|
-| A — Brain baseline | LLM gateway, `baseline` graph (one Claude model), structured `ReportDraft`, guardrails (schema, numeric grounding, candidate set), graceful degradation to the engine-only report, prompt manifest, MCP server v1 (read-only tools) |
-| B — Registry + daily pipeline | Append-only registry with tip-off guard, `pipeline/daily.py`, preflight checks, news adapter v1, daily `ReportDocument` |
+| A — Brain baseline | LLM gateway, `baseline` graph (one Claude model), structured `ReportDraft`, guardrails (schema, numeric grounding, candidate set), graceful degradation to the engine-only report, prompt manifest, MCP server v1 (read-only, few batched tools, in-process; ADR 0020) |
+| B — Registry + daily pipeline | The registry from M2 extended to every call type, with follow detection. The engine-only daily pipeline from M2 gains the brain, preflight checks and news adapter v1. |
 
 **Done when** (spec): the report reaches Adam's phone by 8 a.m. five days in a row (Nov 15–19), and every call in it is in the registry. **Plus:** every LLM call has a LangSmith trace ID on its registry row, and the run log shows cost per report.
 
 ---
 
-## M5 — Watchlist, belief signals, lock-in · Nov 20–22
+## M5 — Watchlist, belief signals, lock-in v2 · Nov 20–22
 
 | Lane | Work |
 |---|---|
 | A — Takes | API and PWA form: player search, direction, horizon, conviction, one-line take, in under 10 seconds on a phone |
 | B — Signals | `engine/signals.py`, signal cards in the daily report, registry call types `pick_up_signal` and `buy_low` |
-| C — Lock-in | `engine/lock_in.py` (backward induction), lock/pass cards, plus a one-tap "I locked / passed" confirmation if spike Q4 found that locks aren't visible |
+| C — Lock-in v2 | Version 1 shipped in M2. Version 2 adds: decisions across the whole roster (bench a player after a pass so a bench player's game counts), matchup-aware risk (chase variance when behind), an **evening alert** from the 17:30 snapshot when a player is ruled out before his last game, and a one-tap "I locked / passed" button in the PWA if locks can't be read from Sleeper |
 
-**Done when** (spec): signals and lock calls appear in the report and in the registry. **Plus:** lock-in property tests are green.
+**Done when** (spec): signals and lock calls appear in the report and in the registry. **Plus:** the lock-in v2 property tests are green.
 
 ---
 
@@ -183,6 +205,8 @@ Monthly deep dive on the five weakest cells → improvement tickets with traces 
 
 Final scorecard per league, the trend across the season, the effect of each change, a short demo and the case study (from `docs/case-study/`).
 
+**Season archive (ADR 0021):** after the finals, export the 2026-27 season's tables to Parquet in R2 (`archive/season=2027/`), verify the row counts, and remove the season's bulky rows (projections, daily rosters) from Postgres. The archive is the multi-year memory: projection accuracy by provider, player aging, our own calls, all readable with DuckDB. The same job runs every April after that.
+
 ## P12 — Offseason · Apr–Sep 2027
 
 Yahoo adapter (OAuth, which also solves sign-up for Yahoo users), self-serve ESPN connect, a managed key service for credential encryption, pricing, a hosting review for paying users, a decision on a native app, and the fall 2027 launch.
@@ -198,4 +222,4 @@ M1 snapshots + per-stat projections ─► M2 scoring ─► M4 daily report ─
 
 **To pull the beta earlier:** run M2 and M3 as parallel sessions (they share no files), start M5's take-entry form during M4's streak week, and accept the first cut below.
 
-If the beta date is at risk, cut in this order (keeping the Dec 15 hard stop): (1) PWA polish, keeping plain cards; (2) Sleeper lock-in moves to the first beta week; (3) the timeline graph ships as a plain line, with event markers added the next week; (4) the beta starts with the Sleeper league only. **Never cut:** daily snapshots, the registry, the tip-off guard or tracing. Without them the season produces no evidence and the graphs have no history.
+If the beta date is at risk, cut in this order (keeping the Dec 15 hard stop): (1) PWA polish, keeping plain cards; (2) lock-in v2 moves to the first beta week (v1 already shipped in M2); (3) the timeline graph ships as a plain line, with event markers added the next week; (4) the beta starts with the Sleeper league only. **Never cut:** daily snapshots, the registry, the tip-off guard, tracing or the nightly backup. Without them the season produces no evidence and the graphs have no history.

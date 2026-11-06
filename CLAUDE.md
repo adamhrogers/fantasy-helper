@@ -43,7 +43,8 @@ scripts/snapshot-schedule.sh status       # snapshot schedule state and logs
 
 - **Time:** every datetime is timezone-aware UTC (`domain._base.UtcDatetime`; Ruff's DTZ rules ban naive datetimes). Convert to the user's zone only for display.
 - **Domain models** subclass `DomainModel`: frozen, unknown fields rejected. Invariants live in validators (for example, the tip-off guard on `Recommendation`).
-- **New tables** enable row-level security in their migration (`ALTER TABLE ... ENABLE ROW LEVEL SECURITY`, no policies). `tests/integration` fails otherwise.
+- **New tables** enable row-level security in their migration (`ALTER TABLE ... ENABLE ROW LEVEL SECURITY`, no policies). `tests/integration` fails otherwise. Season-scoped tables carry a season (directly or through their league), so a season can be archived to R2 and removed (ADR 0021). Store stats as typed columns, not JSONB.
+- **Hot reads** (agents, MCP tools, the API) come from pre-computed read models (`fact_sheets`, `league_player_values`) with one indexed query per tool call. History tables are for batch jobs (ADR 0020).
 - **Migrations** are numbered by hand (`--rev-id 0002`). CI runs `alembic check`, so models and migrations can't drift.
 - **Structured LLM output** always uses `method="json_schema"`, never forced tool calls (ADR 0015).
 - **Logging** uses `observability.logs.get_logger`, never `print`. Keys that name a secret are redacted automatically.
