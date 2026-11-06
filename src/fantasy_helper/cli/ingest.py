@@ -79,7 +79,8 @@ def _print(report: IngestReport) -> None:
     )
     typer.echo(
         f"✓ players: {cw.created} new from ESPN; Sleeper links: {linked or 'none new'}; "
-        f"{len(cw.unmatched)} Sleeper players unmatched"
+        f"{len(cw.unmatched)} Sleeper players unmatched; "
+        f"{cw.birth_date_conflicts} linked pairs with conflicting birth dates (data errors)"
     )
     typer.echo(f"✓ schedule: {report.games} games")
     typer.echo(
@@ -97,6 +98,7 @@ def _print(report: IngestReport) -> None:
             extra.append(
                 f"{lg.rostered_sleeper_linked}/{lg.rostered_sleeper} rostered linked to ESPN"
             )
+            extra.append(f"{lg.free_agents} free agents ({lg.free_agents_linked} linked to ESPN)")
         counts = (
             f"{lg.teams} teams · {lg.roster_entries} rostered · {lg.matchups} matchups · "
             f"{lg.transactions} transactions"

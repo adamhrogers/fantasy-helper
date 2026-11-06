@@ -110,6 +110,7 @@ class SourcePlayer(DomainModel):
     nba_team: str | None = None  # a code from domain.player.NBA_TEAMS; None for free agents
     positions: tuple[Position, ...] = ()
     active: bool = True
+    birth_date: date | None = None  # never changes in a trade: the strongest matching key
 
 
 class InjuryRecord(DomainModel):

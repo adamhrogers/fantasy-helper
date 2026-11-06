@@ -83,6 +83,8 @@ def test_players_use_standard_codes_and_skip_inactive() -> None:
     assert all(p.key.source is IdSource.SLEEPER for p in players)
     diabate = next(p for p in players if p.full_name == "Moussa Diabaté")
     assert diabate.nba_team == "CHA"
+    assert diabate.birth_date is not None
+    assert sum(1 for p in players if p.birth_date) >= len(players) * 0.95
 
 
 def test_injuries_map_sleeper_codes() -> None:

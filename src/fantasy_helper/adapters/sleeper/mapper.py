@@ -269,6 +269,7 @@ def map_players(players: Any, *, include: set[str] | None = None) -> list[Source
             nba_team=p.get("team") if p.get("team") in NBA_TEAMS else None,
             positions=_positions(p),
             active=bool(p.get("active")),
+            birth_date=date.fromisoformat(p["birth_date"]) if p.get("birth_date") else None,
         )
         for pid, p in players.items()
         if (p.get("active") or pid in keep)

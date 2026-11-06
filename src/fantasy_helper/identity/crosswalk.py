@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from fantasy_helper.domain.player import IdSource
 from fantasy_helper.domain.records import PlayerKey, SourcePlayer
 from fantasy_helper.identity import overrides as manual
-from fantasy_helper.identity.matching import Candidate, Matcher
+from fantasy_helper.identity.matching import Candidate, Matcher, birth_dates_agree
 from fantasy_helper.identity.names import normalize_name
 from fantasy_helper.storage.repositories import players as repo
 
@@ -28,6 +28,9 @@ class CrosswalkReport:
     created: int = 0
     linked: Counter[str] = field(default_factory=Counter)
     unmatched: list[SourcePlayer] = field(default_factory=list)
+    # Linked pairs whose two birth dates disagree by more than a day: one platform's data is
+    # wrong (5 known on 2026-11-06, all correct links). Informational, not an error.
+    birth_date_conflicts: int = 0
 
 
 def sync_players(
@@ -62,10 +65,16 @@ def sync_players(
     espn_ids = {k: v.player_id for k, v in links.items() if k[0] == IdSource.ESPN.value}
     by_espn_id = {player.key.external_id: player for player in espn}
     candidates = [
-        Candidate(pid, normalize_name(by_espn_id[ext].full_name), by_espn_id[ext].nba_team)
+        Candidate(
+            pid,
+            normalize_name(by_espn_id[ext].full_name),
+            by_espn_id[ext].nba_team,
+            by_espn_id[ext].birth_date,
+        )
         for (_, ext), pid in espn_ids.items()
         if ext in by_espn_id
     ]
+    birth_by_player = {c.player_id: c.birth_date for c in candidates}
     claimed = {
         link.player_id
         for (source, _), link in links.items()
@@ -85,7 +94,18 @@ def sync_players(
         key = (IdSource.SLEEPER.value, player.key.external_id)
         link = links.get(key)
         if link is not None and link.method != UNMATCHED:
+            espn_birth = birth_by_player.get(link.player_id)
+            if (
+                player.birth_date
+                and espn_birth
+                and not birth_dates_agree(player.birth_date, espn_birth)
+            ):
+                report.birth_date_conflicts += 1
             continue
+        if link is not None and (row := rows.get(link.player_id)) is not None:
+            # A Sleeper-only player: keep team and positions current (trades, role changes).
+            row.full_name, row.nba_team = player.full_name, player.nba_team
+            row.positions = [p.value for p in player.positions]
         match = matcher.match(player)
         if match is None:
             if link is None:

@@ -5,7 +5,7 @@ Code tables (stat IDs, lineup slot IDs) follow the community `espn-api` library'
 """
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from fantasy_helper.domain.league import (
@@ -333,7 +333,18 @@ def _player_key(player: dict[str, Any]) -> PlayerKey:
     return PlayerKey(source=IdSource.ESPN, external_id=str(player["id"]))
 
 
-def _source_player(player: dict[str, Any]) -> SourcePlayer:
+def map_birth_dates(data: Any) -> dict[str, date]:
+    """ESPN athlete ID -> date of birth, from the public athletes list."""
+    return {
+        str(item["id"]): date.fromisoformat(item["dateOfBirth"][:10])
+        for item in (data or {}).get("items", [])
+        if item.get("dateOfBirth")
+    }
+
+
+def _source_player(
+    player: dict[str, Any], birth_dates: dict[str, date] | None = None
+) -> SourcePlayer:
     positions = tuple(
         POSITION_SLOTS[slot]
         for slot in sorted(player.get("eligibleSlots") or [])
@@ -345,18 +356,19 @@ def _source_player(player: dict[str, Any]) -> SourcePlayer:
         nba_team=PRO_TEAMS.get(int(player.get("proTeamId") or 0)),
         positions=positions,
         active=bool(player.get("active", True)),
+        birth_date=(birth_dates or {}).get(str(player["id"])),
     )
 
 
-def map_players(data: Any) -> list[SourcePlayer]:
+def map_players(data: Any, birth_dates: dict[str, date] | None = None) -> list[SourcePlayer]:
     """Players from the public kona_player_info view ({"players": [{"player": {...}}]})."""
-    return [_source_player(entry["player"]) for entry in data.get("players", [])]
+    return [_source_player(entry["player"], birth_dates) for entry in data.get("players", [])]
 
 
-def map_roster_players(data: Any) -> list[SourcePlayer]:
+def map_roster_players(data: Any, birth_dates: dict[str, date] | None = None) -> list[SourcePlayer]:
     """Players embedded in league rosters (views mTeam + mRoster)."""
     return [
-        _source_player(entry["playerPoolEntry"]["player"])
+        _source_player(entry["playerPoolEntry"]["player"], birth_dates)
         for team in data.get("teams", [])
         for entry in team.get("roster", {}).get("entries", [])
         if entry.get("playerPoolEntry", {}).get("player")

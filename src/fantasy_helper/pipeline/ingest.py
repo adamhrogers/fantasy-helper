@@ -29,7 +29,12 @@ from fantasy_helper.domain.league import League, Platform
 from fantasy_helper.domain.player import IdSource
 from fantasy_helper.domain.ports import Clock, SystemClock
 from fantasy_helper.domain.projections import ProjectionScope, Provider
-from fantasy_helper.domain.records import InjuryRecord, PlayerKey, ProjectionRecord
+from fantasy_helper.domain.records import (
+    InjuryRecord,
+    PlayerKey,
+    ProjectionRecord,
+    SourcePlayer,
+)
 from fantasy_helper.domain.users import User
 from fantasy_helper.identity.crosswalk import CrosswalkReport, Resolver, sync_players
 from fantasy_helper.observability.logs import get_logger
@@ -65,6 +70,8 @@ class LeagueResult:
     trades_without_players: int = 0  # ESPN hides other teams' proposals (M1 spike)
     rostered_sleeper: int = 0
     rostered_sleeper_linked: int = 0  # linked to an ESPN player
+    free_agents: int = 0  # Sleeper only: every active player not on a roster in the league
+    free_agents_linked: int = 0
 
 
 @dataclass
@@ -114,17 +121,18 @@ def run_ingest(
         except (EspnAccessError, SleeperLookupError, httpx.HTTPError) as exc:
             report.errors.append(f"{league.platform.value} league {league.name!r}: {exc}")
 
-    espn_players = espn.map_players(espn_players_raw) + [
+    athletes = store.keys("espn", "athletes")  # birth dates; optional (added 2026-11-06)
+    births = espn.map_birth_dates(json.loads(store.get(athletes[-1]))) if athletes else {}
+    espn_players = espn.map_players(espn_players_raw, births) + [
         p for f in fetched if f.league.platform is Platform.ESPN
-        for p in espn.map_roster_players(f.data["teams_rosters"])
+        for p in espn.map_roster_players(f.data["teams_rosters"], births)
     ]  # fmt: skip
     rostered_sleeper = {
         str(pid) for f in fetched if f.league.platform is Platform.SLEEPER
         for roster in f.data["rosters"] for pid in roster.get("players") or []
     }  # fmt: skip
-    report.crosswalk = sync_players(
-        session, espn_players, sleeper.map_players(sleeper_players_raw, include=rostered_sleeper)
-    )
+    sleeper_players = sleeper.map_players(sleeper_players_raw, include=rostered_sleeper)
+    report.crosswalk = sync_players(session, espn_players, sleeper_players)
     resolver = Resolver(session)
 
     schedule_raw = json.loads(store.get(latest["espn_schedule"]))
@@ -138,7 +146,7 @@ def run_ingest(
         result = (
             _store_espn(session, f, resolver, now, today)
             if f.league.platform is Platform.ESPN
-            else _store_sleeper(session, f, resolver, now, today, sleeper_week)
+            else _store_sleeper(session, f, resolver, now, today, sleeper_players)
         )
         report.leagues.append(result)
         if result.unresolved_players:
@@ -345,7 +353,12 @@ def _store_espn(
 
 
 def _store_sleeper(
-    session: Session, f: _Fetched, resolver: Resolver, now: datetime, today: date, week: int
+    session: Session,
+    f: _Fetched,
+    resolver: Resolver,
+    now: datetime,
+    today: date,
+    all_players: list[SourcePlayer],
 ) -> LeagueResult:
     result = LeagueResult(league=f.league)
     rules = sleeper.map_rules(f.data["league"])
@@ -361,6 +374,10 @@ def _store_sleeper(
         1 for pid in {e.player.external_id for e in entries}
         if resolver.linked_to_espn(PlayerKey(source=IdSource.SLEEPER, external_id=pid))
     )  # fmt: skip
+    rostered = {e.player.external_id for e in entries}
+    free_agents = [p for p in all_players if p.active and p.key.external_id not in rostered]
+    result.free_agents = len(free_agents)
+    result.free_agents_linked = sum(1 for p in free_agents if resolver.linked_to_espn(p.key))
     matchups = [
         m for wk, data in f.data["matchups"].items() for m in sleeper.map_matchups(int(wk), data)
     ]

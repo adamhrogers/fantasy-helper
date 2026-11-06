@@ -1,5 +1,5 @@
 from collections import Counter
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import pytest
 
@@ -155,3 +155,16 @@ class TestPublicPlayerData:
         players = mapper.map_roster_players(recorded("espn_points/teams_rosters.json"))
         assert len(players) == 155
         assert all(p.full_name for p in players)
+
+
+def test_birth_dates_from_the_athletes_list() -> None:
+    data = {"items": [
+        {"id": "4431679", "dateOfBirth": "1999-09-19T07:00Z"},
+        {"id": "1", "dateOfBirth": None},
+    ]}  # fmt: skip
+    assert mapper.map_birth_dates(data) == {"4431679": date(1999, 9, 19)}
+    players = mapper.map_players(
+        {"players": [{"player": {"id": 4431679, "fullName": "X Y", "proTeamId": 24}}]},
+        mapper.map_birth_dates(data),
+    )
+    assert players[0].birth_date == date(1999, 9, 19)

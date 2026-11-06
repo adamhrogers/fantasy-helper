@@ -64,6 +64,31 @@ def pro_schedule(client: httpx.Client, season: int) -> RawResponse:
     )
 
 
+ATHLETES = "https://sports.core.api.espn.com/v3/sports/basketball/nba/athletes"
+MIN_ATHLETES = 400
+
+
+def athletes(client: httpx.Client) -> RawResponse:
+    """ESPN's public sports API (not Fantasy): every NBA athlete with a date of birth, under the
+    same IDs ESPN Fantasy uses. Birth dates make identity matching trade-proof (ADR 0018)."""
+    return get_raw(
+        client,
+        source=SOURCE,
+        dataset="athletes",
+        url=ATHLETES,
+        params={"limit": "20000", "active": "true"},
+    )
+
+
+def validate_athletes(data: Any) -> str | None:
+    items = data.get("items") if isinstance(data, dict) else None
+    if not isinstance(items, list) or len(items) < MIN_ATHLETES:
+        return f"only {len(items) if isinstance(items, list) else 0} athletes"
+    if sum(1 for i in items if i.get("dateOfBirth")) < len(items) // 2:
+        return "most athletes have no date of birth"
+    return None
+
+
 def validate_season(data: Any) -> str | None:
     if not isinstance(data, dict) or "currentScoringPeriod" not in data:
         return "season info is missing currentScoringPeriod"
@@ -94,6 +119,8 @@ def validate_schedule(data: Any) -> str | None:
 
 
 def item_count(data: Any) -> int:
+    if isinstance(data, dict) and isinstance(data.get("items"), list):
+        return len(data["items"])
     if isinstance(data, dict) and isinstance(data.get("players"), list):
         return len(data["players"])
     if isinstance(data, dict) and isinstance(data.get("settings", {}).get("proTeams"), list):

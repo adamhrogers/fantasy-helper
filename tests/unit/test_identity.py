@@ -1,4 +1,5 @@
 import uuid
+from datetime import date
 
 import pytest
 
@@ -74,3 +75,52 @@ def test_a_claimed_player_is_not_linked_twice() -> None:
     )
     m = Matcher(CANDIDATES, [first], {}, claimed={A})
     assert m.match(duplicate) is None
+
+
+# ------------------------------------------------------------ birth dates: trade-proof links
+
+J1, J2 = uuid.uuid4(), uuid.uuid4()
+SHARED_NAME = [
+    Candidate(J1, "jalen williams", "OKC", date(2001, 4, 14)),
+    Candidate(J2, "jalen williams", "DEN", date(1999, 7, 19)),
+]
+
+
+def born(pid: str, name: str, team: str | None, birth: date | None) -> SourcePlayer:
+    return SourcePlayer(
+        key=PlayerKey(source=IdSource.SLEEPER, external_id=pid),
+        full_name=name,
+        nba_team=team,
+        birth_date=birth,
+    )
+
+
+def test_a_traded_player_with_a_common_name_links_by_birth_date() -> None:
+    # Sleeper already shows the new team; ESPN hasn't caught up. Name + team can't decide,
+    # and the name isn't unique, but the birth date does.
+    traded = born("1", "Jalen Williams", "MIA", date(2001, 4, 14))
+    m = Matcher(SHARED_NAME, [traded], {}, claimed=set())
+    assert m.match(traded) == (J1, "name_birthdate")
+
+
+def test_birth_dates_a_day_apart_still_match() -> None:
+    off_by_one = born("1", "Jalen Williams", None, date(2001, 4, 15))  # time-zone artifact
+    assert Matcher(SHARED_NAME, [off_by_one], {}, claimed=set()).match(off_by_one) == (
+        J1,
+        "name_birthdate",
+    )
+
+
+def test_a_wrong_birth_date_does_not_veto_an_unambiguous_match() -> None:
+    # One platform's data is wrong (Zach Edey's birth month differs by 2 on 2026-11-06).
+    edey = Candidate(A, "zach edey", "MEM", date(2002, 3, 14))
+    sleeper_edey = born("9", "Zach Edey", "MEM", date(2002, 5, 14))
+    assert Matcher([edey], [sleeper_edey], {}, claimed=set()).match(sleeper_edey) == (
+        A,
+        "name_team",
+    )
+
+
+def test_birth_date_beats_a_stale_team() -> None:
+    p = born("1", "Jalen Williams", "OKC", date(1999, 7, 19))  # the Denver Jalen, listed under OKC
+    assert Matcher(SHARED_NAME, [p], {}, claimed=set()).match(p) == (J2, "name_birthdate")

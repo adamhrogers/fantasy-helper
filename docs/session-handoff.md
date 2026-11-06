@@ -28,7 +28,7 @@ A fantasy basketball assistant for Adam (customer one), then a friends beta, the
 
 ### What runs today
 - **`fh snapshot`** runs on Adam's Mac through launchd: the morning set at **06:30** and the pre-tip evening set at **17:30** local time (America/New_York). It saves raw ESPN and Sleeper public data to `data/raw/` (git-ignored). History has accumulated since **2026-11-06**. Check it with `scripts/snapshot-schedule.sh status`; logs are in `~/Library/Logs/fantasy-helper/` (JSON lines). A sleeping Mac runs missed jobs on wake; a Mac that's shut down skips them, until M3 moves this to the cloud.
-- **`fh ingest`** is run by hand for now. It loads every not-yet-loaded snapshot plus fresh league data into Supabase, takes about 30 seconds, and is idempotent. First live run: 1,100 ESPN players; **142/142 Sleeper-rostered players linked to ESPN**; 1,200 games; 9 projection snapshots (8,490 rows); 226 injury changes; full rosters, matchups and transactions for all three leagues.
+- **`fh ingest`** is run by hand for now. It loads every not-yet-loaded snapshot plus fresh league data into Supabase, takes about 30 seconds, and is idempotent. First live run: 1,100 ESPN players; **all 1,852 active Sleeper players** (the Sleeper league has 142 rostered, all linked to ESPN, and **1,710 free agents**, 889 linked to ESPN and 410 with Sleeper projections); 1,200 games; 9 projection snapshots (8,490 rows); 226 injury changes; full rosters, matchups and transactions for all three leagues.
 - **Supabase dev project**, migrated to **0002**. There's no prod project yet (M3).
 - **LangSmith tracing** works (`fh doctor` sends a smoke trace). **ntfy ops alerts** reach Adam's phone. iPhone notifications needed a settings fix, which is done.
 - **GitHub:** `adamhrogers/fantasy-helper`, public. CI runs lint, mypy, contracts, tests on Postgres 17, `alembic check`, and a gitleaks full-history scan. Adam was asked to run `gh secret set LANGSMITH_API_KEY` so CI sends a smoke trace; **unconfirmed**, and the step is skipped (not failed) without it.
@@ -64,7 +64,7 @@ Layers, enforced by import-linter in CI: `cli` → `api | mcp_server` → `pipel
 |---|---|
 | `domain/` | Frozen Pydantic models, UTC-only (`UtcDatetime`). `league.py`: `LeagueRules` (hashed), `ScoringRules` with `bonuses`, ratio `CategoryRule`s (FG%), named `RosterSlot`s (`SLOT_POSITIONS`), `AcquisitionLimits.per_matchup_per_day`. `records.py`: **platform records keyed by each platform's own IDs** (`PlayerKey`, `SourcePlayer`, `RosterEntryRecord`, `MatchupRecord`, `TransactionRecord`, `ProjectionRecord`, `InjuryRecord`, `ScheduledGameRecord`, `RulesRecord`). Also recommendations (tip-off guard), takes, trades, evaluations (timeline points), reports (`ReportDocument`), runs, ports. |
 | `adapters/` | `_http.py`: `get_raw` with retries, `secret_headers` (sent, never recorded) and list-valued params. `espn/public.py` (no login), `espn/league.py` (cookies), `espn/mapper.py`; the same three for `sleeper/`. `redaction.py`: the fixture redactor and leak checker. **Mappers are pure functions.** |
-| `identity/` | `names.py` (normalization), `matching.py` (pure matcher), `crosswalk.py` (`sync_players`, `Resolver`), `overrides.py` (manual Sleeper → ESPN links; empty so far). |
+| `identity/` | `names.py` (normalization), `matching.py` (pure matcher: override → **name + birth date ±1 day (trade-proof)** → name + team → unique name; birth dates are evidence, never a veto), `crosswalk.py` (`sync_players`, `Resolver`; links are stored by platform IDs, so trades never break them; teams refresh every run), `overrides.py` (manual Sleeper → ESPN links; empty so far). ADR 0018. |
 | `storage/` | SQLAlchemy 2.1, Alembic `0001` + `0002`, `crypto.py` (AES-GCM bound to the owner), `raw_store.py` (append-only), repositories: users, leagues, credentials, players, league_data, nba, runs. |
 | `pipeline/` | `snapshot.py`, `onboarding.py` (`fh league add`), `fixtures.py` (`fh fixtures record`), `ingest.py`. |
 | `observability/` | `logs.py` (structlog with secret redaction), `tracing.py` (LangSmith), `alerts.py` (ntfy). |
@@ -104,7 +104,8 @@ Full write-up: `docs/spikes/m1-data-sources.md`.
 - Transaction IDs are UUIDs (the redactor pseudonymizes them consistently). Add limits are a per-day rate when `matchupLimitPerScoringPeriod` is set.
 
 **Sleeper** (official `/v1` plus undocumented `api.sleeper.com/projections`):
-- `/v1/state/nba` (season "2026", week). `/v1/players/nba`: **at most once a day** (Sleeper's request). **`espn_id`/`yahoo_id` are empty for every NBA player.**
+- `/v1/state/nba` (season "2026", week). `/v1/players/nba`: **at most once a day** (Sleeper's request). **`espn_id`/`yahoo_id` are empty for every NBA player**, but `birth_date` is filled for 1,841 of 1,852 active players.
+- **ESPN birth dates** come from ESPN's public sports API, not Fantasy: `https://sports.core.api.espn.com/v3/sports/basketball/nba/athletes?limit=20000&active=true` (757 athletes, 749 with `dateOfBirth`; same IDs as ESPN Fantasy; it covers every projected and every rostered ESPN player). It's the `espn/athletes` morning snapshot.
 - Projections are **RotoWire's**:
   - `projections/nba/2026` holds season **per-game averages** (`gp: 1`)
   - `projections/nba/2026/{week}` holds **one row per game** with a date; an **empty `stats` row means not expected to play** (kept as 0 games)
@@ -162,7 +163,7 @@ FastAPI on Google Cloud Run; Supabase **prod** project and Supabase Auth (magic 
 ### Open items
 - **Q6:** how fast projections react to injuries. Analyze `projection_rows` against `injury_observations` once a week or so of snapshots exists.
 - Beta friends and leagues (needed by M7). The RatBall note goes out only if RatBall data is used.
-- The 821 unmatched Sleeper players are all non-rostered. Overrides stay empty until ingest warns about a rostered one.
+- The 821 unmatched Sleeper players are all non-rostered and **aren't in ESPN Fantasy's player pool**, so there's nothing to link them to. Overrides stay empty until ingest warns about a rostered one. Ingest reports linked pairs with conflicting birth dates (2 known data errors: Gortman, Edey); that's informational.
 - ESPN activity-feed trades: P9. Categories-league logic: P8.
 - Confirm Adam set the `LANGSMITH_API_KEY` GitHub secret.
 

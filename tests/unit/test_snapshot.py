@@ -33,6 +33,9 @@ HEALTHY: dict[str, object] = {
     "espn.season": {"currentScoringPeriod": {"id": 18}},
     "espn.players_projections": espn_players(400),
     "espn.pro_schedule": {"settings": {"proTeams": [{"id": i} for i in range(30)]}},
+    "espn.athletes": {
+        "items": [{"id": str(i), "dateOfBirth": "2000-01-01T08:00Z"} for i in range(500)]
+    },
 }
 
 
@@ -46,6 +49,8 @@ def route(request: httpx.Request) -> str:
         return "sleeper.projections_week"
     if re.search(r"projections/nba/\d{4}\?", url):
         return "sleeper.projections_season"
+    if "sports.core.api.espn.com" in url:
+        return "espn.athletes"
     if "leaguedefaults" in url:
         return "espn.players_projections"
     if "proTeamSchedules_wl" in url:

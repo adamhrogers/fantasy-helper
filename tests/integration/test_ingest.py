@@ -39,6 +39,7 @@ NOW = datetime(2026, 11, 6, 17, 0, tzinfo=UTC)
 SNAPSHOT_AT = datetime(2026, 11, 6, 11, 30, tzinfo=UTC)
 ESPN_LEAGUES = {"111": "espn_points", "222": "espn_categories"}
 SLEEPER_LEAGUE = "333"
+FREE_AGENT = "990001"
 
 
 class FixedClock:
@@ -71,10 +72,18 @@ def seed_snapshots(root: Path) -> LocalRawStore:
         ),
     }
     for (source, dataset), (path, url) in public.items():
+        body = (RECORDED / path).read_bytes()
+        if dataset == "players":  # the recorded subset is all rostered: add one free agent
+            players = json.loads(body)
+            players[FREE_AGENT] = {
+                "player_id": FREE_AGENT, "full_name": "Test Free Agent", "team": "SAS",
+                "position": "SG", "fantasy_positions": ["SG"], "active": True,
+                "birth_date": "2004-01-02",
+            }  # fmt: skip
+            body = json.dumps(players).encode()
         store.put(
-            source=source, dataset=dataset, fetched_at=SNAPSHOT_AT,
-            body=(RECORDED / path).read_bytes(), meta={"url": url},
-        )  # fmt: skip
+            source=source, dataset=dataset, fetched_at=SNAPSHOT_AT, body=body, meta={"url": url}
+        )
     return store
 
 
@@ -161,6 +170,13 @@ def test_ingest_loads_everything_and_is_idempotent(session: Session, tmp_path: P
         lg.unresolved_players == 0 for lg in report.leagues
     )  # every rostered player resolves
     assert sleeper.matchups == 15
+    raw_players = json.loads((RECORDED / "sleeper_public/players.json").read_text())
+    rostered = {str(p) for r in json.loads((RECORDED / "sleeper_points/rosters.json").read_text())
+                for p in r.get("players") or []}  # fmt: skip
+    expected_free = 1 + sum(
+        1 for pid, p in raw_players.items() if p.get("active") and pid not in rostered
+    )
+    assert sleeper.free_agents == expected_free  # every active player not on a roster
     assert sleeper.rostered_sleeper > 100
     assert sleeper.rostered_sleeper_linked / sleeper.rostered_sleeper > 0.8
     assert report.games > 0

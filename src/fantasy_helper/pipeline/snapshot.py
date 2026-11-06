@@ -96,6 +96,10 @@ DATASETS: tuple[Dataset, ...] = (
         espn.validate_schedule, espn.item_count,
     ),
     Dataset(
+        "espn", "athletes", MORNING_ONLY,
+        lambda c, _: espn.athletes(c), espn.validate_athletes, espn.item_count,
+    ),
+    Dataset(
         "sleeper", "players", MORNING_ONLY,
         lambda c, _: sleeper.players(c), sleeper.validate_players, sleeper.item_count,
     ),
