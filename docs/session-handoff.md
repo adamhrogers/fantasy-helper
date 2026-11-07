@@ -241,6 +241,16 @@ Approved by Adam on 2026-11-06, in five parts, each a checkpoint he approves:
 
 **Done when:** a scheduled run, with the laptop closed, pushes the daily report (lock-or-pass cards) and the weekly overview to his phone, and they open after sign-in; a deliberately broken run produces an ops alert; a backup restores into a scratch database.
 
+### Dependency updates (ADR 0024)
+Dependabot opens grouped PRs (security fixes as they land; version updates Mondays 07:00 Eastern, 7-day cooldown, no Python majors), and `dependabot-auto-merge.yml` merges each one once CI passes. It refuses until `main` has the ruleset that requires both CI jobs ([runbooks/dependency-updates.md](runbooks/dependency-updates.md)). **To check after the merge:** Dependabot's first PRs open, pass CI and merge; the first security PR's job log shows the major-version `ignore` doesn't apply to security updates.
+
+### Tabled from the PR #4 review (2026-11-07)
+- **4, shared crash guard:** `alert_crash` and `REPORTED_EXIT` exist and the snapshot uses them. `fh ingest`, `fh run daily` and `fh run weekly` adopt them in **M3 part 2**, when they get workflows.
+- **8 and 9, a reused once-a-day result** hides a flagged payload and drops freshness. Revisit in **part 5**, with the stale-source check.
+- **6, R2's `BadDigest` is treated as permanent.** Revisit if one shows up in the run log, or with other R2 hardening in part 5.
+- **7, a 409 `ConditionalRequestConflict` reads as "already exists".** Each key has one writer; revisit if two writers can ever target the same key.
+- **10 and 12, `fh raw upload` efficiency** (re-HEADs listed objects; orphans checked against a list). Fold into the next change to `raw_upload.py`.
+
 ### Open items
 - **Q6:** how fast projections react to injuries. Analyze `projection_rows` against `injury_observations` once a week or so of snapshots exists.
 - Beta friends and leagues (needed by M7). The RatBall note goes out only if RatBall data is used.

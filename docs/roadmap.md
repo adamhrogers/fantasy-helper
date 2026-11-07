@@ -237,7 +237,7 @@ Yahoo adapter (OAuth, which also solves sign-up for Yahoo users), self-serve ESP
 - before anyone pays (P12);
 - if strangers start forking or starring the repo.
 
-Users' league data never lives in the repo, so the friends beta doesn't force it. When it happens: budget GitHub Pro ($4 a month), check the `prod` branch rule and the `main` ruleset survived, and watch Actions minutes (2,000 a month free).
+Users' league data never lives in the repo, so the friends beta doesn't force it. When it happens: budget GitHub Pro ($4 a month), check the `prod` branch rule and the `main` ruleset survived (without the ruleset, Dependabot's PRs stop merging themselves and wait for a person, ADR 0024), and watch Actions minutes (2,000 a month free).
 
 ## Critical path and the levers if it slips
 
