@@ -242,7 +242,7 @@ Approved by Adam on 2026-11-06, in five parts, each a checkpoint he approves:
 **Done when:** a scheduled run, with the laptop closed, pushes the daily report (lock-or-pass cards) and the weekly overview to his phone, and they open after sign-in; a deliberately broken run produces an ops alert; a backup restores into a scratch database.
 
 ### Dependency updates (ADR 0024)
-Dependabot opens grouped PRs (security fixes as they land; version updates Mondays 07:00 Eastern, 7-day cooldown, no Python majors), and `dependabot-auto-merge.yml` merges each one once CI passes. It refuses until `main` has the ruleset that requires both CI jobs ([runbooks/dependency-updates.md](runbooks/dependency-updates.md)). **To check after the merge:** Dependabot's first PRs open, pass CI and merge; the first security PR's job log shows the major-version `ignore` doesn't apply to security updates.
+Dependabot opens grouped PRs (security fixes as they land; version updates Mondays 07:00 Eastern, 7-day cooldown, no Python majors), and `dependabot-auto-merge.yml` merges each one once CI passes. It refuses unless `main`'s ruleset requires both CI jobs ([runbooks/dependency-updates.md](runbooks/dependency-updates.md)); the ruleset `main` was created on 2026-11-07, with an admin bypass. **To check after the merge:** Dependabot's first PRs open, pass CI and merge; the first security PR's job log shows the major-version `ignore` doesn't apply to security updates.
 
 ### Tabled from the PR #4 review (2026-11-07)
 - **4, shared crash guard:** `alert_crash` and `REPORTED_EXIT` exist and the snapshot uses them. `fh ingest`, `fh run daily` and `fh run weekly` adopt them in **M3 part 2**, when they get workflows.

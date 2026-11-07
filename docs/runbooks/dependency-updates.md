@@ -1,6 +1,6 @@
 # Dependency updates (Dependabot)
 
-**Written:** 2026-11-07. **Design:** ADR 0024. **Your part:** a one-time ruleset, then nothing routine.
+**Written:** 2026-11-07. **Design:** ADR 0024. **Your part:** nothing routine. The one-time ruleset below was created on 2026-11-07.
 
 ## What happens on its own
 
