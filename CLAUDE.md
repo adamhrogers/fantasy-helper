@@ -31,6 +31,7 @@ scripts/snapshot-schedule.sh status       # snapshot schedule state and logs
 6. **Keep the Claude API key out of the shell used to run Claude Code.** The app reads `FH_ANTHROPIC_API_KEY` from `.env` and never `ANTHROPIC_API_KEY`.
 7. **One ADR per architecture choice** in `docs/decisions/`: what, why, what was rejected.
 8. **Daily snapshots are never skipped or rewritten.** A missed day can't be recovered (ADR 0014).
+9. **One box score per player and game, for every league** (ADR 0022). Leagues differ only in their rules, read from each league's own settings. Never assume scoring from a platform, and never score from platform-reported points (those are only checks).
 
 ## Architecture contracts (enforced by `lint-imports`)
 
@@ -48,7 +49,7 @@ scripts/snapshot-schedule.sh status       # snapshot schedule state and logs
 - **Migrations** are numbered by hand (`--rev-id 0002`). CI runs `alembic check`, so models and migrations can't drift.
 - **Structured LLM output** always uses `method="json_schema"`, never forced tool calls (ADR 0015).
 - **Logging** uses `observability.logs.get_logger`, never `print`. Keys that name a secret are redacted automatically.
-- **Ops alerts** go through `observability.alerts` and never contain secrets or league data.
+- **Run events** (ops notifications to the phone) go through `observability.events.RunEvents`: started → steps → succeeded | warned | failed ([docs/runbooks/run-events.md](docs/runbooks/run-events.md)). They're about runs only, never secrets or league data. Anything the user acts on is product push from the phone app.
 - **Tests** never read the real `.env` (an autouse fixture isolates them). DB tests only run against a database whose name contains `test`.
 - **Dates in docs** are absolute (2026-11-02), never relative.
 - **Adapters** return platform records keyed by the platform's own player IDs (`domain.records`); only ingest resolves them to canonical players through `identity`.

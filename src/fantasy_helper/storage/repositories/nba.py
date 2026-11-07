@@ -1,21 +1,36 @@
-"""League-independent NBA data: the schedule, projection snapshots and injury status changes."""
+"""League-independent NBA data: the schedule, box scores, projection snapshots and injury
+status changes."""
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID
 
 from sqlalchemy import func, insert, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from fantasy_helper.domain.calendar import nba_game_date
 from fantasy_helper.domain.projections import InjuryStatus, ProjectionScope, Provider
-from fantasy_helper.domain.records import InjuryRecord, ProjectionRecord, ScheduledGameRecord
+from fantasy_helper.domain.records import (
+    GameLogRecord,
+    InjuryRecord,
+    ProjectionRecord,
+    ScheduledGameRecord,
+)
 from fantasy_helper.storage.tables import (
+    STAT_COLUMNS,
     InjuryObservationRow,
     NbaGameRow,
+    PlayerGameStatRow,
     ProjectionSnapshotRow,
     ProjectionValueRow,
+    stat_values,
 )
+
+_NO_STATS = dict.fromkeys(STAT_COLUMNS.values())
+# A multi-row INSERT binds every value as a parameter, and Postgres allows 65,535 per statement.
+# Box score rows have 26 columns, so 1,000 rows (26,000 parameters) per statement.
+GAME_LOG_CHUNK = 1000
 
 
 def upsert_games(session: Session, season: int, games: list[ScheduledGameRecord]) -> int:
@@ -41,6 +56,42 @@ def upsert_games(session: Session, season: int, games: list[ScheduledGameRecord]
         )
     )
     return len(games)
+
+
+def game_index(session: Session, season: int) -> dict[str, tuple[UUID, date]]:
+    """ESPN game ID -> (our game ID, the game's date in Eastern time), for one season."""
+    rows = session.execute(
+        select(NbaGameRow.espn_game_id, NbaGameRow.id, NbaGameRow.tip_utc).where(
+            NbaGameRow.season == season
+        )
+    )
+    return {espn_id: (game_id, nba_game_date(tip)) for espn_id, game_id, tip in rows}
+
+
+def upsert_game_logs(session: Session, rows: list[tuple[GameLogRecord, UUID, UUID, date]]) -> int:
+    """Box score rows as (record, player ID, game ID, game date). Re-loading a game overwrites
+    it, so a later stat correction wins."""
+    if not rows:
+        return 0
+    values = {
+        (player_id, game_id): {
+            "player_id": player_id, "game_id": game_id, "season": r.season,
+            "game_date": game_date, "scoring_period": r.scoring_period, "team": r.team,
+            "played": r.played,
+        } | _NO_STATS | stat_values(r.stats)
+        for r, player_id, game_id, game_date in rows
+    }  # fmt: skip
+    updated = ["season", "game_date", "scoring_period", "team", "played", *STAT_COLUMNS.values()]
+    batch = list(values.values())
+    for start in range(0, len(batch), GAME_LOG_CHUNK):
+        stmt = pg_insert(PlayerGameStatRow).values(batch[start : start + GAME_LOG_CHUNK])
+        session.execute(
+            stmt.on_conflict_do_update(
+                index_elements=["player_id", "game_id"],
+                set_={col: stmt.excluded[col] for col in updated} | {"updated_at": func.now()},
+            )
+        )
+    return len(values)
 
 
 def snapshot_loaded(session: Session, raw_key: str) -> bool:
@@ -80,7 +131,7 @@ def load_projections(
             insert(ProjectionValueRow),
             [
                 {"snapshot_id": snapshot_id, "player_id": player_id, "game_date": r.game_date,
-                 "games": r.games, "per_game": {k.value: v for k, v in r.per_game.items()}}
+                 "games": r.games} | _NO_STATS | stat_values(r.per_game)
                 for r, player_id in unique.values()
             ],
         )  # fmt: skip

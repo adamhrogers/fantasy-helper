@@ -137,7 +137,7 @@ All of these live in one Python package, `src/fantasy_helper/`, with strict inte
 |---|---|
 | Identity and tenancy | `users`, `platform_credentials` (one per user and platform, **encrypted**), `push_subscriptions` |
 | League | `leagues` (platform, format: points / categories / lock-in), `league_settings_versions`, `teams`, `roster_snapshots`, `transactions`, `matchups` |
-| NBA | `players` (canonical), `player_external_ids`, `nba_games` (schedule, tip times), `player_game_stats` (box scores) |
+| NBA | `players` (canonical), `player_external_ids`, `nba_games` (schedule, tip times), `player_game_stats` (box scores: **the one source of truth for every league**, ADR 0022) |
 | Inputs | `projection_snapshots`, `projection_rows`, `news_items` |
 | Judgment | `watchlist_entries`, `takes` (player, claim text, **direction**, conviction 1–5, horizon, created_at) |
 | Brain | `runs` (the run log), `fact_sheets`, `league_player_values` (read model, §5.4), `agent_setups`, `reports` |
@@ -193,7 +193,7 @@ There are two kinds of reads, and they're stored differently:
 
 | Component | Approach (v1) | Feeds |
 |---|---|---|
-| `scoring` | Per-stat projection × league weights from `league_settings_versions` | Everything downstream |
+| `scoring` | One shared box score (or a per-stat projection) × the league's own weights and bonuses from `league_settings_versions`. Every league reads the same box scores; only the rules differ (ADR 0022). | Everything downstream |
 | `valuation` | Replacement level = best free agent at the same slot in *this* league. League-relative z-scores for categories. | Streaming, signals, categories |
 | `schedule` | Games per week, plus **startable** games under roster slots and lineup locks | Weekly overview, streaming |
 | `distributions` | Per-player, per-game mean and variance in league scoring, from game logs (shrunk toward the projection) | Lock-in, win probability |
@@ -302,7 +302,7 @@ expected value on day d  =  realized so far       (actual box scores, in league 
 - **App API, a gap in the spec:** Cloudflare Pages serves static files, but the PWA has to write takes, feedback and push subscriptions, and friends need auth. **Recommendation:** FastAPI on **Google Cloud Run** (free tier, scales to zero, cold start of a second or two). It's the same vendor the spec already names as the fallback for the nightly job, so one container image serves both the API and the jobs.
 - **Auth:** **Supabase Auth from M3**, the first milestone with a phone app. Sign-in is by magic link and invite-only, and the API verifies the JWT. Adam is user one, and friends join by invite at the beta, so there's no temporary auth to replace later. The PWA never talks to the database directly, which keeps the API as the single enforcement point.
 - **Timeline graphs:** take, call and trade detail pages chart their `evaluation_points` (§8.1) with Recharts. The horizon is shaded, events are marked, and the final grade sits at the window's end.
-- **Ops alerts:** run failed, stale source, ESPN cookies expired, late report (at 7:45 if it hasn't shipped). These go to Adam through **ntfy.sh** on a private, randomly named topic, independent of product push, so a broken PWA can't hide its own outage. Alerts never contain secrets or league data.
+- **Run events (ops):** every run reports started, its steps, and how it ended (quiet when it went well, loud when it failed), plus stale sources, expired ESPN cookies and a late report (at 7:45 if it hasn't shipped). They go to Adam through **ntfy.sh** on a private, randomly named topic, independent of product push, so a broken PWA can't hide its own outage. They're about runs only; "report ready" and lock reminders are product push. They never contain secrets or league data. See [runbooks/run-events.md](runbooks/run-events.md).
 
 ---
 

@@ -16,15 +16,19 @@ from sqlalchemy.orm import Session
 
 from fantasy_helper.adapters import _http
 from fantasy_helper.domain.league import League, Platform
+from fantasy_helper.domain.ports import Alert, AlertPriority
+from fantasy_helper.domain.runs import FailureKind, RunKind
 from fantasy_helper.domain.users import EspnCredentials, Role, User
-from fantasy_helper.pipeline.ingest import run_ingest
+from fantasy_helper.observability.events import RunEvents
+from fantasy_helper.pipeline.ingest import phone_summary, run_ingest
 from fantasy_helper.storage import crypto
 from fantasy_helper.storage.raw_store import LocalRawStore
-from fantasy_helper.storage.repositories import credentials, leagues, users
+from fantasy_helper.storage.repositories import credentials, leagues, nba, users
 from fantasy_helper.storage.tables import (
     InjuryObservationRow,
     LeagueSettingsVersionRow,
     NbaGameRow,
+    PlayerGameStatRow,
     PlayerRow,
     ProjectionValueRow,
     RosterEntryRow,
@@ -40,6 +44,14 @@ SNAPSHOT_AT = datetime(2026, 11, 6, 11, 30, tzinfo=UTC)
 ESPN_LEAGUES = {"111": "espn_points", "222": "espn_categories"}
 SLEEPER_LEAGUE = "333"
 FREE_AGENT = "990001"
+
+
+class RecordingNotifier:
+    def __init__(self) -> None:
+        self.alerts: list[Alert] = []
+
+    def send(self, alert: Alert) -> None:
+        self.alerts.append(alert)
 
 
 class FixedClock:
@@ -63,6 +75,7 @@ def seed_snapshots(root: Path) -> LocalRawStore:
     store = LocalRawStore(root)
     public = {
         ("espn", "players_projections"): ("espn_public/players_projections.json", ""),
+        ("espn", "game_logs"): ("espn_public/game_logs.json", ""),
         ("espn", "pro_schedule"): ("espn_public/pro_schedule.json", ""),
         ("sleeper", "players"): ("sleeper_public/players.json", ""),
         ("sleeper", "state"): ("sleeper_public/state.json", ""),
@@ -151,12 +164,33 @@ def count(session: Session, column: Any) -> int:
     return int(session.scalar(select(func.count(column))) or 0)
 
 
-def test_ingest_loads_everything_and_is_idempotent(session: Session, tmp_path: Path) -> None:
+def test_ingest_loads_everything_and_is_idempotent(
+    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Small batches, so the recorded box scores span several INSERT statements: the live
+    # backfill (6,935 rows) once exceeded Postgres's 65,535-parameter limit in one statement.
+    monkeypatch.setattr(nba, "GAME_LOG_CHUNK", 7)
     owner = setup_owner(session)
     store = seed_snapshots(tmp_path / "raw")
     client = _http.make_client(transport=httpx.MockTransport(serve_fixtures))
 
-    report = run_ingest(session, client, store=store, user=owner, key=KEY, clock=FixedClock())
+    phone = RecordingNotifier()
+    events = RunEvents(RunKind.INGEST, phone, label="Ingest")
+    report = run_ingest(
+        session, client, store=store, user=owner, key=KEY, clock=FixedClock(), events=events
+    )
+    assert [a.title for a in phone.alerts] == [
+        "Ingest: League data fetched", "Ingest: Public data loaded", "Ingest: Leagues stored",
+    ]  # fmt: skip
+    assert {a.priority for a in phone.alerts} == {AlertPriority.LOW}
+    names = [lg.name for lg in leagues.list_for_user(session, owner.id)]
+    assert names
+    assert not any(name in a.message for a in phone.alerts for name in names)
+    detail, problems = phone_summary(report, attempts=1)
+    assert detail.startswith("Leagues: 3 of 3 loaded.")
+    # ("Sleeper" is both this test league's name and a platform, so it's left out of the check.)
+    private = [n for n in names if n != "Sleeper"]
+    assert not any(name in detail + " ".join(problems) for name in private)
 
     assert report.errors == []
     by_name = {lg.league.name: lg for lg in report.leagues}
@@ -183,6 +217,13 @@ def test_ingest_loads_everything_and_is_idempotent(session: Session, tmp_path: P
     assert report.projection_snapshots == 2
     assert report.projection_rows > 0
     assert report.injury_changes > 0
+    # The recorded schedule keeps 6 of 30 teams, so only those teams' games have box scores.
+    assert report.game_log_payloads == 1
+    assert report.game_log_rows > 20
+    assert report.game_logs_unresolved == 0
+    assert report.game_logs_unknown_game > 0
+    assert count(session, PlayerGameStatRow.player_id) == report.game_log_rows
+    assert report.database_bytes > 0
 
     players = count(session, PlayerRow.id)
     rows = (
@@ -196,6 +237,7 @@ def test_ingest_loads_everything_and_is_idempotent(session: Session, tmp_path: P
     assert again.crosswalk.created == 0
     assert not again.crosswalk.linked
     assert (again.projection_snapshots, again.projection_rows, again.injury_changes) == (0, 0, 0)
+    assert (again.game_log_payloads, again.game_log_rows) == (0, 0)
     assert not any(lg.new_settings for lg in again.leagues)
     assert count(session, PlayerRow.id) == players
     assert (
@@ -203,3 +245,24 @@ def test_ingest_loads_everything_and_is_idempotent(session: Session, tmp_path: P
         count(session, ProjectionValueRow.id), count(session, InjuryObservationRow.id),
         count(session, LeagueSettingsVersionRow.id), count(session, NbaGameRow.id),
     ) == rows  # fmt: skip
+
+
+def test_one_league_failing_never_stops_the_others(session: Session, tmp_path: Path) -> None:
+    owner = setup_owner(session)
+    store = seed_snapshots(tmp_path / "raw")
+
+    def categories_league_down(request: httpx.Request) -> httpx.Response:
+        if "/leagues/222" in str(request.url):
+            return httpx.Response(503)
+        return serve_fixtures(request)
+
+    client = _http.make_client(transport=httpx.MockTransport(categories_league_down))
+    report = run_ingest(session, client, store=store, user=owner, key=KEY, clock=FixedClock())
+    by_name = {lg.league.name: lg for lg in report.leagues}
+    assert by_name["Categories"].failure is FailureKind.SERVER_ERROR  # retryable
+    assert by_name["Points"].failure is None
+    assert by_name["Sleeper"].failure is None
+    assert by_name["Points"].roster_entries == 155
+    detail, problems = phone_summary(report, attempts=3)
+    assert detail.startswith("Leagues: 2 of 3 loaded.")
+    assert problems[0] == "1 ESPN league failed: the source's servers erred, after 3 attempts"

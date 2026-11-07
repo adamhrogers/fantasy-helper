@@ -28,6 +28,10 @@ _SCORING_TYPES = {
 class EspnAccessError(Exception):
     """ESPN refused the request: the cookies are wrong or expired, or the league doesn't exist."""
 
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
 
 @dataclass(frozen=True)
 class EspnLeagueSummary:
@@ -75,13 +79,16 @@ def _league_get(
         secret_headers=cookie_header(credentials),
     )
     if response.status_code in (401, 403):
-        raise EspnAccessError("ESPN refused the cookies (wrong, expired, or not in this league)")
+        raise EspnAccessError(
+            "ESPN refused the cookies (wrong, expired, or not in this league)",
+            response.status_code,
+        )
     if response.status_code == 404:
         raise EspnAccessError(
-            f"no ESPN league {league_id} for the {season - 1}-{season % 100} season"
+            f"no ESPN league {league_id} for the {season - 1}-{season % 100} season", 404
         )
     if not response.ok:
-        raise EspnAccessError(f"ESPN returned HTTP {response.status_code}")
+        raise EspnAccessError(f"ESPN returned HTTP {response.status_code}", response.status_code)
     return response
 
 

@@ -25,6 +25,56 @@ class RunStatus(StrEnum):
     FAILED = "failed"
 
 
+class FailureKind(StrEnum):
+    """Why one part of a run (a dataset, a league) failed, and whether trying again can help.
+
+    Retrying helps when the cause can clear up in minutes: the network, a source's servers, a
+    rate limit, a garbled response, an unreachable database. It can't help when someone has to
+    act (expired cookies, a league that's gone) or the code has to change (a new data format, a
+    bug): those fail at once instead of retrying.
+    """
+
+    NETWORK = "network"
+    SERVER_ERROR = "server_error"
+    RATE_LIMITED = "rate_limited"
+    BAD_RESPONSE = "bad_response"
+    MISSING_INPUT = "missing_input"
+    DATABASE = "database"
+    AUTH = "auth"
+    NOT_FOUND = "not_found"
+    FORMAT_CHANGED = "format_changed"
+    STORAGE = "storage"
+    BUG = "bug"
+
+    @property
+    def retryable(self) -> bool:
+        return self in _RETRYABLE
+
+    @property
+    def describe(self) -> str:
+        """Plain words for the phone: no league data, no exception text."""
+        return _DESCRIPTIONS[self]
+
+
+_RETRYABLE = frozenset({
+    FailureKind.NETWORK, FailureKind.SERVER_ERROR, FailureKind.RATE_LIMITED,
+    FailureKind.BAD_RESPONSE, FailureKind.MISSING_INPUT, FailureKind.DATABASE,
+})  # fmt: skip
+_DESCRIPTIONS = {
+    FailureKind.NETWORK: "couldn't connect",
+    FailureKind.SERVER_ERROR: "the source's servers erred",
+    FailureKind.RATE_LIMITED: "rate-limited by the source",
+    FailureKind.BAD_RESPONSE: "an unexpected response",
+    FailureKind.MISSING_INPUT: "an earlier request it depends on failed",
+    FailureKind.DATABASE: "the database was unreachable",
+    FailureKind.AUTH: "access denied (expired cookies? re-run fh league add)",
+    FailureKind.NOT_FOUND: "not found (league or endpoint gone)",
+    FailureKind.FORMAT_CHANGED: "the platform changed its data format (needs a code fix)",
+    FailureKind.STORAGE: "couldn't save the file",
+    FailureKind.BUG: "a bug in our code",
+}
+
+
 class SourceFreshness(DomainModel):
     source: str
     pulled_at: UtcDatetime

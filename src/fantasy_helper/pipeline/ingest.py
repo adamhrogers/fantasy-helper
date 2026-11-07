@@ -1,6 +1,7 @@
-"""`fh ingest`: load every league and the public NBA data into the database (M1).
+"""`fh ingest`: load every league and the public NBA data into the database (M1, M2).
 
-Public data (projections, injury statuses, the schedule, Sleeper's player list) comes from the
+Public data (projections, injury statuses, box scores, the schedule, Sleeper's player list) comes
+from the
 daily snapshots already in the raw store: every snapshot not yet loaded, oldest first, so the
 history since snapshots began lands in order. League data is fetched fresh, and each response
 is stored raw before it's mapped. Running ingest twice changes nothing the second time.
@@ -8,6 +9,7 @@ is stored raw before it's mapped. Running ingest twice changes nothing the secon
 
 import json
 import re
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -23,7 +25,6 @@ from fantasy_helper.adapters.espn import mapper as espn
 from fantasy_helper.adapters.espn.league import EspnAccessError
 from fantasy_helper.adapters.sleeper import league as sleeper_league
 from fantasy_helper.adapters.sleeper import mapper as sleeper
-from fantasy_helper.adapters.sleeper.league import SleeperLookupError
 from fantasy_helper.domain.calendar import season_end_year
 from fantasy_helper.domain.league import League, Platform
 from fantasy_helper.domain.player import IdSource
@@ -35,11 +36,14 @@ from fantasy_helper.domain.records import (
     ProjectionRecord,
     SourcePlayer,
 )
+from fantasy_helper.domain.runs import FailureKind
 from fantasy_helper.domain.users import User
 from fantasy_helper.identity.crosswalk import CrosswalkReport, Resolver, sync_players
+from fantasy_helper.observability.events import RunEvents
 from fantasy_helper.observability.logs import get_logger
+from fantasy_helper.pipeline.retry import classify_exception, outcome
 from fantasy_helper.storage.raw_store import RawStore
-from fantasy_helper.storage.repositories import credentials, leagues, nba
+from fantasy_helper.storage.repositories import credentials, database, leagues, nba, raw_loads
 from fantasy_helper.storage.repositories import league_data as store_league
 
 log = get_logger(__name__)
@@ -52,13 +56,24 @@ PUBLIC = {
 }
 
 
+GAME_LOGS = ("espn", "game_logs")
+# Supabase Free counts 500 MB of database size. Warn well before it (ADR 0021).
+MB = 1024 * 1024
+DATABASE_QUOTA_BYTES = 500 * MB
+DATABASE_WARN_AT = (0.6, 0.8)
+
+
 class MissingSnapshotError(Exception):
     pass
+
+
+PLATFORM_NAMES = {Platform.ESPN: "ESPN", Platform.SLEEPER: "Sleeper", Platform.YAHOO: "Yahoo"}
 
 
 @dataclass
 class LeagueResult:
     league: League
+    failure: FailureKind | None = None  # set when this league couldn't be fetched or stored
     settings_version: int = 0
     new_settings: bool = False
     unmapped_scoring: tuple[str, ...] = ()
@@ -81,7 +96,12 @@ class IngestReport:
     projection_snapshots: int = 0
     projection_rows: int = 0
     injury_changes: int = 0
-    leagues: list[LeagueResult] = field(default_factory=list)
+    game_log_payloads: int = 0
+    game_log_rows: int = 0
+    game_logs_unresolved: int = 0  # player not in the crosswalk
+    game_logs_unknown_game: int = 0  # game not in the schedule
+    database_bytes: int = 0
+    leagues: list[LeagueResult] = field(default_factory=list)  # every league, loaded or failed
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -100,7 +120,9 @@ def run_ingest(
     user: User,
     key: bytes,
     clock: Clock | None = None,
+    events: RunEvents | None = None,
 ) -> IngestReport:
+    """Load everything. `events` gets one quiet step event per stage (counts only)."""
     clock = clock or SystemClock()
     now = clock.now()
     today = now.astimezone(ZoneInfo(user.timezone)).date()
@@ -112,14 +134,21 @@ def run_ingest(
     sleeper_week = int(json.loads(store.get(latest["sleeper_state"]))["week"])
 
     fetched: list[_Fetched] = []
-    for league in leagues.list_for_user(session, user.id):
+    user_leagues = leagues.list_for_user(session, user.id)
+    for league in user_leagues:
         try:
             if league.platform is Platform.ESPN:
                 fetched.append(_fetch_espn(session, client, store, league, user, key))
             elif league.platform is Platform.SLEEPER:
                 fetched.append(_fetch_sleeper(client, store, league, sleeper_week))
-        except (EspnAccessError, SleeperLookupError, httpx.HTTPError) as exc:
-            report.errors.append(f"{league.platform.value} league {league.name!r}: {exc}")
+        except Exception as exc:  # one league failing never stops the others
+            kind = classify_exception(exc)
+            report.leagues.append(LeagueResult(league=league, failure=kind))
+            report.errors.append(
+                f"{league.platform.value} league {league.name!r}: {exc} ({kind.value})"
+            )
+
+    _step(events, "League data fetched", f"{len(fetched)} of {len(user_leagues)} leagues.")
 
     athletes = store.keys("espn", "athletes")  # birth dates; optional (added 2026-11-06)
     births = espn.map_birth_dates(json.loads(store.get(athletes[-1]))) if athletes else {}
@@ -141,13 +170,35 @@ def run_ingest(
     )
     _load_projections(session, store, resolver, report)
     _load_injuries(session, store, resolver, report)
+    _load_game_logs(session, store, resolver, report)
+    if report.game_logs_unknown_game:
+        report.warnings.append(
+            f"{report.game_logs_unknown_game} box score rows name a game missing from the schedule"
+        )
+    _step(
+        events,
+        "Public data loaded",
+        f"{report.games} games, {report.projection_rows} projection rows from "
+        f"{report.projection_snapshots} snapshots, {report.injury_changes} injury changes, "
+        f"{report.game_log_rows} box score rows.",
+    )
 
     for f in fetched:
-        result = (
-            _store_espn(session, f, resolver, now, today)
-            if f.league.platform is Platform.ESPN
-            else _store_sleeper(session, f, resolver, now, today, sleeper_players)
-        )
+        try:
+            with session.begin_nested():  # a league that can't be stored leaves no partial rows
+                result = (
+                    _store_espn(session, f, resolver, now, today)
+                    if f.league.platform is Platform.ESPN
+                    else _store_sleeper(session, f, resolver, now, today, sleeper_players)
+                )
+        except Exception as exc:
+            kind = classify_exception(exc)
+            log.error("league_store_failed", platform=f.league.platform.value, kind=kind.value)
+            report.leagues.append(LeagueResult(league=f.league, failure=kind))
+            report.errors.append(
+                f"{f.league.name!r}: could not store ({type(exc).__name__}: {exc}; {kind.value})"
+            )
+            continue
         report.leagues.append(result)
         if result.unresolved_players:
             report.errors.append(
@@ -163,8 +214,30 @@ def run_ingest(
                 f"{f.league.name!r}: {unlinked} rostered Sleeper players not linked to ESPN "
                 "(add them to identity/overrides.py)"
             )
+    loaded = [lg for lg in report.leagues if lg.failure is None]
+    _step(
+        events,
+        "Leagues stored",
+        f"{len(loaded)} of {len(user_leagues)} leagues: "
+        f"{sum(lg.roster_entries for lg in report.leagues)} roster entries, "
+        f"{sum(lg.matchups for lg in report.leagues)} matchups, "
+        f"{sum(lg.transactions for lg in report.leagues)} transactions.",
+    )
+    session.flush()
+    report.database_bytes = database.size_bytes(session)
+    share = report.database_bytes / DATABASE_QUOTA_BYTES
+    if share >= DATABASE_WARN_AT[0]:
+        report.warnings.append(
+            f"database is {report.database_bytes / MB:.0f} MB, {share:.0%} of the free plan's "
+            "500 MB (ADR 0021: time for the next storage lever)"
+        )
     log.info("ingest_finished", leagues=len(report.leagues), errors=len(report.errors))
     return report
+
+
+def _step(events: RunEvents | None, name: str, detail: str) -> None:
+    if events is not None:
+        events.step(name, detail)
 
 
 # ------------------------------------------------------------------------------- fetching
@@ -197,7 +270,7 @@ def _fetch_espn(
 ) -> _Fetched:
     creds = credentials.load_espn(session, user.id, key)
     if creds is None:
-        raise EspnAccessError("no ESPN cookies saved")
+        raise EspnAccessError("no ESPN cookies saved", 401)  # needs `fh league add`: AUTH
     args = (client, league.season, league.external_id, creds)
     settings = _keep(store, league, espn_league.fetch_settings(*args))
     latest_period = espn.league_status(settings).latest_scoring_period
@@ -294,6 +367,35 @@ def _load_projections(
             report.projection_snapshots += 1
 
 
+def _load_game_logs(
+    session: Session, store: RawStore, resolver: Resolver, report: IngestReport
+) -> None:
+    """Box scores from every game-log payload not loaded yet. Each payload covers each player's
+    last few games, so payloads overlap; the upsert keeps one row per player and game."""
+    dataset = "/".join(GAME_LOGS)
+    done = raw_loads.loaded_keys(session, dataset)
+    games: dict[int, dict[str, tuple[Any, date]]] = {}
+    for key in store.keys(*GAME_LOGS):
+        if key in done:
+            continue
+        season = season_end_year(datetime.fromisoformat(store.meta(key)["fetched_at"]).date())
+        index = games.setdefault(season, nba.game_index(session, season))
+        rows = []
+        for record in espn.map_game_logs(json.loads(store.get(key)), season):
+            player_id = resolver.resolve(record.player)
+            game = index.get(record.external_game_id)
+            if player_id is None:
+                report.game_logs_unresolved += 1
+            elif game is None:
+                report.game_logs_unknown_game += 1
+            else:
+                rows.append((record, player_id, *game))
+        written = nba.upsert_game_logs(session, rows)
+        raw_loads.mark_loaded(session, key, dataset=dataset, rows=written)
+        report.game_log_payloads += 1
+        report.game_log_rows += written
+
+
 def _load_injuries(
     session: Session, store: RawStore, resolver: Resolver, report: IngestReport
 ) -> None:
@@ -387,3 +489,46 @@ def _store_sleeper(
     ]
     result.transactions = store_league.upsert_transactions(session, f.league.id, records)
     return result
+
+
+def phone_summary(report: IngestReport, attempts: int) -> tuple[str, list[str]]:
+    """What the phone hears about an ingest: counts and kinds only, never names (ADR 0011).
+
+    Built from the report's numbers, not its error text, so it reads the same with 3 leagues
+    or 15: how many loaded, how many failed and why, and what needs a look.
+    """
+    total = len(report.leagues)
+    loaded = [lg for lg in report.leagues if lg.failure is None]
+    share = report.database_bytes / DATABASE_QUOTA_BYTES
+    detail = (
+        f"Leagues: {len(loaded)} of {total} loaded. Box scores: {report.game_log_rows} new rows; "
+        f"projections: {report.projection_rows} new rows. "
+        f"Database {report.database_bytes / MB:.0f} MB ({share:.0%} of the free plan)."
+    )
+    problems: list[str] = []
+    failed = Counter(
+        (PLATFORM_NAMES[lg.league.platform], lg.failure)
+        for lg in report.leagues
+        if lg.failure is not None
+    )
+    for (platform, kind), n in sorted(failed.items(), key=lambda kv: (kv[0][0], kv[0][1].value)):
+        problems.append(
+            f"{n} {platform} league{'s' if n > 1 else ''} failed: {outcome(kind, attempts)}"
+        )
+    unresolved = [lg for lg in loaded if lg.unresolved_players]
+    if unresolved:
+        players = sum(lg.unresolved_players for lg in unresolved)
+        problems.append(f"{players} rostered players unresolved in {len(unresolved)} leagues")
+    unlinked = sum(lg.rostered_sleeper - lg.rostered_sleeper_linked for lg in loaded)
+    if unlinked:
+        problems.append(f"{unlinked} rostered Sleeper players not linked to ESPN (add overrides)")
+    unmapped = sum(1 for lg in loaded if lg.unmapped_scoring)
+    if unmapped:
+        problems.append(f"{unmapped} leagues score a setting with no box score stat yet")
+    if report.game_logs_unknown_game:
+        problems.append(
+            f"{report.game_logs_unknown_game} box score rows name a game missing from the schedule"
+        )
+    if share >= DATABASE_WARN_AT[0]:
+        problems.append(f"database at {share:.0%} of the free plan (ADR 0021: next storage lever)")
+    return detail, problems

@@ -10,7 +10,9 @@ from fantasy_helper.adapters.sleeper.public import API, SOURCE
 
 
 class SleeperLookupError(Exception):
-    pass
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 @dataclass(frozen=True)
@@ -25,9 +27,11 @@ def _get(client: httpx.Client, dataset: str, path: str) -> RawResponse:
     response = get_raw(client, source=SOURCE, dataset=dataset, url=f"{API}{path}")
     # Sleeper answers unknown IDs with 200 and a JSON null.
     if response.status_code == 404 or (response.ok and response.body.strip() == b"null"):
-        raise SleeperLookupError(f"nothing found at {path}")
+        raise SleeperLookupError(f"nothing found at {path}", 404)
     if not response.ok:
-        raise SleeperLookupError(f"Sleeper returned HTTP {response.status_code} for {path}")
+        raise SleeperLookupError(
+            f"Sleeper returned HTTP {response.status_code} for {path}", response.status_code
+        )
     return response
 
 

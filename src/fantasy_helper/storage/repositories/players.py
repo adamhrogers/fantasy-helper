@@ -10,6 +10,7 @@ from fantasy_helper.domain.records import PlayerKey, SourcePlayer
 from fantasy_helper.storage.tables import (
     InjuryObservationRow,
     PlayerExternalIdRow,
+    PlayerGameStatRow,
     PlayerRow,
     ProjectionValueRow,
     RosterEntryRow,
@@ -61,7 +62,7 @@ def insert_links(session: Session, links: list[tuple[UUID, PlayerKey, str]]) -> 
 
 def merge(session: Session, from_id: UUID, into_id: UUID, *, key: PlayerKey, method: str) -> None:
     """Fold a provisional canonical player into the one it turned out to be."""
-    for table in (RosterEntryRow, ProjectionValueRow, InjuryObservationRow):
+    for table in (RosterEntryRow, ProjectionValueRow, InjuryObservationRow, PlayerGameStatRow):
         session.execute(update(table).where(table.player_id == from_id).values(player_id=into_id))
     session.execute(
         update(PlayerExternalIdRow)

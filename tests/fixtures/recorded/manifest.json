@@ -23,6 +23,10 @@
     "espn_public/pro_schedule.json": "trimmed to the first 6 of 31 teams for size",
     "sleeper_public/state.json": "",
     "sleeper_public/players.json": "142 of 2176 players: recorded rosters and ESPN sample",
-    "sleeper_public/projections_week.json": "week 3 projections for the kept players"
+    "sleeper_public/projections_week.json": "week 3 projections for the kept players",
+    "espn_public/game_logs.json": "top 40 players by ownership, each player's last 12 team games"
+  },
+  "updated": {
+    "espn_public/game_logs.json": "2026-11-06T23:10:22.530863+00:00"
   }
 }

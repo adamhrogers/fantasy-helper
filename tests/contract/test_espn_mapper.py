@@ -17,6 +17,23 @@ def slot_counts(rules: LeagueRules) -> dict[str, int]:
 
 
 class TestPointsLeague:
+    def test_other_leagues_scoring_maps_onto_the_same_box_score(self) -> None:
+        """Settings this league doesn't use but others might: missed shots fold into attempts
+        and makes; technical fouls are a box score stat; anything else is reported."""
+        settings = recorded("espn_points/settings.json")
+        items = settings["settings"]["scoringSettings"]["scoringItems"]
+        items += [
+            {"statId": 23, "points": -1.0},  # field goals missed
+            {"statId": 10, "points": -2.0},  # technical fouls
+            {"statId": 43, "points": 1.0},  # team win: not a player box score stat
+        ]
+        record = mapper.map_rules(settings)
+        weights = record.rules.scoring.weights
+        assert weights[Stat.FIELD_GOALS_ATTEMPTED] == -2.0  # -1 (FGA) - 1 (missed)
+        assert weights[Stat.FIELD_GOALS_MADE] == 3.0  # +2 (FGM) + 1 (missed)
+        assert weights[Stat.TECHNICAL_FOULS] == -2.0
+        assert record.unmapped_scoring == ("statId 43 (+1)",)
+
     def test_rules_match_the_league_settings(self) -> None:
         record = mapper.map_rules(recorded("espn_points/settings.json"))
         rules = record.rules
@@ -150,6 +167,42 @@ class TestPublicPlayerData:
         first = next(g for g in games if g.external_id == "401909839")
         assert first.tip_utc == datetime(2026, 10, 22, 0, 0, tzinfo=UTC)  # 8 p.m. ET, Oct 21
         assert first.scoring_period == 2
+
+    def test_game_logs_are_one_row_per_player_and_game(self) -> None:
+        """Recorded 2026-11-07 (`--only espn_public/game_logs.json`): the top 40 players'
+        last 12 team games, which covers opening night (period 1) through period 17."""
+        data = recorded("espn_public/game_logs.json")
+        logs = mapper.map_game_logs(data, 2027)
+        assert len(logs) == 333
+        assert Counter(g.played for g in logs) == {True: 306, False: 27}
+        assert len({g.player.external_id for g in logs}) == 40
+        assert len({g.external_game_id for g in logs}) == 120
+        assert len({(g.player.external_id, g.external_game_id) for g in logs}) == len(logs)
+        assert all(g.team in NBA_TEAMS for g in logs)
+        assert min(g.scoring_period for g in logs) == 1
+        # A game a player sat out is a row with no stats; a played game balances its points.
+        assert all(not g.stats for g in logs if not g.played)
+        for g in (g for g in logs if g.played):
+            s = g.stats
+            made = 2 * s[Stat.FIELD_GOALS_MADE] + s[Stat.THREES_MADE] + s[Stat.FREE_THROWS_MADE]
+            assert s[Stat.POINTS] == made
+        # The depth counts back across seasons; last season's entries are kept apart.
+        assert len(mapper.map_game_logs(data, 2026)) == 147
+
+    def test_a_fifty_point_box_score(self) -> None:
+        data = recorded("espn_public/game_logs.json")
+        wemby_id = next(
+            str(e["player"]["id"]) for e in data["players"]
+            if e["player"]["fullName"] == "Victor Wembanyama"
+        )  # fmt: skip
+        games = {g.external_game_id: g for g in mapper.map_game_logs(data, 2027)
+                 if g.player.external_id == wemby_id}  # fmt: skip
+        assert len(games) == 8
+        game = games["401909933"]
+        assert (game.scoring_period, game.team, game.played) == (16, "SAS", True)
+        assert {k: game.stats[k] for k in (Stat.POINTS, Stat.REBOUNDS, Stat.BLOCKS)} == {
+            Stat.POINTS: 52.0, Stat.REBOUNDS: 24.0, Stat.BLOCKS: 8.0,
+        }  # fmt: skip
 
     def test_roster_players_carry_identity_fields(self) -> None:
         players = mapper.map_roster_players(recorded("espn_points/teams_rosters.json"))

@@ -32,6 +32,26 @@ def test_rules_bonuses_and_lock_in() -> None:
     }  # fmt: skip
 
 
+def test_other_leagues_scoring_maps_onto_the_same_box_score() -> None:
+    """Keys this league leaves at 0 but others might use: missed shots fold into attempts and
+    makes, fouls are box score stats, and anything without a box score stat is reported."""
+    league = recorded(f"{LEAGUE}/league.json")
+    league["scoring_settings"] |= {
+        "fgmi": -1.0, "tpmi": -0.5, "tf": -2.0, "bonus_reb_20p": 1.5, "plus_minus": 0.5,
+    }  # fmt: skip
+    record = mapper.map_rules(league)
+    weights = record.rules.scoring.weights
+    assert weights[Stat.FIELD_GOALS_ATTEMPTED] == -1.5  # -0.5 (fga) - 1 (fgmi)
+    assert weights[Stat.FIELD_GOALS_MADE] == 2.0  # +1 (fgm) + 1 (fgmi)
+    assert weights[Stat.THREES_ATTEMPTED] == -0.5  # tpa is 0 here; tpmi -0.5
+    assert weights[Stat.THREES_MADE] == 1.0  # +0.5 (tpm) + 0.5 (tpmi)
+    assert weights[Stat.TECHNICAL_FOULS] == -2.0
+    assert (
+        ScoringBonus(stat=Stat.REBOUNDS, threshold=20, points=1.5) in record.rules.scoring.bonuses
+    )
+    assert record.unmapped_scoring == ("plus_minus (+0.5)",)
+
+
 def test_rosters_place_every_player_once() -> None:
     league = recorded(f"{LEAGUE}/league.json")
     rosters = recorded(f"{LEAGUE}/rosters.json")

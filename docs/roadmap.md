@@ -95,7 +95,7 @@ These steps depend on each other, so they're ordered. B and C run in parallel at
 | Step | Work |
 |---|---|
 | 0 — Data and storage | **Game logs:** ESPN per-game actuals, with the fixture recorded first. **Migration 0003** adds `player_game_stats` (typed stat columns, a season, indexed on `(player_id, game_date)`), converts `projection_rows` to typed columns, adds composite indexes for the read paths, and adds the read-model tables `fact_sheets` and `league_player_values` (ADRs 0020, 0021). Backfill box scores from opening night (2026-10-20). Database size goes into `fh doctor` and the ingest summary. |
-| A — Engine core | `scoring` (Sleeper's 40/50-point bonuses included; **cross-checked against the points ESPN and Sleeper report**), `distributions` v1, `schedule` (startable games; ESPN matchup periods mapped to days), `valuation` (replacement level), `baselines` |
+| A — Engine core | `scoring` (one shared box score, each league's own weights and bonuses from its settings, ADR 0022; **cross-checked against the points ESPN and Sleeper report**), `distributions` v1, `schedule` (startable games; ESPN matchup periods mapped to days), `valuation` (replacement level), `baselines` |
 | D — Lock-in | `engine/lock_in.py`, by backward induction under Sleeper's rules: one game per player a week, lock after a game and before his next tip, no undo, and his final game counts if you never lock, even one he doesn't play. **Lock-or-pass cards** in the engine-only daily `ReportDocument` (`fh run daily`), showing last night's score, the value of waiting and the inputs. **The registry's core**, moved from M4: an append-only table and the tip-off guard. Locks are recorded from Sleeper's weekly points if those reveal them; otherwise Adam tells it. |
 | B — Engine planning | `streaming` (greedy plan within acquisition limits), `win_probability` (normal approximation) |
 | C — Facts and reports | FactSheet v1 (held to a token budget by a test), `league_player_values`, the weekly `ReportDocument`. Both reports render as local pages until M3 delivers them to the phone. |
@@ -118,7 +118,7 @@ These steps depend on each other, so they're ordered. B and C run in parallel at
 |---|---|
 | A — API + auth | FastAPI on Cloud Run in **`us-east4`** with one pooled database engine per process, **Supabase Auth** (magic link; Adam is user one), reports and push-subscription routes, Supabase prod project in **`us-east-1`** (ADR 0020) |
 | B — PWA | Vite + React shell, sign-in, Today and This Week tabs rendering `ReportDocument` cards (the daily lock-or-pass cards and the weekly overview), Web Push (VAPID), Cloudflare Pages, iOS Home Screen install |
-| C — Scheduling + ops | `daily.yml` and `weekly.yml` on GitHub Actions; the raw store moves to R2; a **nightly backup** of the tables that can't be rebuilt to R2 (ADR 0021); **ops alerts via ntfy** (failed or missing run, stale source, expired cookies, late report, database size over 60% or 80%) |
+| C — Scheduling + ops | `daily.yml` and `weekly.yml` on GitHub Actions; the raw store moves to R2; a **nightly backup** of the tables that can't be rebuilt to R2 (ADR 0021); **run events via ntfy** (started, steps and success quietly; failed or missing run, stale source, expired cookies, late report and database size loudly; docs/runbooks/run-events.md) |
 
 **Done when:**
 - A scheduled run, with the laptop closed, pushes the daily report and the weekly overview to Adam's phone, and they open after sign-in.

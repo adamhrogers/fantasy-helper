@@ -20,6 +20,7 @@ from fantasy_helper.domain.league import (
 from fantasy_helper.domain.player import IdSource, Position
 from fantasy_helper.domain.projections import InjuryStatus
 from fantasy_helper.domain.records import (
+    GameLogRecord,
     InjuryRecord,
     ItemAction,
     MatchupRecord,
@@ -36,7 +37,13 @@ from fantasy_helper.domain.records import (
     TransactionRecord,
     TransactionStatus,
 )
-from fantasy_helper.domain.stats import Stat
+from fantasy_helper.domain.stats import (
+    FIELD_GOALS_MISSED,
+    FREE_THROWS_MISSED,
+    THREES_MISSED,
+    Stat,
+    add_weight,
+)
 
 STATS: dict[int, tuple[str, Stat]] = {
     0: ("PTS", Stat.POINTS),
@@ -46,8 +53,12 @@ STATS: dict[int, tuple[str, Stat]] = {
     4: ("OREB", Stat.OFFENSIVE_REBOUNDS),
     5: ("DREB", Stat.DEFENSIVE_REBOUNDS),
     6: ("REB", Stat.REBOUNDS),
+    7: ("EJ", Stat.EJECTIONS),
+    8: ("FF", Stat.FLAGRANT_FOULS),
     9: ("PF", Stat.PERSONAL_FOULS),
+    10: ("TF", Stat.TECHNICAL_FOULS),
     11: ("TO", Stat.TURNOVERS),
+    12: ("DQ", Stat.DISQUALIFICATIONS),
     13: ("FGM", Stat.FIELD_GOALS_MADE),
     14: ("FGA", Stat.FIELD_GOALS_ATTEMPTED),
     15: ("FTM", Stat.FREE_THROWS_MADE),
@@ -56,7 +67,14 @@ STATS: dict[int, tuple[str, Stat]] = {
     18: ("3PA", Stat.THREES_ATTEMPTED),
     37: ("DD", Stat.DOUBLE_DOUBLES),
     38: ("TD", Stat.TRIPLE_DOUBLES),
+    39: ("QD", Stat.QUADRUPLE_DOUBLES),
     40: ("MIN", Stat.MINUTES),
+}
+# Scoring items that are exact combinations of box score stats (domain.stats).
+DERIVED: dict[int, tuple[str, dict[Stat, float]]] = {
+    23: ("FGMI", FIELD_GOALS_MISSED),
+    24: ("FTMI", FREE_THROWS_MISSED),
+    25: ("3PMI", THREES_MISSED),
 }
 RATIOS: dict[int, tuple[str, tuple[Stat, Stat]]] = {
     19: ("FG%", (Stat.FIELD_GOALS_MADE, Stat.FIELD_GOALS_ATTEMPTED)),
@@ -146,11 +164,14 @@ def map_rules(data: Any) -> RulesRecord:
     unmapped: list[str] = []
 
     if scoring_type in POINTS_TYPES:
-        weights = {}
+        weights: dict[Stat, float] = {}
         for item in items:
             stat_id, points = int(item["statId"]), float(item.get("points") or 0)
             if stat_id in STATS:
-                weights[STATS[stat_id][1]] = points
+                stat = STATS[stat_id][1]
+                weights[stat] = weights.get(stat, 0.0) + points
+            elif stat_id in DERIVED:
+                add_weight(weights, DERIVED[stat_id][1], points)
             elif points:
                 unmapped.append(f"statId {stat_id} ({points:+g})")
         scoring = ScoringRules(scoring_type=ScoringType.POINTS, weights=weights)
@@ -411,6 +432,40 @@ def map_projections(data: Any, season: int) -> list[ProjectionRecord]:
             )
         )
     return records
+
+
+def map_game_logs(data: Any, season: int) -> list[GameLogRecord]:
+    """Box scores for one season: every per-game entry (`statSourceId 0, split 5`), one per
+    player and game. Entries from earlier seasons are skipped (the depth filter counts back
+    across seasons for players who haven't played much)."""
+    records: dict[tuple[str, str], GameLogRecord] = {}
+    for entry in data.get("players", []):
+        player = entry["player"]
+        for s in player.get("stats", []):
+            if not (
+                s.get("statSourceId") == 0
+                and s.get("statSplitTypeId") == 5
+                and s.get("seasonId") == season
+                and s.get("externalId")
+            ):
+                continue
+            raw = s.get("stats") or {}
+            played = float(raw.get(GAMES_PLAYED, 0) or 0) > 0
+            record = GameLogRecord(
+                player=_player_key(player),
+                external_game_id=str(s["externalId"]),
+                season=season,
+                scoring_period=int(s["scoringPeriodId"]),
+                team=PRO_TEAMS.get(int(s.get("proTeamId") or 0)),
+                played=played,
+                stats=(
+                    {STATS[int(k)][1]: float(v) for k, v in raw.items() if int(k) in STATS}
+                    if played
+                    else {}
+                ),
+            )
+            records[(record.player.external_id, record.external_game_id)] = record
+    return list(records.values())
 
 
 def map_schedule(data: Any) -> list[ScheduledGameRecord]:

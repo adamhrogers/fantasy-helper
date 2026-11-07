@@ -23,7 +23,13 @@ A fantasy basketball assistant for Adam (customer one), then a friends beta, the
 | M0 Foundation | **Done, merged** (PR #1) |
 | M1 Data spike | **Done, merged** (PR #2) |
 | Pre-M2 review | **Done**: latency (ADR 0020), storage budget and season archive (ADR 0021), lock-in moved to M2 |
-| M2 Scoring, weekly overview, **Sleeper lock-in** | **Next** (Nov 7–12) |
+| M2 Scoring, weekly overview, **Sleeper lock-in** | **In progress** on branch `m2-scoring`. Done:
+- box scores: `espn.game_logs`, migration 0003, backfilled from opening night (6,935 rows)
+- typed projection columns and read-path indexes (dev database at 0003)
+- **one box score for every league** (ADR 0022, CLAUDE.md rule 9): complete for every game played, internally consistent, and every league's settings mapped onto it, missed shots and fouls included
+- `engine/scoring.py` with golden and property tests, verified against ESPN (155/155) and Sleeper (417/417 on Sleeper's own stats; 405/417 on ESPN's, the 12 from one-stat feed differences): [spikes/m2-scoring-check.md](spikes/m2-scoring-check.md)
+
+Next: steps 5 and 7 (distributions, lock-in). |
 | M3 Phone app + delivery | **Next, in parallel with M2** (Nov 7–12). Adam is creating the accounts ([runbooks/m3-account-setup.md](runbooks/m3-account-setup.md)). |
 | M4–M8, P9–P12 | See `docs/roadmap.md` v0.5. Friends beta **Nov 29**, hard stop **Dec 15**. |
 
@@ -31,7 +37,7 @@ A fantasy basketball assistant for Adam (customer one), then a friends beta, the
 - **`fh snapshot`** runs on Adam's Mac through launchd: the morning set at **06:30** and the pre-tip evening set at **17:30** local time (America/New_York). It saves raw ESPN and Sleeper public data to `data/raw/` (git-ignored). History has accumulated since **2026-11-06**. Check it with `scripts/snapshot-schedule.sh status`; logs are in `~/Library/Logs/fantasy-helper/` (JSON lines). A sleeping Mac runs missed jobs on wake; a Mac that's shut down skips them, until M3 moves this to the cloud.
 - **`fh ingest`** is run by hand for now. It loads every not-yet-loaded snapshot plus fresh league data into Supabase, takes about 30 seconds, and is idempotent. First live run: 1,100 ESPN players; **all 1,852 active Sleeper players** (the Sleeper league has 142 rostered, all linked to ESPN, and **1,710 free agents**, 889 linked to ESPN and 410 with Sleeper projections); 1,200 games; 9 projection snapshots (8,490 rows); 226 injury changes; full rosters, matchups and transactions for all three leagues.
 - **Supabase dev project**, migrated to **0002**. There's no prod project yet (M3).
-- **LangSmith tracing** works (`fh doctor` sends a smoke trace). **ntfy ops alerts** reach Adam's phone. iPhone notifications needed a settings fix, which is done.
+- **LangSmith tracing** works (`fh doctor` sends a smoke trace). **ntfy run events** reach Adam's phone: every run sends started, steps and success quietly and failures loudly, and it's ops only; product notifications come from the PWA ([runbooks/run-events.md](runbooks/run-events.md), added 2026-11-06). iPhone notifications needed a settings fix, which is done.
 - **GitHub:** `adamhrogers/fantasy-helper`, public. CI runs lint, mypy, contracts, tests on Postgres 17, `alembic check`, and a gitleaks full-history scan. Adam was asked to run `gh secret set LANGSMITH_API_KEY` so CI sends a smoke trace; **unconfirmed**, and the step is skipped (not failed) without it.
 
 ### Adam's three leagues (all 10 teams, season 2026-27 = `season 2027`)

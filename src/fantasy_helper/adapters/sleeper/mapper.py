@@ -32,7 +32,13 @@ from fantasy_helper.domain.records import (
     TransactionRecord,
     TransactionStatus,
 )
-from fantasy_helper.domain.stats import Stat
+from fantasy_helper.domain.stats import (
+    FIELD_GOALS_MISSED,
+    FREE_THROWS_MISSED,
+    THREES_MISSED,
+    Stat,
+    add_weight,
+)
 
 STATS: dict[str, Stat] = {
     "pts": Stat.POINTS,
@@ -52,7 +58,16 @@ STATS: dict[str, Stat] = {
     "pf": Stat.PERSONAL_FOULS,
     "dd": Stat.DOUBLE_DOUBLES,
     "td": Stat.TRIPLE_DOUBLES,
+    "tf": Stat.TECHNICAL_FOULS,
+    "ff": Stat.FLAGRANT_FOULS,
 }
+# Scoring keys that are exact combinations of box score stats (domain.stats).
+DERIVED: dict[str, dict[Stat, float]] = {
+    "fgmi": FIELD_GOALS_MISSED,
+    "ftmi": FREE_THROWS_MISSED,
+    "tpmi": THREES_MISSED,
+}
+# Each league chooses which of these it uses, at what threshold and for how many points.
 _BONUS = re.compile(r"bonus_(pt|reb|ast|stl|blk)_(\d+)p")
 _BONUS_STATS = {
     "pt": Stat.POINTS,
@@ -105,7 +120,10 @@ def map_rules(league: Any) -> RulesRecord:
         points = float(value or 0)
         if key in STATS:
             if points:
-                weights[STATS[key]] = points
+                weights[STATS[key]] = weights.get(STATS[key], 0.0) + points
+        elif key in DERIVED:
+            if points:
+                add_weight(weights, DERIVED[key], points)
         elif match := _BONUS.fullmatch(key):
             if points:
                 stat = _BONUS_STATS[match.group(1)]
