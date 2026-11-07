@@ -10,14 +10,15 @@ from sqlalchemy.orm import Session
 
 from fantasy_helper import __version__
 from fantasy_helper.adapters._http import make_client
-from fantasy_helper.cli import fixtures, leagues
+from fantasy_helper.adapters.espn.public import GAME_LOG_DEPTH
+from fantasy_helper.cli import fixtures, leagues, run
 from fantasy_helper.cli.doctor import Check, Status, run_checks
 from fantasy_helper.cli.ingest import ingest as ingest_command
 from fantasy_helper.config import Settings, get_settings
 from fantasy_helper.domain.runs import RunRecord, RunStatus
 from fantasy_helper.observability.alerts import notifier_from_settings
 from fantasy_helper.observability.logs import configure_logging
-from fantasy_helper.pipeline.snapshot import SnapshotSet, run_snapshot
+from fantasy_helper.pipeline.snapshot import DATASETS, SnapshotSet, run_snapshot
 from fantasy_helper.storage.crypto import generate_key
 from fantasy_helper.storage.db import make_engine
 from fantasy_helper.storage.raw_store import LocalRawStore
@@ -33,6 +34,7 @@ app = typer.Typer(
 
 app.add_typer(leagues.app, name="league")
 app.add_typer(fixtures.app, name="fixtures")
+app.add_typer(run.app, name="run")
 app.command("ingest")(ingest_command)
 
 _SYMBOLS = {Status.OK: "✓", Status.SKIP: "-", Status.FAIL: "✗"}
@@ -85,8 +87,22 @@ def snapshot(
             "--set", help="morning: everything; evening: pre-tip injuries and projections."
         ),
     ] = SnapshotSet.MORNING,
+    only: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--only", help="Capture only these datasets (e.g. espn.game_logs), to backfill."
+        ),
+    ] = None,
+    game_log_depth: Annotated[
+        int,
+        typer.Option(help="Box scores: each player's last N team games (30 covers the season)."),
+    ] = GAME_LOG_DEPTH,
 ) -> None:
     """Save today's raw projections and injury statuses. The scheduler runs this twice a day."""
+    unknown = set(only or ()) - {d.label for d in DATASETS}
+    if unknown:
+        typer.echo(f"✗ unknown dataset {', '.join(sorted(unknown))}", err=True)
+        raise typer.Exit(code=2)
     settings = get_settings()
     with make_client() as client:
         result = run_snapshot(
@@ -95,6 +111,9 @@ def snapshot(
             store=LocalRawStore(settings.data_dir / "raw"),
             notifier=notifier_from_settings(settings),
             record=_run_log(settings),
+            only=frozenset(only) if only else None,
+            game_log_depth=game_log_depth,
+            progress=settings.notify_progress,
         )
     for r in result.results:
         detail = f"{r.items:>5} items {r.bytes / 1024:>6.0f} KB" if r.key else ""

@@ -1,21 +1,38 @@
-"""League-independent NBA data: the schedule, projection snapshots and injury status changes."""
+"""League-independent NBA data: the schedule, box scores, projection snapshots and injury
+status changes."""
 
 import uuid
-from datetime import datetime
+from collections.abc import Iterable, Sequence
+from datetime import date, datetime, time, timedelta
 from uuid import UUID
 
 from sqlalchemy import func, insert, select
+from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from fantasy_helper.domain.calendar import NBA_TIMEZONE, nba_game_date
 from fantasy_helper.domain.projections import InjuryStatus, ProjectionScope, Provider
-from fantasy_helper.domain.records import InjuryRecord, ProjectionRecord, ScheduledGameRecord
+from fantasy_helper.domain.records import (
+    GameLogRecord,
+    InjuryRecord,
+    ProjectionRecord,
+    ScheduledGameRecord,
+)
 from fantasy_helper.storage.tables import (
+    STAT_COLUMNS,
     InjuryObservationRow,
     NbaGameRow,
+    PlayerGameStatRow,
     ProjectionSnapshotRow,
     ProjectionValueRow,
+    stat_values,
 )
+
+_NO_STATS = dict.fromkeys(STAT_COLUMNS.values())
+# A multi-row INSERT binds every value as a parameter, and Postgres allows 65,535 per statement.
+# Box score rows have 26 columns, so 1,000 rows (26,000 parameters) per statement.
+GAME_LOG_CHUNK = 1000
 
 
 def upsert_games(session: Session, season: int, games: list[ScheduledGameRecord]) -> int:
@@ -41,6 +58,42 @@ def upsert_games(session: Session, season: int, games: list[ScheduledGameRecord]
         )
     )
     return len(games)
+
+
+def game_index(session: Session, season: int) -> dict[str, tuple[UUID, date]]:
+    """ESPN game ID -> (our game ID, the game's date in Eastern time), for one season."""
+    rows = session.execute(
+        select(NbaGameRow.espn_game_id, NbaGameRow.id, NbaGameRow.tip_utc).where(
+            NbaGameRow.season == season
+        )
+    )
+    return {espn_id: (game_id, nba_game_date(tip)) for espn_id, game_id, tip in rows}
+
+
+def upsert_game_logs(session: Session, rows: list[tuple[GameLogRecord, UUID, UUID, date]]) -> int:
+    """Box score rows as (record, player ID, game ID, game date). Re-loading a game overwrites
+    it, so a later stat correction wins."""
+    if not rows:
+        return 0
+    values = {
+        (player_id, game_id): {
+            "player_id": player_id, "game_id": game_id, "season": r.season,
+            "game_date": game_date, "scoring_period": r.scoring_period, "team": r.team,
+            "played": r.played,
+        } | _NO_STATS | stat_values(r.stats)
+        for r, player_id, game_id, game_date in rows
+    }  # fmt: skip
+    updated = ["season", "game_date", "scoring_period", "team", "played", *STAT_COLUMNS.values()]
+    batch = list(values.values())
+    for start in range(0, len(batch), GAME_LOG_CHUNK):
+        stmt = pg_insert(PlayerGameStatRow).values(batch[start : start + GAME_LOG_CHUNK])
+        session.execute(
+            stmt.on_conflict_do_update(
+                index_elements=["player_id", "game_id"],
+                set_={col: stmt.excluded[col] for col in updated} | {"updated_at": func.now()},
+            )
+        )
+    return len(values)
 
 
 def snapshot_loaded(session: Session, raw_key: str) -> bool:
@@ -80,7 +133,7 @@ def load_projections(
             insert(ProjectionValueRow),
             [
                 {"snapshot_id": snapshot_id, "player_id": player_id, "game_date": r.game_date,
-                 "games": r.games, "per_game": {k.value: v for k, v in r.per_game.items()}}
+                 "games": r.games} | _NO_STATS | stat_values(r.per_game)
                 for r, player_id in unique.values()
             ],
         )  # fmt: skip
@@ -143,3 +196,118 @@ def record_injury_changes(
     if changes:
         session.execute(insert(InjuryObservationRow), changes)
     return len(changes)
+
+
+# ------------------------------------------------------------------------------- reading
+
+
+def season_start(session: Session, season: int) -> date | None:
+    """Opening night: the first game's date in Eastern time."""
+    tip = session.scalar(select(func.min(NbaGameRow.tip_utc)).where(NbaGameRow.season == season))
+    return nba_game_date(tip) if tip is not None else None
+
+
+def _tip_window(first: date, last: date) -> tuple[datetime, datetime]:
+    """UTC bounds of the Eastern days first..last: games are dated by their Eastern tip."""
+    start = datetime.combine(first, time(0), NBA_TIMEZONE)
+    end = datetime.combine(last + timedelta(days=1), time(0), NBA_TIMEZONE)
+    return start, end
+
+
+def team_games(
+    session: Session, season: int, team: str, first: date, last: date
+) -> list[tuple[UUID, datetime, date]]:
+    """(game ID, tip UTC, game date) for one team's games between two dates, in order."""
+    start, end = _tip_window(first, last)
+    rows = session.execute(
+        select(NbaGameRow.id, NbaGameRow.tip_utc)
+        .where(
+            NbaGameRow.season == season,
+            (NbaGameRow.home_team == team) | (NbaGameRow.away_team == team),
+            NbaGameRow.tip_utc >= start,
+            NbaGameRow.tip_utc < end,
+        )
+        .order_by(NbaGameRow.tip_utc)
+    )
+    return [(game_id, tip, nba_game_date(tip)) for game_id, tip in rows]
+
+
+def box_scores(
+    session: Session, season: int, player_ids: Sequence[UUID] | None = None
+) -> list[PlayerGameStatRow]:
+    """Box score rows for a season, for some players or (None) everyone. One truth for every
+    league (ADR 0022)."""
+    query = select(PlayerGameStatRow).where(PlayerGameStatRow.season == season)
+    if player_ids is not None:
+        query = query.where(PlayerGameStatRow.player_id.in_(player_ids))
+    return list(session.scalars(query.order_by(PlayerGameStatRow.game_date)))
+
+
+def latest_projection_snapshot(
+    session: Session,
+    provider: Provider,
+    scope: ProjectionScope,
+    period: str | None,
+    as_of: datetime,
+) -> UUID | None:
+    query = select(ProjectionSnapshotRow.id).where(
+        ProjectionSnapshotRow.provider == provider.value,
+        ProjectionSnapshotRow.scope == scope.value,
+        ProjectionSnapshotRow.pulled_at <= as_of,
+    )
+    if period is not None:
+        query = query.where(ProjectionSnapshotRow.period == period)
+    return session.scalar(query.order_by(ProjectionSnapshotRow.pulled_at.desc()).limit(1))
+
+
+def projection_rows(
+    session: Session, snapshot_id: UUID, player_ids: Sequence[UUID]
+) -> list[ProjectionValueRow]:
+    return list(
+        session.scalars(
+            select(ProjectionValueRow).where(
+                ProjectionValueRow.snapshot_id == snapshot_id,
+                ProjectionValueRow.player_id.in_(player_ids),
+            )
+        )
+    )
+
+
+def games_between(
+    session: Session, season: int, first: date, last: date
+) -> list[tuple[UUID, datetime, date, str, str]]:
+    """(game ID, tip UTC, game date ET, home, away) for every game between two dates."""
+    start, end = _tip_window(first, last)
+    rows = session.execute(
+        select(NbaGameRow.id, NbaGameRow.tip_utc, NbaGameRow.home_team, NbaGameRow.away_team)
+        .where(NbaGameRow.season == season, NbaGameRow.tip_utc >= start, NbaGameRow.tip_utc < end)
+        .order_by(NbaGameRow.tip_utc)
+    )
+    return [(gid, tip, nba_game_date(tip), home, away) for gid, tip, home, away in rows]
+
+
+def projected_players(session: Session, snapshot_ids: Sequence[UUID]) -> set[UUID]:
+    """Players with a row in any of these projection snapshots."""
+    if not snapshot_ids:
+        return set()
+    return set(
+        session.scalars(
+            select(ProjectionValueRow.player_id)
+            .where(ProjectionValueRow.snapshot_id.in_(snapshot_ids))
+            .distinct()
+        )
+    )
+
+
+def latest_injury_status(session: Session, player_ids: Iterable[UUID]) -> dict[UUID, str]:
+    """Each player's most recent injury status, from whichever provider reported last."""
+    ids = list(player_ids)
+    if not ids:
+        return {}
+    rows = session.execute(
+        select(InjuryObservationRow.player_id, InjuryObservationRow.status)
+        .where(InjuryObservationRow.player_id.in_(ids))
+        .order_by(InjuryObservationRow.player_id, InjuryObservationRow.observed_at.desc())
+        .ext(distinct_on(InjuryObservationRow.player_id))
+    )
+    return {pid: status for pid, status in rows}

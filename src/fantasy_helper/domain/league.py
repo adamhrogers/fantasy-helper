@@ -54,8 +54,9 @@ class CategoryRule(DomainModel):
 
 
 class ScoringBonus(DomainModel):
-    """Extra points when one game's stat reaches a threshold (Sleeper's bonus_pt_40p is
-    `ScoringBonus(stat=POINTS, threshold=40, points=2)`)."""
+    """A league setting: extra points when one game's stat reaches a threshold. Whether a league
+    has any, and their thresholds and points, come from its own settings (a Sleeper league's
+    `bonus_reb_20p: 1.5` is `ScoringBonus(stat=REBOUNDS, threshold=20, points=1.5)`)."""
 
     stat: Stat
     threshold: float

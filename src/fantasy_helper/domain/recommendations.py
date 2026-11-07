@@ -8,7 +8,7 @@ from enum import StrEnum
 from typing import Self
 from uuid import UUID
 
-from pydantic import Field, model_validator
+from pydantic import Field, JsonValue, model_validator
 
 from fantasy_helper.domain._base import DomainModel, UtcDatetime, new_id
 from fantasy_helper.domain.league import LeagueFormat, Platform
@@ -94,6 +94,9 @@ class Recommendation(DomainModel):
     outcome_window: OutcomeWindow
     first_tip_utc: UtcDatetime  # tip-off of the first game the call depends on
     is_shadow: bool = False  # shadow runs are graded but never shown
+    # The code-computed numbers behind the call (scores, value of waiting, games left), so the
+    # card and the grade read exactly what the call saw.
+    detail: dict[str, JsonValue] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _logged_before_tip_off(self) -> Self:

@@ -14,3 +14,5 @@ The product's own push can be the thing that's broken, and a broken app can't re
 
 ## Consequences
 Anyone who knows the topic name can read it, so alerts never contain secrets or league data.
+
+**Update, 2026-11-06: run events.** The ntfy channel carries every run's events, not only failures: `started`, `step` and `succeeded` are quiet (low priority, switchable with `FH_NOTIFY_PROGRESS`), `warned` is normal and `failed` is loud (`observability/events.py`, docs/runbooks/run-events.md). It stays ops-only: anything the user acts on (report ready, lock reminders) is product push from the phone app.

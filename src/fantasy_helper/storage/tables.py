@@ -3,6 +3,7 @@
 M0: users, leagues, encrypted platform credentials and the run log.
 M1: players and the identity crosswalk, the NBA schedule, versioned league settings, teams,
 daily rosters, matchups, transactions, projections and injury status changes.
+M2: box scores, typed stat columns and read-path indexes (ADRs 0020, 0021).
 
 Every table has row-level security enabled in its migration, with no policies. Our backend
 connects as the table owner, which bypasses RLS, while Supabase's public Data API sees nothing.
@@ -14,6 +15,7 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
+    REAL,
     BigInteger,
     Boolean,
     Date,
@@ -21,6 +23,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Identity,
+    Index,
     Integer,
     LargeBinary,
     MetaData,
@@ -33,6 +36,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+from fantasy_helper.domain.stats import Stat, StatLine
 
 NAMING_CONVENTION = {
     "ix": "ix_%(column_0_N_label)s",
@@ -49,6 +54,80 @@ class Base(DeclarativeBase):
 
 def _created_at() -> Mapped[datetime]:
     return mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# One REAL column per stat, not a JSONB blob: about half the bytes per row (ADR 0021), and
+# typed. Column names avoid SQL keywords ("to") and leading digits ("3pm").
+STAT_COLUMNS: dict[Stat, str] = {
+    Stat.POINTS: "pts",
+    Stat.REBOUNDS: "reb",
+    Stat.OFFENSIVE_REBOUNDS: "oreb",
+    Stat.DEFENSIVE_REBOUNDS: "dreb",
+    Stat.ASSISTS: "ast",
+    Stat.STEALS: "stl",
+    Stat.BLOCKS: "blk",
+    Stat.TURNOVERS: "tov",
+    Stat.THREES_MADE: "fg3m",
+    Stat.THREES_ATTEMPTED: "fg3a",
+    Stat.FIELD_GOALS_MADE: "fgm",
+    Stat.FIELD_GOALS_ATTEMPTED: "fga",
+    Stat.FREE_THROWS_MADE: "ftm",
+    Stat.FREE_THROWS_ATTEMPTED: "fta",
+    Stat.PERSONAL_FOULS: "pf",
+    Stat.DOUBLE_DOUBLES: "dd",
+    Stat.TRIPLE_DOUBLES: "td",
+    Stat.QUADRUPLE_DOUBLES: "qd",
+    Stat.TECHNICAL_FOULS: "tf",
+    Stat.FLAGRANT_FOULS: "ff",
+    Stat.EJECTIONS: "ej",
+    Stat.DISQUALIFICATIONS: "dq",
+    Stat.MINUTES: "minutes",
+}
+if set(STAT_COLUMNS) != set(Stat):  # a new Stat needs a column (and a migration)
+    raise RuntimeError("STAT_COLUMNS is missing a Stat")
+
+
+class StatColumns:
+    """Mixin: a nullable REAL per stat. NULL means the source didn't give that stat."""
+
+    pts: Mapped[float | None] = mapped_column(REAL)
+    reb: Mapped[float | None] = mapped_column(REAL)
+    oreb: Mapped[float | None] = mapped_column(REAL)
+    dreb: Mapped[float | None] = mapped_column(REAL)
+    ast: Mapped[float | None] = mapped_column(REAL)
+    stl: Mapped[float | None] = mapped_column(REAL)
+    blk: Mapped[float | None] = mapped_column(REAL)
+    tov: Mapped[float | None] = mapped_column(REAL)
+    fg3m: Mapped[float | None] = mapped_column(REAL)
+    fg3a: Mapped[float | None] = mapped_column(REAL)
+    fgm: Mapped[float | None] = mapped_column(REAL)
+    fga: Mapped[float | None] = mapped_column(REAL)
+    ftm: Mapped[float | None] = mapped_column(REAL)
+    fta: Mapped[float | None] = mapped_column(REAL)
+    pf: Mapped[float | None] = mapped_column(REAL)
+    dd: Mapped[float | None] = mapped_column(REAL)
+    td: Mapped[float | None] = mapped_column(REAL)
+    qd: Mapped[float | None] = mapped_column(REAL)
+    tf: Mapped[float | None] = mapped_column(REAL)
+    ff: Mapped[float | None] = mapped_column(REAL)
+    ej: Mapped[float | None] = mapped_column(REAL)
+    dq: Mapped[float | None] = mapped_column(REAL)
+    minutes: Mapped[float | None] = mapped_column(REAL)
+
+
+def stat_values(line: StatLine) -> dict[str, float]:
+    """A StatLine as column values for an insert."""
+    return {STAT_COLUMNS[stat]: value for stat, value in line.items()}
+
+
+def stat_line(row: Any) -> StatLine:
+    """The non-NULL stat columns of a row (ORM object or Core row) as a StatLine."""
+    out: StatLine = {}
+    for stat, column in STAT_COLUMNS.items():
+        value = getattr(row, column)
+        if value is not None:
+            out[stat] = float(value)
+    return out
 
 
 class UserRow(Base):
@@ -232,7 +311,10 @@ class TransactionRow(Base):
     corrected crosswalk link never means rewriting transaction history."""
 
     __tablename__ = "transactions"
-    __table_args__ = (UniqueConstraint("league_id", "external_id"),)
+    __table_args__ = (
+        UniqueConstraint("league_id", "external_id"),
+        Index("ix_transactions_league_id_proposed_at", "league_id", "proposed_at"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
     league_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("leagues.id", ondelete="CASCADE"))
@@ -240,7 +322,7 @@ class TransactionRow(Base):
     kind: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text)
     team_external_id: Mapped[str | None] = mapped_column(Text)
-    proposed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    proposed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     scoring_period: Mapped[int | None] = mapped_column(Integer)
     items: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
     updated_at: Mapped[datetime] = mapped_column(
@@ -256,6 +338,10 @@ class ProjectionSnapshotRow(Base):
     payload it was loaded from, and makes loading the same snapshot twice a no-op."""
 
     __tablename__ = "projection_snapshots"
+    __table_args__ = (
+        # "The latest pull of each provider and scope" is an index lookup (ADR 0020).
+        Index("ix_projection_snapshots_provider_scope_pulled_at", "provider", "scope", "pulled_at"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
     provider: Mapped[str] = mapped_column(Text)
@@ -267,17 +353,22 @@ class ProjectionSnapshotRow(Base):
     created_at: Mapped[datetime] = _created_at()
 
 
-class ProjectionValueRow(Base):
+class ProjectionValueRow(StatColumns, Base):
+    """One player's per-game projection in one snapshot (or for one game, with game_date)."""
+
     __tablename__ = "projection_rows"
+    __table_args__ = (
+        # "These players in that pull" stays an index lookup however much history piles up.
+        Index("ix_projection_rows_snapshot_id_player_id", "snapshot_id", "player_id"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
     snapshot_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("projection_snapshots.id", ondelete="CASCADE"), index=True
+        ForeignKey("projection_snapshots.id", ondelete="CASCADE")
     )
     player_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("players.id"), index=True)
     game_date: Mapped[date | None] = mapped_column(Date)
     games: Mapped[float | None] = mapped_column(Float)
-    per_game: Mapped[dict[str, float]] = mapped_column(JSONB)
 
 
 class InjuryObservationRow(Base):
@@ -285,11 +376,127 @@ class InjuryObservationRow(Base):
     from the last one recorded for that provider. These become timeline-graph markers."""
 
     __tablename__ = "injury_observations"
+    __table_args__ = (
+        Index(
+            "ix_injury_observations_player_id_provider_observed_at",
+            "player_id", "provider", "observed_at",
+        ),
+    )  # fmt: skip
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
-    player_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("players.id"), index=True)
+    player_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("players.id"))
     provider: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text)
     note: Mapped[str | None] = mapped_column(Text)
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     raw_key: Mapped[str | None] = mapped_column(Text)
+
+
+# ------------------------------------------------------------------------------ M2: box scores
+
+
+class PlayerGameStatRow(StatColumns, Base):
+    """One player's line in one NBA game (a box score row). A game he sat out is a row with
+    `played` false and no stats, so availability is data too. Stat corrections overwrite."""
+
+    __tablename__ = "player_game_stats"
+    __table_args__ = (Index("ix_player_game_stats_player_id_game_date", "player_id", "game_date"),)
+
+    player_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("players.id"), primary_key=True)
+    game_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("nba_games.id"), primary_key=True)
+    season: Mapped[int] = mapped_column(Integer)
+    game_date: Mapped[date] = mapped_column(Date, index=True)  # the tip's local date (ET)
+    scoring_period: Mapped[int] = mapped_column(Integer)
+    team: Mapped[str | None] = mapped_column(Text)
+    played: Mapped[bool] = mapped_column(Boolean)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class RawLoadRow(Base):
+    """Raw payloads already loaded into tables that don't keep their own raw key, so ingest
+    loads each payload once (box scores today)."""
+
+    __tablename__ = "raw_loads"
+
+    raw_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    dataset: Mapped[str] = mapped_column(Text)
+    rows: Mapped[int] = mapped_column(Integer)
+    loaded_at: Mapped[datetime] = _created_at()
+
+
+# ------------------------------------------------------------------------- M2: the registry
+
+
+class RecommendationRow(Base):
+    """Every call the app makes, logged before tip-off and never edited (ADR 0005). A database
+    trigger rejects UPDATE and DELETE; grades go in their own table (M6). `dedupe_key` makes
+    logging the same call twice (a rerun) a no-op, never an edit."""
+
+    __tablename__ = "recommendations"
+    __table_args__ = (
+        UniqueConstraint("league_id", "dedupe_key"),
+        Index("ix_recommendations_league_id_created_at", "league_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    league_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("leagues.id"))
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
+    platform: Mapped[str] = mapped_column(Text)
+    format: Mapped[str] = mapped_column(Text)
+    call_type: Mapped[str] = mapped_column(Text)
+    dedupe_key: Mapped[str] = mapped_column(Text)
+    claim: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    baseline_call: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    inputs: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    producer: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    detail: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    expected_value: Mapped[float] = mapped_column(Float)
+    confidence: Mapped[float] = mapped_column(Float)
+    outcome_window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    outcome_window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    first_tip_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    is_shadow: Mapped[bool] = mapped_column(Boolean)
+
+
+# ------------------------------------------------------------- M2: read models (ADR 0020)
+
+
+class FactSheetRow(Base):
+    """Every FactSheet built, append-only: the replay unit for evals and shadow runs."""
+
+    __tablename__ = "fact_sheets"
+    __table_args__ = (
+        UniqueConstraint("league_id", "kind", "content_hash"),
+        Index("ix_fact_sheets_league_id_as_of", "league_id", "as_of"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    league_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("leagues.id", ondelete="CASCADE"))
+    kind: Mapped[str] = mapped_column(Text)
+    week: Mapped[int] = mapped_column(Integer)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    content_hash: Mapped[str] = mapped_column(Text)
+    sheet: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = _created_at()
+
+
+class LeaguePlayerValueRow(Base):
+    """The hot read model: each relevant player's value in one league right now, replaced on
+    every weekly run (a rebuildable cache, not evidence)."""
+
+    __tablename__ = "league_player_values"
+
+    league_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("leagues.id", ondelete="CASCADE"), primary_key=True
+    )
+    player_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("players.id"), primary_key=True)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    team_external_id: Mapped[str | None] = mapped_column(Text)  # None for a free agent
+    slot: Mapped[str] = mapped_column(Text)
+    games_left: Mapped[int] = mapped_column(Integer)
+    startable_left: Mapped[int] = mapped_column(Integer)
+    per_game: Mapped[float] = mapped_column(REAL)
+    value_over_replacement: Mapped[float | None] = mapped_column(REAL)

@@ -6,14 +6,18 @@ timeline graphs need them exactly as they stood on each day. Two runs a day:
 - morning: the full set, including Sleeper's player list (Sleeper asks for at most one a day)
 - evening: what moves before tip-off (ESPN injury statuses and projections, Sleeper's week)
 
-Every response is stored raw and untouched. A dataset that fails or looks wrong raises an
-ops alert; the others still run. The raw files are written even if the database is down.
+Box scores (`espn.game_logs`, morning) are the exception: they never change, so a missed day
+can be recovered later with a deeper pull (`fh snapshot --only espn.game_logs --game-log-depth`).
+
+Every response is stored raw and untouched. A dataset that fails or looks wrong makes the run
+fail loudly on the phone (run events, docs/runbooks/run-events.md); the others still run. The
+raw files are written even if the database is down.
 """
 
 import json
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from enum import StrEnum
 from typing import Any
@@ -25,9 +29,18 @@ from fantasy_helper.adapters._http import RawResponse
 from fantasy_helper.adapters.espn import public as espn
 from fantasy_helper.adapters.sleeper import public as sleeper
 from fantasy_helper.domain.calendar import season_end_year, season_start_year
-from fantasy_helper.domain.ports import Alert, AlertPriority, Clock, Notifier, SystemClock
-from fantasy_helper.domain.runs import RunKind, RunRecord, RunStatus, SourceFreshness
+from fantasy_helper.domain.ports import Clock, Notifier, SystemClock
+from fantasy_helper.domain.runs import FailureKind, RunKind, RunRecord, RunStatus, SourceFreshness
+from fantasy_helper.observability.events import RunEvents
 from fantasy_helper.observability.logs import get_logger
+from fantasy_helper.pipeline.retry import (
+    MAX_ATTEMPTS,
+    RETRY_WAITS_SECONDS,
+    classify_exception,
+    classify_status,
+    outcome,
+    wait_before,
+)
 from fantasy_helper.storage.raw_store import RawStore, RawStoreError
 
 log = get_logger(__name__)
@@ -51,6 +64,7 @@ class SnapshotContext:
     espn_season: int  # 2027 for 2026-27
     sleeper_season: str  # "2026" for 2026-27
     sleeper_week: int | None
+    game_log_depth: int = espn.GAME_LOG_DEPTH
 
 
 _NO_CONTEXT = SnapshotContext(espn_season=0, sleeper_season="", sleeper_week=None)
@@ -91,6 +105,11 @@ DATASETS: tuple[Dataset, ...] = (
         espn.validate_players, espn.item_count,
     ),
     Dataset(
+        "espn", "game_logs", MORNING_ONLY,
+        lambda c, ctx: espn.game_logs(c, ctx.espn_season, games=ctx.game_log_depth),
+        espn.validate_game_logs, espn.item_count,
+    ),
+    Dataset(
         "espn", "pro_schedule", MORNING_ONLY,
         lambda c, ctx: espn.pro_schedule(c, ctx.espn_season),
         espn.validate_schedule, espn.item_count,
@@ -124,6 +143,8 @@ class DatasetResult:
     bytes: int
     fetched_at: datetime | None
     error: str | None
+    failure: FailureKind | None = None  # why it failed, and whether a retry can help
+    attempts: int = 1
 
     @property
     def ok(self) -> bool:
@@ -147,19 +168,67 @@ def run_snapshot(
     record: Callable[[RunRecord], None] | None,
     clock: Clock | None = None,
     network_wait_seconds: float = 120.0,
+    only: frozenset[str] | None = None,
+    game_log_depth: int = espn.GAME_LOG_DEPTH,
+    progress: bool = True,
+    sleep: Callable[[float], None] = time.sleep,
+    retry_waits: tuple[float, ...] = RETRY_WAITS_SECONDS,
 ) -> SnapshotResult:
+    """Capture the set's datasets. `only` limits the run to those dataset labels (Sleeper's
+    state is always fetched, for context); use it to backfill, never to skip a scheduled run.
+
+    Datasets that fail in a way a retry can fix run again, alone, up to MAX_ATTEMPTS in all
+    (pipeline.retry). Datasets that succeeded are never fetched twice, and neither is a
+    once-a-day dataset that was saved but flagged: Sleeper asks for its player list at most once
+    a day."""
     clock = clock or SystemClock()
     started = clock.now()
+    events = RunEvents(
+        RunKind.SNAPSHOT,
+        notifier,
+        label=f"{run_set.value.title()} snapshot",
+        progress=progress,
+        clock=clock,
+    )
+    planned = 1 + sum(
+        1 for d in DATASETS if run_set in d.sets and (only is None or d.label in only)
+    )
+    events.started(f"{planned} datasets to save.")
     if not _wait_for_network(client, network_wait_seconds):
         log.warning("snapshot_network_unreachable", waited_seconds=network_wait_seconds)
 
+    chosen = [d for d in DATASETS if run_set in d.sets and (only is None or d.label in only)]
     state_result, state_data = _capture(STATE, client, _NO_CONTEXT, store, run_set)
-    ctx = _context(state_data if state_result.ok else None, started.date())
-    results = [state_result]
-    for dataset in DATASETS:
-        if run_set in dataset.sets:
-            results.append(_capture(dataset, client, ctx, store, run_set)[0])
+    ctx = _context(state_data if state_result.ok else None, started.date(), game_log_depth)
+    by_label: dict[str, DatasetResult] = {STATE.label: state_result}
+    for dataset in chosen:
+        by_label[dataset.label] = _capture(dataset, client, ctx, store, run_set)[0]
 
+    for attempt in range(2, MAX_ATTEMPTS + 1):
+        retry = _retryable(by_label)
+        if not retry:
+            break
+        wait = wait_before(attempt, retry_waits)
+        events.retrying(
+            attempt,
+            MAX_ATTEMPTS,
+            wait,
+            f"{len(retry)} of {len(by_label)} datasets failed in a way a retry can fix.",
+            [f"{label}: {by_label[label].failure.describe}" for label in retry  # type: ignore[union-attr]
+             ],
+        )  # fmt: skip
+        sleep(wait)
+        if STATE.label in retry:
+            state_result, state_data = _capture(STATE, client, _NO_CONTEXT, store, run_set)
+            by_label[STATE.label] = replace(state_result, attempts=attempt)
+            if state_result.ok:
+                ctx = _context(state_data, started.date(), game_log_depth)
+        for dataset in chosen:
+            if dataset.label in retry:
+                result = _capture(dataset, client, ctx, store, run_set)[0]
+                by_label[dataset.label] = replace(result, attempts=attempt)
+
+    results = list(by_label.values())
     failures = [r for r in results if not r.ok]
     if not failures:
         status = RunStatus.SUCCEEDED
@@ -178,14 +247,33 @@ def run_snapshot(
             if r.key is not None and r.fetched_at is not None
         ),
         rows_loaded=sum(r.items for r in results if r.key is not None),
-        errors=tuple(f"{r.label}: {r.error}" for r in failures),
+        errors=tuple(f"{r.label}: {r.error} (attempts: {r.attempts})" for r in failures),
     )
 
     recorded, record_error = _record(record, run)
-    if failures or record_error:
-        _alert(notifier, run_set, results, failures, record_error)
+    _report(events, results, failures, record_error)
     log.info("snapshot_finished", run_set=run_set.value, status=status.value, failed=len(failures))
     return SnapshotResult(run_set=run_set, run=run, results=tuple(results), recorded=recorded)
+
+
+# Sources that ask for at most one request a day: once saved, never fetched again that run,
+# even if the response looked suspicious (it's kept, and flagged, as evidence).
+ONCE_A_DAY = frozenset({"sleeper.players"})
+
+
+def _retryable(by_label: dict[str, DatasetResult]) -> list[str]:
+    """Labels worth another try. A dataset that only lacked Sleeper's state is retried only if
+    the state itself is being retried; a once-a-day dataset that was saved never is."""
+    state = by_label[STATE.label]
+    state_retrying = state.failure is not None and state.failure.retryable
+    return [
+        label
+        for label, r in by_label.items()
+        if r.failure is not None
+        and r.failure.retryable
+        and (r.failure is not FailureKind.MISSING_INPUT or state_retrying)
+        and not (label in ONCE_A_DAY and r.key is not None)
+    ]
 
 
 def _capture(
@@ -195,19 +283,23 @@ def _capture(
     store: RawStore,
     run_set: SnapshotSet,
 ) -> tuple[DatasetResult, Any]:
-    def failed(error: str, response: RawResponse | None = None) -> tuple[DatasetResult, Any]:
-        log.warning("snapshot_dataset_failed", dataset=dataset.label, error=error)
+    def failed(
+        error: str, kind: FailureKind, response: RawResponse | None = None
+    ) -> tuple[DatasetResult, Any]:
+        log.warning("snapshot_dataset_failed", dataset=dataset.label, error=error, kind=kind.value)
         fetched = response.fetched_at if response else None
-        return DatasetResult(dataset.label, None, 0, 0, fetched, error), None
+        return DatasetResult(dataset.label, None, 0, 0, fetched, error, kind), None
 
     try:
         response = dataset.fetch(client, ctx)
     except MissingContextError as exc:
-        return failed(f"skipped: {exc}")
+        return failed(f"skipped: {exc}", FailureKind.MISSING_INPUT)
     except httpx.HTTPError as exc:
-        return failed(f"request failed: {type(exc).__name__}")
+        return failed(f"request failed: {type(exc).__name__}", classify_exception(exc))
     if not response.ok:
-        return failed(f"HTTP {response.status_code}", response)
+        return failed(
+            f"HTTP {response.status_code}", classify_status(response.status_code), response
+        )
 
     try:
         data: Any = json.loads(response.body)
@@ -233,18 +325,26 @@ def _capture(
             },
         )
     except (RawStoreError, OSError) as exc:
-        return failed(f"could not save: {exc}", response)
+        return failed(f"could not save: {exc}", FailureKind.STORAGE, response)
+    # A suspicious response is saved (it's evidence of what changed) but counts as failed: it
+    # may be a partial outage, so it's worth one more look.
+    kind = FailureKind.BAD_RESPONSE if problem else None
     return (
-        DatasetResult(dataset.label, key, items, len(response.body), response.fetched_at, problem),
+        DatasetResult(
+            dataset.label, key, items, len(response.body), response.fetched_at, problem, kind
+        ),
         data,
     )
 
 
-def _context(state: Any, today: date) -> SnapshotContext:
+def _context(state: Any, today: date, game_log_depth: int) -> SnapshotContext:
     season = str(state["season"]) if state else str(season_start_year(today))
     week = int(state["week"]) if state else None
     return SnapshotContext(
-        espn_season=season_end_year(today), sleeper_season=season, sleeper_week=week
+        espn_season=season_end_year(today),
+        sleeper_season=season,
+        sleeper_week=week,
+        game_log_depth=game_log_depth,
     )
 
 
@@ -272,27 +372,27 @@ def _record(record: Callable[[RunRecord], None] | None, run: RunRecord) -> tuple
     return True, None
 
 
-def _alert(
-    notifier: Notifier,
-    run_set: SnapshotSet,
+def _report(
+    events: RunEvents,
     results: list[DatasetResult],
     failures: list[DatasetResult],
     record_error: str | None,
 ) -> None:
-    lines = [f"{r.label}: {r.error}" for r in failures]
+    saved = sum(r.bytes for r in results if r.key is not None)
+    if not failures and not record_error:
+        events.succeeded(f"{len(results)}/{len(results)} datasets saved, {saved / 1e6:.1f} MB.")
+        return
+    lines = [
+        f"{r.label}: {r.error}; {outcome(r.failure or FailureKind.BUG, r.attempts)}"
+        for r in failures
+    ]
     if record_error:
         lines.append(record_error)
     all_failed = len(failures) == len(results)
-    title = f"{run_set.value.title()} snapshot " + ("failed" if all_failed else "incomplete")
     summary = f"{len(failures)} of {len(results)} datasets failed." if failures else "Saved."
-    try:
-        notifier.send(
-            Alert(
-                title=title,
-                message=(summary + "\n" + "\n".join(lines))[:2000],
-                priority=AlertPriority.URGENT if all_failed else AlertPriority.HIGH,
-                tags=("warning",),
-            )
-        )
-    except Exception as exc:
-        log.error("snapshot_alert_failed", error=type(exc).__name__)
+    events.failed(
+        summary,
+        lines,
+        title=f"{events.label} " + ("failed" if all_failed else "incomplete"),
+        urgent=all_failed,
+    )

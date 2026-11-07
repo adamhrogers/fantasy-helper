@@ -126,6 +126,18 @@ class ProjectionRecord(DomainModel):
     game_date: date | None = None  # set when the projection is for one game
 
 
+class GameLogRecord(DomainModel):
+    """One player's line in one NBA game, as the platform reports it (a box score row)."""
+
+    player: PlayerKey
+    external_game_id: str = Field(min_length=1)  # ESPN's game ID, as in ScheduledGameRecord
+    season: int  # the season's end year: 2027 for 2026-27
+    scoring_period: int  # ESPN's scoring day (1 = opening night)
+    team: str | None = None  # the player's NBA team in that game (trades move players)
+    played: bool  # False for a game he sat out: still a row, with no stats
+    stats: StatLine
+
+
 class ScheduledGameRecord(DomainModel):
     external_id: str  # ESPN's game ID
     scoring_period: int  # ESPN's scoring day (1 = opening night)

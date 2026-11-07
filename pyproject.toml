@@ -124,6 +124,7 @@ forbidden_modules = [
 
 [dependency-groups]
 dev = [
+    "hypothesis>=6.170.15",
     "import-linter>=2.15",
     "mypy>=2.4.0",
     "pre-commit>=4.7.0",

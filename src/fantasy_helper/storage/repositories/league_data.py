@@ -8,6 +8,7 @@ from sqlalchemy import delete, func, insert, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from fantasy_helper.domain.league import LeagueRules
 from fantasy_helper.domain.records import (
     MatchupRecord,
     RosterEntryRecord,
@@ -186,3 +187,153 @@ def upsert_transactions(session: Session, league_id: UUID, records: list[Transac
         )
     )
     return len(rows)
+
+
+# ------------------------------------------------------------------------------- reading
+
+
+def latest_rules(session: Session, league_id: UUID) -> tuple[int, LeagueRules] | None:
+    """The league's current settings version and rules."""
+    row = session.scalars(
+        select(LeagueSettingsVersionRow)
+        .where(LeagueSettingsVersionRow.league_id == league_id)
+        .order_by(LeagueSettingsVersionRow.version.desc())
+        .limit(1)
+    ).first()
+    if row is None:
+        return None
+    # The stored JSON includes the computed content_hash, which isn't an input field.
+    fields = {k: v for k, v in row.rules.items() if k != "content_hash"}
+    return row.version, LeagueRules.model_validate(fields)
+
+
+def latest_roster(
+    session: Session, league_id: UUID, team_external_id: str
+) -> list[tuple[UUID, str]]:
+    """(player ID, slot) for one team, from the league's most recent daily roster snapshot."""
+    as_of = session.scalar(
+        select(func.max(RosterEntryRow.as_of)).where(RosterEntryRow.league_id == league_id)
+    )
+    if as_of is None:
+        return []
+    rows = session.execute(
+        select(RosterEntryRow.player_id, RosterEntryRow.slot).where(
+            RosterEntryRow.league_id == league_id,
+            RosterEntryRow.as_of == as_of,
+            RosterEntryRow.team_external_id == team_external_id,
+        )
+    )
+    return [(player_id, slot) for player_id, slot in rows]
+
+
+def reported_player_points(
+    session: Session, league_id: UUID, period: int, team_external_id: str
+) -> dict[str, float] | None:
+    """The points the platform reports for each of a team's players in one period (Sleeper:
+    the week), keyed by the platform's player ID. Checks only, never scoring (ADR 0022)."""
+    row = session.scalars(
+        select(MatchupRow).where(
+            MatchupRow.league_id == league_id,
+            MatchupRow.period == period,
+            (MatchupRow.home_team == team_external_id) | (MatchupRow.away_team == team_external_id),
+        )
+    ).first()
+    if row is None:
+        return None
+    side = "home" if row.home_team == team_external_id else "away"
+    points = (row.detail.get(side) or {}).get("player_points") or {}
+    return {str(k): float(v) for k, v in points.items()}
+
+
+def team_names(session: Session, league_id: UUID) -> dict[str, str]:
+    rows = session.execute(
+        select(TeamRow.external_id, TeamRow.name).where(TeamRow.league_id == league_id)
+    )
+    return {ext: name for ext, name in rows}
+
+
+def opponent(session: Session, league_id: UUID, period: int, team_external_id: str) -> str | None:
+    """The team I face in a matchup period (ESPN's matchup period, Sleeper's week)."""
+    row = session.scalars(
+        select(MatchupRow).where(
+            MatchupRow.league_id == league_id,
+            MatchupRow.period == period,
+            (MatchupRow.home_team == team_external_id) | (MatchupRow.away_team == team_external_id),
+        )
+    ).first()
+    if row is None:
+        return None
+    return row.away_team if row.home_team == team_external_id else row.home_team
+
+
+def latest_rosters(session: Session, league_id: UUID) -> list[tuple[str, UUID, str]]:
+    """(team, player ID, slot) for every team, from the league's latest daily snapshot."""
+    as_of = session.scalar(
+        select(func.max(RosterEntryRow.as_of)).where(RosterEntryRow.league_id == league_id)
+    )
+    if as_of is None:
+        return []
+    rows = session.execute(
+        select(
+            RosterEntryRow.team_external_id, RosterEntryRow.player_id, RosterEntryRow.slot
+        ).where(RosterEntryRow.league_id == league_id, RosterEntryRow.as_of == as_of)
+    )
+    return [(team, pid, slot) for team, pid, slot in rows]
+
+
+def adds_since(session: Session, league_id: UUID, team_external_id: str, since: datetime) -> int:
+    """Completed pickups (free agent or waiver, with an add) by one team since a moment."""
+    rows = session.scalars(
+        select(TransactionRow).where(
+            TransactionRow.league_id == league_id,
+            TransactionRow.team_external_id == team_external_id,
+            TransactionRow.kind.in_(["free_agent", "waiver"]),
+            TransactionRow.status == "executed",
+            TransactionRow.proposed_at >= since,
+        )
+    )
+    return sum(1 for t in rows if any(i.get("action") == "add" for i in t.items))
+
+
+def reported_points_by_period(
+    session: Session, league_id: UUID, period: int
+) -> list[tuple[str, float]]:
+    """(platform player ID, reported points) for every player on both sides of every matchup in
+    one period. Checks only, never scoring (ADR 0022)."""
+    out: list[tuple[str, float]] = []
+    for row in session.scalars(
+        select(MatchupRow).where(MatchupRow.league_id == league_id, MatchupRow.period == period)
+    ):
+        for side in row.detail.values():
+            for pid, points in ((side or {}).get("player_points") or {}).items():
+                out.append((str(pid), float(points)))
+    return out
+
+
+def roster_on(session: Session, league_id: UUID, as_of: date) -> list[tuple[str, UUID, str]]:
+    """(team, player ID, slot) for every team on one day, if that day's snapshot exists."""
+    rows = session.execute(
+        select(
+            RosterEntryRow.team_external_id, RosterEntryRow.player_id, RosterEntryRow.slot
+        ).where(RosterEntryRow.league_id == league_id, RosterEntryRow.as_of == as_of)
+    )
+    return [(team, pid, slot) for team, pid, slot in rows]
+
+
+def reported_team_points(
+    session: Session, league_id: UUID, period: int, team_external_id: str
+) -> dict[int, float]:
+    """A team's points per scoring day in one matchup, as the platform reports them (ESPN).
+    Checks only, never scoring (ADR 0022)."""
+    row = session.scalars(
+        select(MatchupRow).where(
+            MatchupRow.league_id == league_id,
+            MatchupRow.period == period,
+            (MatchupRow.home_team == team_external_id) | (MatchupRow.away_team == team_external_id),
+        )
+    ).first()
+    if row is None:
+        return {}
+    side = "home" if row.home_team == team_external_id else "away"
+    by_day = (row.detail.get(side) or {}).get("points_by_period") or {}
+    return {int(k): float(v) for k, v in by_day.items()}

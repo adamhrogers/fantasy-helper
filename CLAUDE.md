@@ -17,6 +17,8 @@ uv run alembic revision --autogenerate --rev-id 0002 -m "..."   # new migration
 uv run fh doctor                          # check config, encryption, DB, tracing, alerts
 uv run fh snapshot                        # save today's raw public data (launchd runs it twice a day)
 uv run fh ingest                          # load leagues + snapshots into the database (idempotent)
+uv run fh run daily [--dry-run] [--open]  # ingest, lock-or-pass calls (logged), daily report page
+uv run fh run weekly [--open]             # ingest, weekly overview per league (FactSheets, calls)
 uv run fh fixtures record                 # re-record redacted fixtures (then update contract test counts)
 scripts/snapshot-schedule.sh status       # snapshot schedule state and logs
 ```
@@ -31,6 +33,7 @@ scripts/snapshot-schedule.sh status       # snapshot schedule state and logs
 6. **Keep the Claude API key out of the shell used to run Claude Code.** The app reads `FH_ANTHROPIC_API_KEY` from `.env` and never `ANTHROPIC_API_KEY`.
 7. **One ADR per architecture choice** in `docs/decisions/`: what, why, what was rejected.
 8. **Daily snapshots are never skipped or rewritten.** A missed day can't be recovered (ADR 0014).
+9. **One box score per player and game, for every league** (ADR 0022). Leagues differ only in their rules, read from each league's own settings. Never assume scoring from a platform, and never score from platform-reported points (those are only checks).
 
 ## Architecture contracts (enforced by `lint-imports`)
 
@@ -43,11 +46,12 @@ scripts/snapshot-schedule.sh status       # snapshot schedule state and logs
 
 - **Time:** every datetime is timezone-aware UTC (`domain._base.UtcDatetime`; Ruff's DTZ rules ban naive datetimes). Convert to the user's zone only for display.
 - **Domain models** subclass `DomainModel`: frozen, unknown fields rejected. Invariants live in validators (for example, the tip-off guard on `Recommendation`).
-- **New tables** enable row-level security in their migration (`ALTER TABLE ... ENABLE ROW LEVEL SECURITY`, no policies). `tests/integration` fails otherwise.
+- **New tables** enable row-level security in their migration (`ALTER TABLE ... ENABLE ROW LEVEL SECURITY`, no policies). `tests/integration` fails otherwise. Season-scoped tables carry a season (directly or through their league), so a season can be archived to R2 and removed (ADR 0021). Store stats as typed columns, not JSONB.
+- **Hot reads** (agents, MCP tools, the API) come from pre-computed read models (`fact_sheets`, `league_player_values`) with one indexed query per tool call. History tables are for batch jobs (ADR 0020).
 - **Migrations** are numbered by hand (`--rev-id 0002`). CI runs `alembic check`, so models and migrations can't drift.
 - **Structured LLM output** always uses `method="json_schema"`, never forced tool calls (ADR 0015).
 - **Logging** uses `observability.logs.get_logger`, never `print`. Keys that name a secret are redacted automatically.
-- **Ops alerts** go through `observability.alerts` and never contain secrets or league data.
+- **Run events** (ops notifications to the phone) go through `observability.events.RunEvents`: started → steps → succeeded | warned | failed ([docs/runbooks/run-events.md](docs/runbooks/run-events.md)). They're about runs only, never secrets or league data. Anything the user acts on is product push from the phone app.
 - **Tests** never read the real `.env` (an autouse fixture isolates them). DB tests only run against a database whose name contains `test`.
 - **Dates in docs** are absolute (2026-11-02), never relative.
 - **Adapters** return platform records keyed by the platform's own player IDs (`domain.records`); only ingest resolves them to canonical players through `identity`.

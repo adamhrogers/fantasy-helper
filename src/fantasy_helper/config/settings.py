@@ -41,6 +41,8 @@ class Settings(BaseSettings):
 
     ntfy_topic: SecretStr | None = Field(default=None, alias="FH_NTFY_TOPIC")
     ntfy_server: str = Field(default="https://ntfy.sh", alias="FH_NTFY_SERVER")
+    # Quiet run events (started, steps, succeeded). Failures and warnings are always sent.
+    notify_progress: bool = Field(default=True, alias="FH_NOTIFY_PROGRESS")
 
     # Local raw payload store (daily snapshots) until it moves to R2 in M3. Git-ignored.
     data_dir: Path = Field(default=Path("data"), alias="FH_DATA_DIR")

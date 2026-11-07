@@ -1,6 +1,6 @@
 # Session handoff: everything a new session needs
 
-**Last updated:** 2026-11-06, at the end of M1 (the session that built M0 and M1).
+**Last updated:** 2026-11-06, at the end of the M2 session. M2 is PR #3, reviewed, with all 15 findings fixed, CI green and every review thread resolved: ready for Adam to merge. M1 was merged as PR #2. **Next: M3** (phone app and delivery).
 **Read this first**, then `CLAUDE.md` (rules), `docs/roadmap.md` (milestones), `docs/architecture.md` (design) and `docs/decisions/` (ADRs). This file is the narrative glue: what exists, how we work, what we learned the hard way, and exactly what comes next.
 
 The repo is **public**, so this file holds no secrets or personal data. League names and IDs, the owner's email, the Supabase project ID and the ntfy topic live in `.env` and the database. `uv run fh league list` shows the leagues.
@@ -21,16 +21,54 @@ A fantasy basketball assistant for Adam (customer one), then a friends beta, the
 | Milestone | Status |
 |---|---|
 | M0 Foundation | **Done, merged** (PR #1) |
-| M1 Data spike | **Done**: branch `m1-data-spike`, PR #2 |
-| M2 Scoring + weekly overview | **Next** (Nov 7–12) |
-| M3 Phone app + delivery | **Next, in parallel with M2** (Nov 7–12) |
-| M4–M8, P9–P12 | See `docs/roadmap.md` v0.4. Friends beta **Nov 29**, hard stop **Dec 15**. |
+| M1 Data spike | **Done, merged** (PR #2) |
+| Pre-M2 review | **Done**: latency (ADR 0020), storage budget and season archive (ADR 0021), lock-in moved to M2 |
+| M2 Scoring, weekly overview, **Sleeper lock-in** | **Done: PR #3, ready for Adam to merge** (branch `m2-scoring`). Built:
+- box scores: `espn.game_logs`, migration 0003, backfilled from opening night (6,935 rows)
+- typed projection columns and read-path indexes (dev database at 0003)
+- **one box score for every league** (ADR 0022, CLAUDE.md rule 9): complete for every game played, internally consistent, and every league's settings mapped onto it, missed shots and fouls included
+- `engine/scoring.py` with golden and property tests, verified against ESPN (155/155) and Sleeper (417/417 on Sleeper's own stats; 405/417 on ESPN's, the 12 from one-stat feed differences): [spikes/m2-scoring-check.md](spikes/m2-scoring-check.md)
+
+- **lock-in v1 built (uncommitted at first):** `engine/distributions.py`, `engine/lock_in.py`, `facts/lock_in.py`, the append-only `recommendations` table (migration 0004, a trigger refuses UPDATE and DELETE; dev is at 0004), `fh run daily [--dry-run] [--open]`, and the engine-only daily report as a local page. The first 8 calls were logged in dev on 2026-11-06 at 7:54 pm ET.
+- **Locks:** Adam gave his real week-3 locks. Sleeper's weekly numbers fit no rule against them (they flip between pulls minutes apart), so cards show every open decision and lock detection is **parked** (Adam, 2026-11-06): the lock-or-pass recommendation is enough for now. A user-set lock flag on the roster stays an idea for later.
+
+- **Weekly overview built:**
+  - `engine/schedule.py` (daily lineups, most specific slot first)
+  - `engine/valuation.py`, `engine/win_probability.py`, `engine/streaming.py` (greedy; only drops players below replacement on their season average) and `engine/baselines.py`
+  - `facts/weekly.py`, `domain/facts.py` (FactSheet v1, about 1,400 tokens)
+  - migration 0005: `fact_sheets` (append-only) and `league_player_values` (replaced each run); dev is at 0005
+  - `reports/weekly.py`, `fh run weekly`
+  - Moves and the whole-week matchup forecast are logged as calls.
+- **Mid-week runs project the rest of the week only,** with no win probability, because realized points so far aren't counted yet.
+- **Projections are blended with game logs:** the projection counts as 10 games of evidence, because RotoWire sometimes projects a bench player far above what he does.
+
+- **Daily reconciliation built:** `pipeline/reconcile.py` checks box scores against each platform's own numbers every morning. First live run: ESPN 75/75, Sleeper 271/275.
+
+- **Mid-week win probability built** for daily-lineup leagues:
+  - ingest stores ESPN's lineup for each finished day of the week (`view=mRoster&scoringPeriodId`, recorded fixture `espn_points/lineups.json`);
+  - banked points = each day's starters times our box scores (ADR 0022);
+  - checked against ESPN's own daily totals (live: 773 vs 773).
+  - Lock-in leagues still show "rest of the week" (locks invisible).
+
+- **PR #3 open; review fixed (2026-11-06).** A `/code-review` posted 15 findings as inline comments on the PR; all are fixed, each reply names its commit. The ones that change behaviour:
+  - players ruled out or suspended no longer fall back to their season projection;
+  - games that tipped today count once they're over (banked in daily-lineup leagues, lockable in lock-in leagues);
+  - streaming never drops a player without a season average yet;
+  - one failed day of ESPN lineups no longer fails the league;
+  - the daily check skips teams whose games we haven't loaded box scores for;
+  - categories leagues store no value over replacement.
+  - A matchup period that started before this week (the All-Star break) is flagged, with no banked points or win probability, until periods are mapped properly.
+
+Left for later: see §7. |
+| M3 Phone app + delivery | **Next** (Nov 7–12), in its own session and worktree. Adam is creating the accounts ([runbooks/m3-account-setup.md](runbooks/m3-account-setup.md)). |
+| M4–M8, P9–P12 | See `docs/roadmap.md` v0.5. Friends beta **Nov 29**, hard stop **Dec 15**. |
 
 ### What runs today
 - **`fh snapshot`** runs on Adam's Mac through launchd: the morning set at **06:30** and the pre-tip evening set at **17:30** local time (America/New_York). It saves raw ESPN and Sleeper public data to `data/raw/` (git-ignored). History has accumulated since **2026-11-06**. Check it with `scripts/snapshot-schedule.sh status`; logs are in `~/Library/Logs/fantasy-helper/` (JSON lines). A sleeping Mac runs missed jobs on wake; a Mac that's shut down skips them, until M3 moves this to the cloud.
 - **`fh ingest`** is run by hand for now. It loads every not-yet-loaded snapshot plus fresh league data into Supabase, takes about 30 seconds, and is idempotent. First live run: 1,100 ESPN players; **all 1,852 active Sleeper players** (the Sleeper league has 142 rostered, all linked to ESPN, and **1,710 free agents**, 889 linked to ESPN and 410 with Sleeper projections); 1,200 games; 9 projection snapshots (8,490 rows); 226 injury changes; full rosters, matchups and transactions for all three leagues.
-- **Supabase dev project**, migrated to **0002**. There's no prod project yet (M3).
-- **LangSmith tracing** works (`fh doctor` sends a smoke trace). **ntfy ops alerts** reach Adam's phone. iPhone notifications needed a settings fix, which is done.
+- **`fh run daily` and `fh run weekly`** are run by hand (M3 schedules them). Each runs ingest first, which now also loads box scores and ESPN's lineup for each finished day. They write local HTML pages (`--open` opens them) and log every call in the registry. `fh run daily --dry-run` saves nothing.
+- **Supabase dev project**, migrated to **0005**. There's no prod project yet (M3).
+- **LangSmith tracing** works (`fh doctor` sends a smoke trace). **ntfy run events** reach Adam's phone: every run sends started, steps and success quietly and failures loudly, and it's ops only; product notifications come from the PWA ([runbooks/run-events.md](runbooks/run-events.md), added 2026-11-06). iPhone notifications needed a settings fix, which is done.
 - **GitHub:** `adamhrogers/fantasy-helper`, public. CI runs lint, mypy, contracts, tests on Postgres 17, `alembic check`, and a gitleaks full-history scan. Adam was asked to run `gh secret set LANGSMITH_API_KEY` so CI sends a smoke trace; **unconfirmed**, and the step is skipped (not failed) without it.
 
 ### Adam's three leagues (all 10 teams, season 2026-27 = `season 2027`)
@@ -46,7 +84,7 @@ The spec said "friends beta not in Adam's competitive ESPN leagues; possibly the
 
 - **Plans first, explicit approval for anything big or outward-facing.** He reviews plans and says "go for it" before code. **Every commit, push, PR and installed background job was explicitly approved** ("Commit it", "Install it"). Ask with a short question and buttons; don't assume. Approval doesn't carry over to the next action.
 - **One branch and one PR per milestone** (`m0-foundation`, `m1-data-spike`), merged into `main` **by Adam**. Commits within a milestone are made at checkpoints he approves ("M1 (part 1)", "part 2", …).
-- **Commit footer:** `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. **PR body footer:** `🤖 Generated with [Claude Code](https://claude.com/claude-code)`. After opening a PR, use the app's PR tools (get_status / bind) and offer Auto-fix; Adam turned it on for PR #1.
+- **Commit footer:** `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. **PR body footer:** `🤖 Generated with [Claude Code](https://claude.com/claude-code)`. After opening a PR, use the app's PR tools (get_status / bind) and offer Auto-fix; Adam turned it on for PR #1 and PR #3.
 - **Secrets never pass through chat.**
   - Keys are generated straight into `.env` without being printed.
   - ESPN cookies are typed at `fh league add`'s hidden prompt.
@@ -54,13 +92,15 @@ The spec said "friends beta not in Adam's competitive ESPN leagues; possibly the
   - Scripts that touch real league data print **structure and counts only**, never member names.
 - **Style he likes:** plain language, concise, step-by-step for anything he has to do by hand, with commands in their own fenced `bash` blocks. He asks "what is X?" questions; answer them directly. He isn't attached to specific tools and accepts reasoned recommendations.
 - **He wants the reasoning and the honest state:** what was verified, what wasn't, and false alarms called false alarms. He specifically asked for a leak audit before merging M0. It was clean: `.env` never committed, none of his secret values in history or the PR, gitleaks and GitHub secret scanning clean.
+- **Code reviews go on GitHub** (Adam, PR #3): post the findings as inline review comments on the PR, fix them all, reply on each comment with the fixing commit and its test, then resolve the threads. He merges once the threads are resolved and CI is green.
+- **Live data has context** (Adam, 2026-11-06): reason with dates and the matchup week as a whole; games in progress today aren't final. Don't fit a rule to data that isn't consistent; say it doesn't fit (that's how lock detection got parked).
 - **Parallelism:** sub-agents and parallel sessions are fine once a plan is approved. M2 and M3 are the natural pair to split (they share no files).
 
 ## 4. Architecture as built (quick map)
 
 Layers, enforced by import-linter in CI: `cli` → `api | mcp_server` → `pipeline` → `evaluation` → `brain | reports | delivery` → `facts | registry` → `engine | identity` → `storage | adapters` → `observability` → `config` → `domain`. The engine is pure (no storage, adapters or I/O); the brain sees only FactSheets and MCP tools. **A new top-level package must be added to the contracts in `pyproject.toml`.**
 
-| Area | What exists (M0 + M1) |
+| Area | What exists (M0 + M1; M2 additions in the next table) |
 |---|---|
 | `domain/` | Frozen Pydantic models, UTC-only (`UtcDatetime`). `league.py`: `LeagueRules` (hashed), `ScoringRules` with `bonuses`, ratio `CategoryRule`s (FG%), named `RosterSlot`s (`SLOT_POSITIONS`), `AcquisitionLimits.per_matchup_per_day`. `records.py`: **platform records keyed by each platform's own IDs** (`PlayerKey`, `SourcePlayer`, `RosterEntryRecord`, `MatchupRecord`, `TransactionRecord`, `ProjectionRecord`, `InjuryRecord`, `ScheduledGameRecord`, `RulesRecord`). Also recommendations (tip-off guard), takes, trades, evaluations (timeline points), reports (`ReportDocument`), runs, ports. |
 | `adapters/` | `_http.py`: `get_raw` with retries, `secret_headers` (sent, never recorded) and list-valued params. `espn/public.py` (no login), `espn/league.py` (cookies), `espn/mapper.py`; the same three for `sleeper/`. `redaction.py`: the fixture redactor and leak checker. **Mappers are pure functions.** |
@@ -68,8 +108,19 @@ Layers, enforced by import-linter in CI: `cli` → `api | mcp_server` → `pipel
 | `storage/` | SQLAlchemy 2.1, Alembic `0001` + `0002`, `crypto.py` (AES-GCM bound to the owner), `raw_store.py` (append-only), repositories: users, leagues, credentials, players, league_data, nba, runs. |
 | `pipeline/` | `snapshot.py`, `onboarding.py` (`fh league add`), `fixtures.py` (`fh fixtures record`), `ingest.py`. |
 | `observability/` | `logs.py` (structlog with secret redaction), `tracing.py` (LangSmith), `alerts.py` (ntfy). |
-| `cli/` | `fh version | keygen | doctor | snapshot | league add/list | fixtures record | ingest`. |
-| Empty, waiting | `engine`, `facts`, `brain`, `registry`, `reports`, `delivery`, `evaluation`, `api`, `mcp_server` (docstring only). |
+| `cli/` | `fh version | keygen | doctor | snapshot | league add/list | fixtures record | ingest | run daily | run weekly`. |
+| Empty, waiting | `brain`, `delivery`, `evaluation`, `api`, `mcp_server` (docstring only). |
+
+**Added in M2:**
+
+| Area | What exists |
+|---|---|
+| `engine/` | Pure math: `scoring` (each league's weights and bonuses on the shared box score), `distributions` (projection blended with game logs, spread shrunk to a league prior), `lock_in` (backward induction, plus `week_value` for a week's lock-in value), `schedule` (daily lineups, most specific slot first), `valuation`, `win_probability`, `streaming`, `baselines`, `reconcile`. |
+| `facts/` | `lock_in.py`, `weekly.py` (FactSheet v1: banked points, the rest of the week, adds left, `period_mismatch`), `availability.py` (out or suspended players get no season fallback). |
+| `registry/` | `calls.log_call`: append-only, deduped, tip-off guard. |
+| `reports/` | `daily.py` (lock-or-pass cards), `weekly.py`, `html.py` (local pages). |
+| `pipeline/` | `daily.py`, `weekly.py`, `lock_calls.py`, `reconcile.py` (the daily check), `retry.py` (`run_with_retries`: retries only failures a retry can fix). |
+| `observability/` | `events.py`: `RunEvents` (ops-only ntfy, [runbooks/run-events.md](runbooks/run-events.md)). |
 
 ### Database (Supabase Postgres; every table has RLS on with no policies)
 - **0001:** `users`, `leagues`, `platform_credentials` (encrypted), `runs` (run log).
@@ -82,6 +133,9 @@ Layers, enforced by import-linter in CI: `cli` → `api | mcp_server` → `pipel
   - `transactions` (items keep platform IDs; resolve through the crosswalk when reading)
   - `projection_snapshots` (unique `raw_key`) and `projection_rows` (per-game stats JSONB, `games`, `game_date` for per-game rows)
   - `injury_observations` (changes only)
+- **0003:** `player_game_stats` (box scores, one typed `REAL` column per stat, ADR 0022), `raw_loads`, typed projection columns, read-path indexes.
+- **0004:** `recommendations` (append-only; a trigger refuses UPDATE and DELETE).
+- **0005:** `fact_sheets` (append-only) and `league_player_values` (replaced each run), the read models (ADR 0020).
 
 ### Raw store layout
 `data/raw/<source>/<dataset>/<YYYY-MM-DD>/<HHMMSSffffff>Z.json.gz` plus a `.meta.json` sidecar. League data lives under the dataset `leagues/<league_id>/<name>`. Never overwrite. It moves to R2 in M3.
@@ -113,7 +167,7 @@ Full write-up: `docs/spikes/m1-data-sources.md`.
 
 ## 6. Engineering practices and gotchas
 
-**Commands:** `uv sync`, `uv run pytest`, `uv run ruff check . && uv run ruff format .`, `uv run mypy` (strict), `uv run lint-imports`, `uv run alembic upgrade head`, `uv run fh doctor`. There are 140 tests: unit, contract (`tests/contract/`) and integration (DB).
+**Commands:** `uv sync`, `uv run pytest`, `uv run ruff check . && uv run ruff format .`, `uv run mypy` (strict), `uv run lint-imports`, `uv run alembic upgrade head`, `uv run fh doctor`. There are 257 tests: unit, golden (`tests/golden/`, the hand-checked scores), contract (`tests/contract/`) and integration (DB).
 
 **Database tests locally** need a throwaway Postgres. Homebrew's `postgresql@17` is installed but **isn't a service**:
 ```bash
@@ -142,34 +196,58 @@ TCP only, because long scratch paths exceed the 103-byte Unix socket limit. `LC_
 9. **langchain-anthropic defaults `with_structured_output` to forced tool calls**, which current Sonnet/Opus reject. Always pass `method="json_schema"` (ADR 0015).
 10. **Ruff S105** flags enum values containing "pass" (lock-or-pass); the code uses targeted `# noqa: S105` with a reason. Curly apostrophes in strings trip RUF001, so write `’`.
 11. Scripts that read downloaded or raw data run with `uv run python -I` from a scratch folder, and print structure only.
+12. **Supabase Free, checked against its docs on 2026-11-06:**
+    - 500 MB database size, a billing quota with Fair Use restrictions when exceeded
+    - 2 GB fixed disk, read-only at 95%
+    - 500 MB RAM; two active projects
+    - pauses after a week idle
+    - **no automatic backups**
+
+    The dev project is in `us-east-1`.
+13. **Measured latency and size (2026-11-06; ADRs 0020, 0021):**
+    - **From the Mac:** about 34 ms per query round trip and about 600 ms per new connection. Hot queries take 0.3–2.7 ms on the server.
+    - **One synthetic season:** 720,000 projection rows. At JSONB's real size (about 380 bytes a row) that's about 275 MB; typed columns cut it to 173 bytes a row.
+    - **Five seasons:** 2 GB, so past seasons go to Parquet in R2 (about 13 MB a season of projections).
+    - **Bloat:** a bulk insert that fails and rolls back leaves dead rows that inflate table size until `VACUUM FULL`. Measure sizes on a clean load.
 
 ## 7. Exactly what's next
 
-**First:** Adam reviews and merges PR #2 (M1). Then:
+### After Adam merges PR #3
+- The dev database is already at 0005; nothing to migrate. Prod gets 0001–0005 from scratch in M3.
+- Delete the local branch `m2-scoring` once merged.
 
-### M2: Scoring layer and weekly overview (Nov 7–12), this repo, `engine/` + `facts/` + `reports/`
-1. **Game logs (moved here from M1).** Add an ESPN per-game actuals dataset (`kona_player_info` with `filterStatsForTopScoringPeriodIds`; entries `statSourceId 0, split 5` carry `externalId` = the ESPN game ID). Add a `player_game_stats` table (migration 0003, with RLS) linked to `nba_games`. Backfill from opening night, then pull daily in snapshot or ingest.
-2. **`engine/scoring.py`:** per-game fantasy points = Σ stat × weight + bonuses (threshold per game). Golden tests: **five players hand-calculated in each points league** (the M2 exit criterion), kept forever in `tests/golden/`.
-3. **`engine/schedule.py`:** games per week from `nba_games`; **startable** games under roster slots and daily locks. Sleeper lock-in counts one game per starter per week.
-   - Open item: map ESPN matchup periods to scoring days. `scheduleSettings.matchupPeriods` and the matchups' `pointsByScoringPeriod` keys both carry this; weeks run Monday to Sunday, and the All-Star break makes a long week.
-4. **`engine/valuation.py`:** replacement level = the best free agent at the slot in *this* league. Free agents = players with projections minus today's `roster_entries`.
-5. **`engine/distributions.py`** (from game logs, shrunk toward the projection), `streaming.py` (greedy plan within the per-day add rate), `win_probability.py` (normal approximation), `baselines.py`.
-6. **`facts/`:** FactSheet v1. **`reports/`:** the weekly `ReportDocument`, rendered locally (CLI to HTML). Categories-league valuation is P8, so the 9-cat league gets games and roster facts only in M2.
-- The engine must stay pure: load data in `facts`/`pipeline`, pass plain domain objects into `engine`. Use hypothesis property tests for the math.
+### Left from M2 (none blocks M3)
+- **ESPN matchup periods:** map `scheduleSettings.matchupPeriods` to scoring days **before the All-Star break** (February). Until then a period that started before this calendar week is flagged (`period_mismatch`), with no banked points or win probability.
+- **Mid-week win probability for lock-in leagues:** needs lock data. Lock detection is parked (Adam, 2026-11-06); the plan is the one-tap "I locked / I passed" button in the PWA (lock-in v2, M5).
+- **Categories-league valuation:** P9. The 9-cat league gets games and roster facts only.
+- **Snapshot days are permanent:** keep launchd running until M3's cloud schedule is live.
 
 ### M3: Phone app and delivery (Nov 7–12, parallel), best as its own session and worktree
-FastAPI on Google Cloud Run; Supabase **prod** project and Supabase Auth (magic link, invite-only, Adam is user one); PWA (Vite + React + TS + vite-plugin-pwa) on Cloudflare Pages; Web Push (VAPID); move snapshot + ingest from launchd to **GitHub Actions** cron with the raw store on **Cloudflare R2** (then uninstall the launchd jobs, and upload the local `data/raw` backlog to R2 first); ntfy alerts for failed or late runs. **Adam must create accounts first:** Supabase prod project, Cloudflare (Pages + R2), a Google Cloud project with billing (Cloud Run free tier). Plus GitHub secrets (prod `DATABASE_URL`, `FH_ENCRYPTION_KEY` for **prod, a different key**, VAPID keys, ntfy topic, R2 credentials). Done when a scheduled run, with the laptop closed, pushes the weekly overview to his phone.
+- **Build:**
+  - FastAPI on Google Cloud Run in **`us-east4`**, with one pooled engine per process.
+  - Supabase **prod** project in **`us-east-1`**, with Supabase Auth (magic link, invite-only, Adam is user one).
+  - PWA (Vite + React + TS + vite-plugin-pwa) on Cloudflare Pages, with Web Push (VAPID).
+- **Move the schedule:** snapshot, ingest and the daily run go from launchd to **GitHub Actions** cron, with the raw store on **Cloudflare R2**. Upload the local `data/raw` backlog to R2 first, then uninstall the launchd jobs.
+- **Ops:**
+  - a **nightly backup** of the tables that can't be rebuilt, to R2 (ADR 0021)
+  - ntfy alerts for failed, missing or late runs and for database size
+- **Adam's account setup** is a checklist he works through during M2: [runbooks/m3-account-setup.md](runbooks/m3-account-setup.md). Production secrets live in the GitHub environment `prod`: `DATABASE_URL`, `FH_ENCRYPTION_KEY` (**a different key from dev**), `FH_NTFY_TOPIC`, `LANGSMITH_API_KEY` and `FH_R2_*`. VAPID keys are generated in M3.
+- **Done when:** a scheduled run, with the laptop closed, pushes the daily report (lock-or-pass cards) and the weekly overview to his phone.
 
 ### Open items
 - **Q6:** how fast projections react to injuries. Analyze `projection_rows` against `injury_observations` once a week or so of snapshots exists.
 - Beta friends and leagues (needed by M7). The RatBall note goes out only if RatBall data is used.
 - The 821 unmatched Sleeper players are all non-rostered and **aren't in ESPN Fantasy's player pool**, so there's nothing to link them to. Overrides stay empty until ingest warns about a rostered one. Ingest reports linked pairs with conflicting birth dates (2 known data errors: Gortman, Edey); that's informational.
-- ESPN activity-feed trades: P9. Categories-league logic: P8.
-- Confirm Adam set the `LANGSMITH_API_KEY` GitHub secret.
+- ESPN activity-feed trades: P9. Categories-league logic: P9.
+- Confirm Adam set the `LANGSMITH_API_KEY` GitHub secret (now step 1 of the M3 setup runbook).
+- **Storage levers (ADR 0021),** if the 60% size alert fires: store only changed projection rows, and store only roster changes. Season rollover to the R2 archive: P11.
+- **Before M7:** friend invites need a custom email sender for Supabase Auth (the built-in one only reaches organization members, 2 emails an hour), which needs a domain Adam owns.
 
 ## 8. Session history (for orientation)
 
 - **2026-10-16:** read the 25-page spec; architecture, repo structure and roadmap drafted.
 - **2026-10-19:** Adam's review. User and league data go in the database behind auth (not `.env`); timeline graphs for takes, calls and trades added; M3 split; Supabase from day one; decisions D1–D10.
 - **2026-10-25 to 11-06:** M0 built. Supabase dev, LangSmith and ntfy set up together (pooler URL, iPhone notification fix); PR #1 audited for leaks and merged.
-- **2026-11-06:** M1. Snapshots started and scheduled; `fh league add` for three leagues; ESPN and Sleeper explored; the redacting recorder; mappers; identity; tables; `fh ingest` run live twice; ADRs 0016–0019; roadmap v0.4; this handoff doc.
+- **2026-11-06:** M1. Snapshots started and scheduled; `fh league add` for three leagues; ESPN and Sleeper explored; the redacting recorder; mappers; identity; tables; `fh ingest` run live twice; ADRs 0016–0019; roadmap v0.4; this handoff doc. PR #2 merged.
+- **2026-11-06 (pre-M2 review):** Adam asked for low latency for agents and a future chat, and for room to keep history for future years. Latency was measured against Supabase dev, and one and five synthetic seasons were benchmarked locally. Result: ADR 0020 (read models, few batched tools, in-process MCP, one region) and ADR 0021 (typed projection columns, a size alert, the season archive to R2, nightly backups). Sleeper lock-in moved to M2, as cards in the daily report. The M3 account-setup runbook was written for Adam.
+- **2026-11-06 (M2):** one box score for every league (ADR 0022) and scoring verified against both platforms; run events and retries; lock-in v1 in an engine-only daily report (lock detection parked after Adam's real locks fit no rule); the weekly overview with FactSheet v1 and read models; the daily reconciliation; a mid-week win probability for daily-lineup leagues (exact against ESPN's daily totals). PR #3 opened with Auto-fix on; a `/code-review` posted 15 findings as inline comments, all fixed in one commit, each comment answered and resolved.

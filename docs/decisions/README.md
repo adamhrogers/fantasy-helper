@@ -2,6 +2,15 @@
 
 One short entry per architecture choice: what was decided, why, and what was rejected (spec: Observability and code quality). Entries are never deleted; a reversed decision gets a new ADR that supersedes the old one.
 
+**When to write one:** for choices that are expensive to reverse, or that someone will later ask "why?" about. Smaller decisions live in the doc they affect: a runbook, the architecture, the roadmap. Run-level retries, for example, are in `docs/runbooks/run-events.md`, not an ADR.
+
+**How an ADR changes after it's accepted** (the common practice, which this log follows):
+- **The decision is reversed:** write a new ADR, and change the old one's status line to "Superseded by NNNN". Nothing else in the old one changes.
+- **The decision holds but grows or gets clearer:** add a dated **Update** section at the bottom of the same ADR, as 0003 and 0011 have. The original text stays as written.
+- **Typos and broken links:** just fix them.
+
+Git keeps every version of every ADR (`git log -p docs/decisions/0011-*.md`), and this index shows each one's current status.
+
 | ADR | Decision | Status |
 |---|---|---|
 | [0001](0001-python-langgraph-langsmith.md) | Python, with LangGraph and LangChain for agents and LangSmith for tracing | Accepted · 2026-10-15 (decided in the spec) |
@@ -23,6 +32,9 @@ One short entry per architecture choice: what was decided, why, and what was rej
 | [0017](0017-raw-zone-and-interim-snapshots.md) | Raw snapshots on the laptop until M3; ingest loads from them | Accepted · 2026-11-06 |
 | [0018](0018-identity-by-name.md) | Match players across platforms by name, conservatively | Accepted · 2026-11-06 |
 | [0019](0019-espn-trades-from-activity-feed.md) | Every league trade comes from ESPN's activity feed | Accepted · 2026-11-06 (for the trade tracker, P9) |
+| [0020](0020-read-models-and-latency.md) | Low-latency reads: computed ahead, few tools, same region | Accepted · 2026-11-06 |
+| [0021](0021-storage-budget-and-season-archive.md) | Storage budget: Postgres holds the current season, R2 keeps everything | Accepted · 2026-11-06 |
+| [0022](0022-one-box-score-for-every-league.md) | One box score for every league; leagues differ only in their rules | Accepted · 2026-11-06 |
 
 ## Template
 

@@ -32,6 +32,7 @@ from fantasy_helper.storage.repositories import credentials, leagues
 
 FIXTURES_ROOT = Path("tests/fixtures/recorded")
 ESPN_PUBLIC_PLAYERS = 40
+FIXTURE_GAME_LOG_DEPTH = 12  # covers every game so far this season for the sampled players
 SCHEDULE_TEAMS_KEPT = 6
 
 
@@ -110,6 +111,8 @@ def record_fixtures(
             }
         matchups = _slim(_json(espn_league.fetch_matchups(*args)))
         latest = int(settings["status"]["latestScoringPeriod"])
+        lineup_period = max(latest - 2, 1)  # a finished day
+        lineups = _slim(_json(espn_league.fetch_lineups(*args, lineup_period)))
         by_period = {
             str(p): redact_espn(
                 _json(espn_league.fetch_transactions(*args, p)), r, league_id=lg.external_id
@@ -125,6 +128,8 @@ def record_fixtures(
             Fixture(f"{alias}/matchups.json", redact_espn(matchups, r, league_id=lid),
                     "views mMatchupScore + mScoreboard; player stats emptied, "
                     "delayed roster copies dropped"),
+            Fixture(f"{alias}/lineups.json", redact_espn(lineups, r, league_id=lid),
+                    f"view mRoster for scoring period {lineup_period}; player stats emptied"),
             Fixture(
                 f"{alias}/transactions.json",
                 {"by_scoring_period": by_period},
@@ -177,12 +182,20 @@ def _public_fixtures(
             espn_public.players_projections(client, espn_season, limit=ESPN_PUBLIC_PLAYERS)
         )
         espn_player_ids |= {str(p["id"]) for p in players.get("players", [])}
+        game_logs = _json(
+            espn_public.game_logs(
+                client, espn_season, games=FIXTURE_GAME_LOG_DEPTH, limit=ESPN_PUBLIC_PLAYERS
+            )
+        )
         schedule = _json(espn_public.pro_schedule(client, espn_season))
         teams = schedule["settings"]["proTeams"]
         schedule["settings"]["proTeams"] = teams[:SCHEDULE_TEAMS_KEPT]
         out += [
             Fixture("espn_public/players_projections.json", players,
                     f"top {ESPN_PUBLIC_PLAYERS} players by ownership"),
+            Fixture("espn_public/game_logs.json", game_logs,
+                    f"top {ESPN_PUBLIC_PLAYERS} players by ownership, each player's last "
+                    f"{FIXTURE_GAME_LOG_DEPTH} team games"),
             Fixture("espn_public/pro_schedule.json", schedule,
                     f"trimmed to the first {SCHEDULE_TEAMS_KEPT} of {len(teams)} teams for size"),
         ]  # fmt: skip
@@ -206,17 +219,37 @@ def _public_fixtures(
     return out
 
 
-def write_fixtures(fixtures: list[Fixture], root: Path, recorded_at: datetime) -> list[Path]:
+HOW = "uv run fh fixtures record (redacted; see src/fantasy_helper/adapters/redaction.py)"
+
+
+def write_fixtures(
+    fixtures: list[Fixture],
+    root: Path,
+    recorded_at: datetime,
+    only: frozenset[str] | None = None,
+) -> list[Path]:
+    """Write fixtures and the manifest. With `only`, write just those paths and keep every other
+    file and manifest entry as it was, so adding a fixture doesn't re-record the rest (whose
+    counts contract tests pin)."""
+    chosen = [f for f in fixtures if only is None or f.path in only]
     written = []
-    for fixture in fixtures:
+    for fixture in chosen:
         path = root / fixture.path
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(fixture.serialized() + "\n", encoding="utf-8")
         written.append(path)
-    manifest = {
-        "recorded_at": recorded_at.isoformat(),
-        "how": "uv run fh fixtures record (redacted; see src/fantasy_helper/adapters/redaction.py)",
-        "files": {f.path: f.note for f in fixtures},
-    }
-    (root / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    manifest_path = root / "manifest.json"
+    if only is not None and manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["files"] |= {f.path: f.note for f in chosen}
+        manifest["updated"] = manifest.get("updated", {}) | {
+            f.path: recorded_at.isoformat() for f in chosen
+        }
+    else:
+        manifest = {
+            "recorded_at": recorded_at.isoformat(),
+            "how": HOW,
+            "files": {f.path: f.note for f in chosen},
+        }
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return written
