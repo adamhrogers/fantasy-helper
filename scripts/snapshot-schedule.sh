@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Run the daily snapshots on this Mac with launchd until M3 moves them to GitHub Actions.
+# M3 part 1 built the cloud job; this stays installed through a two-day overlap, then is
+# uninstalled (docs/runbooks/cloud-snapshots.md, ADR 0023).
 #
 #   scripts/snapshot-schedule.sh install     # 06:30 morning set, 17:30 evening set (local time)
 #   scripts/snapshot-schedule.sh status      # job state, last exit code, recent log lines

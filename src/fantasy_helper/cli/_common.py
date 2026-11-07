@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from fantasy_helper.config import Settings
 from fantasy_helper.storage import crypto
 from fantasy_helper.storage.db import make_engine
+from fantasy_helper.storage.raw_store import RawStore, RawStoreError, raw_store_from_settings
 
 
 def fail(message: str) -> typer.Exit:
@@ -27,6 +28,14 @@ def require_db_and_key(settings: Settings) -> tuple[str, bytes]:
     except crypto.CryptoError as exc:
         raise fail(f"FH_ENCRYPTION_KEY is invalid: {exc}") from exc
     return settings.database_url.get_secret_value(), key
+
+
+def open_raw_store(settings: Settings) -> RawStore:
+    """The raw store FH_RAW_STORE names (ADR 0023), or a clean CLI failure if it's misconfigured."""
+    try:
+        return raw_store_from_settings(settings)
+    except RawStoreError as exc:
+        raise fail(str(exc)) from exc
 
 
 @contextmanager

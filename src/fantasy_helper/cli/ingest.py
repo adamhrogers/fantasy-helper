@@ -1,12 +1,11 @@
 """`fh ingest`: load every league and the public NBA data into the database."""
 
 import time
-from pathlib import Path
 
 import typer
 
 from fantasy_helper.adapters._http import make_client
-from fantasy_helper.cli._common import fail, require_db_and_key, transaction
+from fantasy_helper.cli._common import fail, open_raw_store, require_db_and_key, transaction
 from fantasy_helper.config import get_settings
 from fantasy_helper.domain.ports import SystemClock
 from fantasy_helper.domain.runs import RunKind, RunRecord, RunStatus
@@ -19,7 +18,7 @@ from fantasy_helper.pipeline.ingest import (
     run_ingest,
 )
 from fantasy_helper.pipeline.retry import RunStoppedError, outcome, run_with_retries
-from fantasy_helper.storage.raw_store import LocalRawStore
+from fantasy_helper.storage.raw_store import RawStore
 from fantasy_helper.storage.repositories import users
 from fantasy_helper.storage.repositories.runs import record_run
 
@@ -33,6 +32,7 @@ def ingest() -> None:
     """Load all your leagues, the schedule, projections and injuries into the database."""
     settings = get_settings()
     url, key = require_db_and_key(settings)
+    store = open_raw_store(settings)
     clock = SystemClock()
     started = clock.now()
     events = events_from_settings(settings, RunKind.INGEST, label="Ingest")
@@ -41,7 +41,7 @@ def ingest() -> None:
     # and the leagues (or the whole run) that failed in a retryable way get another go.
     try:
         report, attempt = run_with_retries(
-            lambda: _run_once(url, key, settings.data_dir, events),
+            lambda: _run_once(url, key, store, events),
             events,
             retryable_parts=_retryable_leagues,
             describe_parts=lambda r, n: (
@@ -99,13 +99,13 @@ def _retryable_leagues(report: IngestReport) -> int:
     return sum(1 for lg in report.leagues if lg.failure is not None and lg.failure.retryable)
 
 
-def _run_once(url: str, key: bytes, data_dir: Path, events: RunEvents) -> IngestReport:
+def _run_once(url: str, key: bytes, store: RawStore, events: RunEvents) -> IngestReport:
     with transaction(url) as session, make_client() as client:
         owner = users.get_owner(session)
         if owner is None:
             raise fail("no user yet: run `fh league add` first")
         return run_ingest(
-            session, client, store=LocalRawStore(data_dir / "raw"), user=owner, key=key,
+            session, client, store=store, user=owner, key=key,
             events=events,
         )  # fmt: skip
 

@@ -11,18 +11,23 @@ from sqlalchemy.orm import Session
 from fantasy_helper import __version__
 from fantasy_helper.adapters._http import make_client
 from fantasy_helper.adapters.espn.public import GAME_LOG_DEPTH
-from fantasy_helper.cli import fixtures, leagues, run
+from fantasy_helper.cli import fixtures, leagues, raw, run
+from fantasy_helper.cli._common import fail
 from fantasy_helper.cli.doctor import Check, Status, run_checks
 from fantasy_helper.cli.ingest import ingest as ingest_command
 from fantasy_helper.config import Settings, get_settings
+from fantasy_helper.domain.ports import Alert, AlertPriority, Notifier, SystemClock
 from fantasy_helper.domain.runs import RunRecord, RunStatus
 from fantasy_helper.observability.alerts import notifier_from_settings
-from fantasy_helper.observability.logs import configure_logging
+from fantasy_helper.observability.logs import configure_logging, get_logger
+from fantasy_helper.pipeline.cron import UnknownCronError, job_for
 from fantasy_helper.pipeline.snapshot import DATASETS, SnapshotSet, run_snapshot
 from fantasy_helper.storage.crypto import generate_key
 from fantasy_helper.storage.db import make_engine
-from fantasy_helper.storage.raw_store import LocalRawStore
+from fantasy_helper.storage.raw_store import RawStoreError, raw_store_from_settings
 from fantasy_helper.storage.repositories.runs import record_run
+
+log = get_logger(__name__)
 
 app = typer.Typer(
     name="fh",
@@ -35,6 +40,7 @@ app = typer.Typer(
 app.add_typer(leagues.app, name="league")
 app.add_typer(fixtures.app, name="fixtures")
 app.add_typer(run.app, name="run")
+app.add_typer(raw.app, name="raw")
 app.command("ingest")(ingest_command)
 
 _SYMBOLS = {Status.OK: "✓", Status.SKIP: "-", Status.FAIL: "✗"}
@@ -79,14 +85,26 @@ def doctor(
         raise typer.Exit(code=1)
 
 
+_SNAPSHOT_JOBS = {"snapshot-morning": SnapshotSet.MORNING, "snapshot-evening": SnapshotSet.EVENING}
+
+
 @app.command()
 def snapshot(
     run_set: Annotated[
-        SnapshotSet,
+        SnapshotSet | None,
         typer.Option(
-            "--set", help="morning: everything; evening: pre-tip injuries and projections."
+            "--set",
+            help="morning (default): everything; evening: pre-tip injuries and projections.",
         ),
-    ] = SnapshotSet.MORNING,
+    ] = None,
+    cron: Annotated[
+        str | None,
+        typer.Option(
+            "--cron",
+            help="The GitHub cron entry that started this run. It picks the set, or exits "
+            "quietly if the entry is for the other UTC offset today (pipeline/cron.py).",
+        ),
+    ] = None,
     only: Annotated[
         list[str] | None,
         typer.Option(
@@ -103,26 +121,77 @@ def snapshot(
     if unknown:
         typer.echo(f"✗ unknown dataset {', '.join(sorted(unknown))}", err=True)
         raise typer.Exit(code=2)
+    if cron is not None:
+        if run_set is not None:
+            typer.echo("✗ use --set or --cron, not both", err=True)
+            raise typer.Exit(code=2)
+        try:
+            job = job_for(cron, SystemClock().now())
+        except UnknownCronError as exc:
+            typer.echo(f"✗ {exc}", err=True)
+            raise typer.Exit(code=2) from exc
+        if job is None:
+            typer.echo(f"skipped: cron {cron!r} is the other UTC offset's entry today")
+            return
+        if job not in _SNAPSHOT_JOBS:
+            typer.echo(f"✗ cron {cron!r} is for {job}, not a snapshot", err=True)
+            raise typer.Exit(code=2)
+        run_set = _SNAPSHOT_JOBS[job]
+    run_set = run_set or SnapshotSet.MORNING
     settings = get_settings()
-    with make_client() as client:
-        result = run_snapshot(
-            run_set,
-            client=client,
-            store=LocalRawStore(settings.data_dir / "raw"),
-            notifier=notifier_from_settings(settings),
-            record=_run_log(settings),
-            only=frozenset(only) if only else None,
-            game_log_depth=game_log_depth,
-            progress=settings.notify_progress,
-        )
+    notifier = notifier_from_settings(settings)
+    label = f"{run_set.value.title()} snapshot"
+    try:
+        store = raw_store_from_settings(settings)
+    except RawStoreError as exc:
+        _alert_crash(notifier, label, "the raw store isn't configured")
+        raise fail(str(exc)) from exc
+    record = _run_log(settings)
+    try:
+        with make_client() as client:
+            result = run_snapshot(
+                run_set,
+                client=client,
+                store=store,
+                notifier=notifier,
+                record=record,
+                only=frozenset(only) if only else None,
+                game_log_depth=game_log_depth,
+                progress=settings.notify_progress,
+            )
+    except Exception as exc:
+        _alert_crash(notifier, label, f"an unexpected {type(exc).__name__}")
+        raise
     for r in result.results:
-        detail = f"{r.items:>5} items {r.bytes / 1024:>6.0f} KB" if r.key else ""
+        if r.reused:
+            detail = "already saved today"
+        else:
+            detail = f"{r.items:>5} items {r.bytes / 1024:>6.0f} KB" if r.key else ""
         typer.echo(f"{'✓' if r.ok else '✗'} {r.label:<28} {detail}  {r.error or ''}".rstrip())
     ok = sum(1 for r in result.results if r.ok)
-    logged = "run logged" if result.recorded else "run NOT logged"
+    if record is None:
+        logged = "run not logged (no DATABASE_URL)"
+    else:
+        logged = "run logged" if result.recorded else "run NOT logged"
     typer.echo(f"{result.run.status.value}: {ok}/{len(result.results)} datasets saved, {logged}")
-    if result.run.status is not RunStatus.SUCCEEDED or not result.recorded:
+    if result.run.status is not RunStatus.SUCCEEDED or (record is not None and not result.recorded):
         raise typer.Exit(code=1)
+
+
+def _alert_crash(notifier: Notifier, label: str, what: str) -> None:
+    """A loud alert for a run that stopped before or outside its own run events. Names the
+    kind of failure only, never the exception's text. Never raises."""
+    try:
+        notifier.send(
+            Alert(
+                title=f"{label} crashed",
+                message=f"It stopped on {what}. Nothing after that ran; see the run's log.",
+                priority=AlertPriority.URGENT,
+                tags=("rotating_light",),
+            )
+        )
+    except Exception as exc:
+        log.error("crash_alert_failed", error=type(exc).__name__)
 
 
 def _run_log(settings: Settings) -> Callable[[RunRecord], None] | None:

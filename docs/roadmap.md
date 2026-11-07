@@ -129,6 +129,8 @@ These steps depend on each other, so they're ordered. B and C run in parallel at
 
 **Goal:** prove the whole path from scheduled job to sign-in to push before any LLM work starts.
 
+**Status (Nov 6):** started on branch `m3-phone-app`, in five parts (session-handoff §7). **Part 1, cloud snapshots, is built** (ADR 0023): the raw store on R2, `fh raw upload` for the laptop's backlog, and the snapshot job on GitHub Actions on Eastern time. It goes live after Adam's accounts and a two-day overlap with launchd. Because scheduled workflows run only from `main`, M3 merges part by part.
+
 | Lane | Work |
 |---|---|
 | A — API + auth | FastAPI on Cloud Run in **`us-east4`** with one pooled database engine per process, **Supabase Auth** (magic link; Adam is user one), reports and push-subscription routes, Supabase prod project in **`us-east-1`** (ADR 0020) |

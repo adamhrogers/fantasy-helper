@@ -18,7 +18,7 @@ import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Any
 
@@ -41,7 +41,7 @@ from fantasy_helper.pipeline.retry import (
     outcome,
     wait_before,
 )
-from fantasy_helper.storage.raw_store import RawStore, RawStoreError
+from fantasy_helper.storage.raw_store import RawStore, RawStoreError, RawStoreUnavailableError
 
 log = get_logger(__name__)
 
@@ -145,6 +145,7 @@ class DatasetResult:
     error: str | None
     failure: FailureKind | None = None  # why it failed, and whether a retry can help
     attempts: int = 1
+    reused: bool = False  # a once-a-day dataset another run already saved today
 
     @property
     def ok(self) -> bool:
@@ -201,8 +202,11 @@ def run_snapshot(
     state_result, state_data = _capture(STATE, client, _NO_CONTEXT, store, run_set)
     ctx = _context(state_data if state_result.ok else None, started.date(), game_log_depth)
     by_label: dict[str, DatasetResult] = {STATE.label: state_result}
+    today = started.astimezone(UTC).date()
     for dataset in chosen:
-        by_label[dataset.label] = _capture(dataset, client, ctx, store, run_set)[0]
+        by_label[dataset.label] = (
+            _saved_today(dataset, store, today) or _capture(dataset, client, ctx, store, run_set)[0]
+        )
 
     for attempt in range(2, MAX_ATTEMPTS + 1):
         retry = _retryable(by_label)
@@ -259,6 +263,21 @@ def run_snapshot(
 # Sources that ask for at most one request a day: once saved, never fetched again that run,
 # even if the response looked suspicious (it's kept, and flagged, as evidence).
 ONCE_A_DAY = frozenset({"sleeper.players"})
+
+
+def _saved_today(dataset: Dataset, store: RawStore, today: date) -> DatasetResult | None:
+    """A once-a-day dataset that another run (the laptop or the cloud) already saved today
+    isn't fetched again. If the store can't tell, the dataset is fetched as usual."""
+    if dataset.label not in ONCE_A_DAY:
+        return None
+    try:
+        saved = store.keys_on(dataset.source, dataset.name, today)
+    except (RawStoreError, OSError):
+        return None
+    if not saved:
+        return None
+    log.info("snapshot_dataset_already_saved", dataset=dataset.label, key=saved[-1])
+    return DatasetResult(dataset.label, saved[-1], 0, 0, None, None, reused=True)
 
 
 def _retryable(by_label: dict[str, DatasetResult]) -> list[str]:
@@ -324,6 +343,9 @@ def _capture(
                 "snapshot_set": run_set.value,
             },
         )
+    except RawStoreUnavailableError as exc:
+        # Worth a retry, even for a once-a-day dataset: nothing was saved.
+        return failed(f"could not save: {exc}", FailureKind.STORAGE_DOWN, response)
     except (RawStoreError, OSError) as exc:
         return failed(f"could not save: {exc}", FailureKind.STORAGE, response)
     # A suspicious response is saved (it's evidence of what changed) but counts as failed: it
@@ -380,7 +402,11 @@ def _report(
 ) -> None:
     saved = sum(r.bytes for r in results if r.key is not None)
     if not failures and not record_error:
-        events.succeeded(f"{len(results)}/{len(results)} datasets saved, {saved / 1e6:.1f} MB.")
+        reused = sum(1 for r in results if r.reused)
+        note = f" {reused} already saved today by another run." if reused else ""
+        events.succeeded(
+            f"{len(results)}/{len(results)} datasets saved, {saved / 1e6:.1f} MB.{note}"
+        )
         return
     lines = [
         f"{r.label}: {r.error}; {outcome(r.failure or FailureKind.BUG, r.attempts)}"

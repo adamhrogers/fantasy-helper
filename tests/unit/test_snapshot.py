@@ -1,5 +1,7 @@
 import json
 import re
+from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -10,7 +12,7 @@ from fantasy_helper.adapters import _http
 from fantasy_helper.domain.ports import Alert, AlertPriority
 from fantasy_helper.domain.runs import RunKind, RunRecord, RunStatus
 from fantasy_helper.pipeline.snapshot import SnapshotResult, SnapshotSet, run_snapshot
-from fantasy_helper.storage.raw_store import LocalRawStore
+from fantasy_helper.storage.raw_store import LocalRawStore, RawStoreUnavailableError
 
 
 def espn_players(n: int) -> dict[str, object]:
@@ -116,7 +118,8 @@ def run(
             raise RuntimeError("database down")
         recorded.append(run_record)
 
-    notifier, store = FakeNotifier(), LocalRawStore(tmp_path / "raw")
+    notifier = FakeNotifier()
+    store = options.pop("store", None) or LocalRawStore(tmp_path / "raw")
     with _http.make_client(transport=httpx.MockTransport(handler)) as client:
         result = run_snapshot(
             run_set,
@@ -307,3 +310,79 @@ def test_a_flagged_once_a_day_dataset_is_never_fetched_again(tmp_path: Path) -> 
     assert players.key is not None  # kept as evidence
     assert players.error is not None  # flagged
     assert calls["n"] == 1  # Sleeper asks for at most one request a day
+
+
+class FixedClock:
+    def __init__(self, at: datetime) -> None:
+        self.at = at
+
+    def now(self) -> datetime:
+        return self.at
+
+
+MORNING = datetime(2026, 11, 7, 11, 17, tzinfo=UTC)
+
+
+def never_twice() -> object:
+    raise AssertionError("fetched Sleeper's player list twice in one day")
+
+
+def test_the_player_list_is_fetched_once_a_day_across_machines(tmp_path: Path) -> None:
+    """The laptop and the cloud both run the morning set while they overlap (ADR 0023)."""
+    earlier = MORNING - timedelta(minutes=13)
+    LocalRawStore(tmp_path / "raw").put(
+        source="sleeper", dataset="players", fetched_at=earlier, body=b"{}", meta={}
+    )
+    result, notifier, _, _ = run(
+        tmp_path, overrides={"sleeper.players": never_twice}, clock=FixedClock(MORNING)
+    )
+    players = next(r for r in result.results if r.label == "sleeper.players")
+    assert (players.ok, players.reused) == (True, True)
+    assert players.key is not None
+    assert players.key.startswith("sleeper/players/2026-11-07/")
+    assert result.run.status is RunStatus.SUCCEEDED
+    assert "1 already saved today by another run" in notifier.alerts[-1].message
+
+
+def test_yesterdays_player_list_doesnt_count(tmp_path: Path) -> None:
+    LocalRawStore(tmp_path / "raw").put(
+        source="sleeper", dataset="players", fetched_at=MORNING - timedelta(days=1), body=b"{}",
+        meta={},
+    )  # fmt: skip
+    result, _, _, _ = run(tmp_path, clock=FixedClock(MORNING))
+    players = next(r for r in result.results if r.label == "sleeper.players")
+    assert (players.ok, players.reused, players.items) == (True, False, 1200)
+
+
+class FlakyStore(LocalRawStore):
+    """R2 is unreachable for the first write of one dataset."""
+
+    def __init__(self, root: Path, dataset: str) -> None:
+        super().__init__(root)
+        self.failing = {dataset}
+
+    def put(
+        self,
+        *,
+        source: str,
+        dataset: str,
+        fetched_at: datetime,
+        body: bytes,
+        meta: Mapping[str, object],
+    ) -> str:
+        if dataset in self.failing:
+            self.failing.discard(dataset)
+            raise RawStoreUnavailableError("R2 unreachable (write: ConnectTimeoutError)")
+        return super().put(
+            source=source, dataset=dataset, fetched_at=fetched_at, body=body, meta=meta
+        )
+
+
+def test_an_r2_outage_while_saving_is_retried(tmp_path: Path) -> None:
+    WAITS.clear()
+    store = FlakyStore(tmp_path / "raw", "players_projections")
+    result, notifier, _, _ = run(tmp_path, store=store)
+    espn = next(r for r in result.results if r.label == "espn.players_projections")
+    assert (espn.ok, espn.attempts) == (True, 2)
+    assert WAITS == [120.0]
+    assert "the raw store (R2) was unreachable" in notifier.alerts[1].message

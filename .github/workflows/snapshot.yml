@@ -1,0 +1,82 @@
+# Daily snapshots in the cloud (ADR 0023): the raw public data, saved twice a day to R2.
+# A missed day can't be recovered (ADR 0014), so this runs whether or not the laptop is on.
+#
+# GitHub's cron is UTC. Each set has an entry for Eastern Standard Time and one for Eastern
+# Daylight Time; `fh snapshot --cron` runs only the entry that matches New York's offset today,
+# so the sets run at 06:17 and 17:17 Eastern all year (pipeline/cron.py, tested against this
+# file). Off the hour on purpose: GitHub delays scheduled runs most at the top of the hour.
+name: Snapshot
+
+on:
+  schedule:
+    - cron: "17 11 * * *"  # morning, 06:17 EST
+    - cron: "17 10 * * *"  # morning, 06:17 EDT
+    - cron: "17 22 * * *"  # evening, 17:17 EST
+    - cron: "17 21 * * *"  # evening, 17:17 EDT
+  workflow_dispatch:
+    inputs:
+      set:
+        description: "Which set to capture"
+        type: choice
+        options: [morning, evening]
+        default: morning
+
+permissions:
+  contents: read
+
+concurrency:
+  group: snapshot
+  cancel-in-progress: false  # never cancel a snapshot that's saving
+
+jobs:
+  snapshot:
+    name: Save today's snapshot
+    runs-on: ubuntu-latest
+    environment: prod
+    timeout-minutes: 30  # a full set with two retry waits takes about 10 minutes
+    env:
+      FH_ENV: prod
+      FH_LOG_JSON: "true"
+      FH_RAW_STORE: r2
+      FH_R2_ENDPOINT: ${{ secrets.FH_R2_ENDPOINT }}
+      FH_R2_ACCESS_KEY_ID: ${{ secrets.FH_R2_ACCESS_KEY_ID }}
+      FH_R2_SECRET_ACCESS_KEY: ${{ secrets.FH_R2_SECRET_ACCESS_KEY }}
+      FH_NTFY_TOPIC: ${{ secrets.FH_NTFY_TOPIC }}
+      # DATABASE_URL (the run log) is added once prod is migrated, in M3 part 2.
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install
+        run: uv sync --locked --no-dev
+
+      - name: Snapshot
+        id: snapshot
+        env:
+          CRON: ${{ github.event.schedule }}
+          SET: ${{ inputs.set }}
+        run: |
+          if [ -n "$CRON" ]; then
+            uv run --no-sync fh snapshot --cron "$CRON"
+          else
+            uv run --no-sync fh snapshot --set "$SET"
+          fi
+
+      # The app reports its own failures, including crashes. This covers the steps before it
+      # (checkout, install), which fail before any Python runs.
+      - name: Alert if the job failed before the snapshot ran
+        if: failure() && steps.snapshot.outcome != 'failure'
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          [ -n "$FH_NTFY_TOPIC" ] || exit 0
+          curl -sS --max-time 20 \
+            -H "Title: Snapshot job failed before it started" \
+            -H "Priority: urgent" \
+            -H "Tags: rotating_light" \
+            -H "Click: $RUN_URL" \
+            -d "The GitHub job broke before the snapshot ran. Tap to open the run." \
+            "https://ntfy.sh/$FH_NTFY_TOPIC"

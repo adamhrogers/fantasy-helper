@@ -27,7 +27,7 @@ from fantasy_helper.adapters.espn.mapper import EspnMappingError
 from fantasy_helper.adapters.sleeper.mapper import SleeperMappingError
 from fantasy_helper.domain.runs import FailureKind
 from fantasy_helper.observability.events import RunEvents
-from fantasy_helper.storage.raw_store import RawStoreError
+from fantasy_helper.storage.raw_store import RawStoreError, RawStoreUnavailableError
 
 MAX_ATTEMPTS = 3
 RETRY_WAITS_SECONDS = (120.0, 300.0)  # before attempt 2, before attempt 3
@@ -60,6 +60,8 @@ def classify_exception(exc: BaseException) -> FailureKind:
         return FailureKind.FORMAT_CHANGED
     if isinstance(exc, json.JSONDecodeError):
         return FailureKind.BAD_RESPONSE
+    if isinstance(exc, RawStoreUnavailableError):
+        return FailureKind.STORAGE_DOWN
     if isinstance(exc, (RawStoreError, OSError)):
         return FailureKind.STORAGE
     return FailureKind.BUG

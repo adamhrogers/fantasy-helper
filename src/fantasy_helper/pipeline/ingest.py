@@ -46,7 +46,7 @@ from fantasy_helper.identity.crosswalk import CrosswalkReport, Resolver, sync_pl
 from fantasy_helper.observability.events import RunEvents
 from fantasy_helper.observability.logs import get_logger
 from fantasy_helper.pipeline.retry import classify_exception, outcome
-from fantasy_helper.storage.raw_store import RawStore
+from fantasy_helper.storage.raw_store import RawStore, fetched_at_from_key
 from fantasy_helper.storage.repositories import credentials, database, leagues, nba, raw_loads
 from fantasy_helper.storage.repositories import league_data as store_league
 
@@ -454,7 +454,8 @@ def _load_injuries(
     ):
         since = nba.latest_injury_observed_at(session, provider)
         for key in store.keys(source, dataset):
-            observed_at = datetime.fromisoformat(store.meta(key)["fetched_at"])
+            # From the key, not the sidecar: one less read per payload, every run (R2).
+            observed_at = fetched_at_from_key(key)
             if since is not None and observed_at <= since:
                 continue
             data = json.loads(store.get(key))
