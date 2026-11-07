@@ -1,0 +1,49 @@
+# Dependencies update themselves (ADR 0024). Dependabot opens grouped PRs, CI tests them, and
+# .github/workflows/dependabot-auto-merge.yml merges each one once the required checks pass.
+#
+# - Security fixes come whenever an advisory lands, one grouped PR per ecosystem, any version.
+# - Version updates come weekly, Monday 07:00 Eastern (after the morning snapshot, so a bad
+#   merge has all day to show up before the evening set), for releases at least 7 days old:
+#   a compromised or broken release is usually pulled within days.
+# - Python major versions aren't proposed: they can pass CI and still change behavior, so
+#   they're bumped on purpose inside a milestone. Action majors are proposed, because CI runs
+#   the same actions the snapshot job uses, and GitHub retires old majors anyway.
+version: 2
+updates:
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: America/New_York
+    cooldown:
+      default-days: 7
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]  # version updates only, not security
+    groups:
+      python:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: [minor, patch]
+      python-security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: America/New_York
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        applies-to: version-updates
+        patterns: ["*"]
+      actions-security:
+        applies-to: security-updates
+        patterns: ["*"]

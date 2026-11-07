@@ -1,0 +1,44 @@
+# Merges Dependabot's PRs once CI passes, so dependency updates need no one (ADR 0024).
+#
+# This only *enables* GitHub's auto-merge: GitHub merges when main's required checks pass, and
+# never if they fail. Without required checks, auto-merge could merge before CI finishes, so the
+# first step refuses unless main's ruleset requires both CI jobs (runbooks/dependency-updates.md).
+#
+# No third-party actions: this job can write to the repo, so it runs only GitHub's own `gh`.
+name: Dependabot auto-merge
+
+on: pull_request
+
+permissions: {}
+
+jobs:
+  auto-merge:
+    name: Merge when CI passes
+    # Dependabot's own PRs, from a branch in this repo (never a fork).
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]'
+      && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write       # auto-merge merges into main
+      pull-requests: write  # and is set on the PR
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      BASE: ${{ github.event.pull_request.base.ref }}
+      PR_URL: ${{ github.event.pull_request.html_url }}
+    steps:
+      - name: Require CI on the base branch
+        run: |
+          missing=$(gh api "repos/$GITHUB_REPOSITORY/rules/branches/$BASE" --jq '
+            [.[] | select(.type == "required_status_checks")
+             | .parameters.required_status_checks[].context] as $required
+            | ["Lint, types, contracts, tests", "Secret scan (full history)"] - $required
+            | join(", ")')
+          if [ -n "$missing" ]; then
+            echo "::error::$BASE doesn't require these checks: $missing. Auto-merge could merge before CI passes, so this PR stays open. Add the ruleset in docs/runbooks/dependency-updates.md."
+            exit 1
+          fi
+
+      - name: Merge once the required checks pass
+        run: gh pr merge --auto --squash "$PR_URL"
