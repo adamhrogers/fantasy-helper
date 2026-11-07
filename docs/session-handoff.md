@@ -16,7 +16,7 @@ A fantasy basketball assistant for Adam (customer one), then a friends beta, the
 - **Evidence over opinion.** Every call is logged before tip-off and never edited; inputs are versioned snapshots; grades come later, against a baseline.
 - **Adapters isolate platforms.** ESPN's API is unofficial; when it changes, only `adapters/espn/` changes.
 
-## 2. Where things stand (2026-11-06)
+## 2. Where things stand (2026-11-07)
 
 | Milestone | Status |
 |---|---|
@@ -60,16 +60,16 @@ A fantasy basketball assistant for Adam (customer one), then a friends beta, the
   - A matchup period that started before this week (the All-Star break) is flagged, with no banked points or win probability, until periods are mapped properly.
 
 Left for later: see §7. |
-| M3 Phone app + delivery | **In progress** (Nov 7–12), branch `m3-phone-app`. Part 1 (cloud snapshots on R2, ADR 0023) is built and tested; it goes live after Adam's accounts and a two-day overlap ([runbooks/cloud-snapshots.md](runbooks/cloud-snapshots.md)). Adam's account checklist: [runbooks/m3-account-setup.md](runbooks/m3-account-setup.md). |
+| M3 Phone app + delivery | **In progress** (Nov 7–12). **Part 1 merged** (PR #4, 2026-11-07): cloud snapshots on R2 (ADR 0023), live since 10:56 ET that day; the cutover is under way, with the laptop as an independent backup until part 5 ([runbooks/cloud-snapshots.md](runbooks/cloud-snapshots.md)). **Dependabot merged** (PR #5, ADR 0024): updates merge themselves once CI passes. Adam's accounts: sections 1–4 done, 5–6 not started ([runbooks/m3-account-setup.md](runbooks/m3-account-setup.md)); everything that exists: [runbooks/accounts-and-secrets.md](runbooks/accounts-and-secrets.md). |
 | M4–M8, P9–P12 | See `docs/roadmap.md` v0.5. Friends beta **Nov 29**, hard stop **Dec 15**. |
 
 ### What runs today
-- **`fh snapshot`** runs on Adam's Mac through launchd: the morning set at **06:30** and the pre-tip evening set at **17:30** local time (America/New_York). It saves raw ESPN and Sleeper public data to `data/raw/` (git-ignored). History has accumulated since **2026-11-06**. Check it with `scripts/snapshot-schedule.sh status`; logs are in `~/Library/Logs/fantasy-helper/` (JSON lines). A sleeping Mac runs missed jobs on wake; a Mac that's shut down skips them. **M3 part 1 built the cloud job** (`.github/workflows/snapshot.yml`, 06:17 and 17:17 Eastern, writing to R2); it goes live once merged, and launchd is removed after two clean days of overlap.
+- **`fh snapshot`** runs on Adam's Mac through launchd: the morning set at **06:30** and the pre-tip evening set at **17:30** local time (America/New_York). It saves raw ESPN and Sleeper public data to `data/raw/` (git-ignored). History has accumulated since **2026-11-06**. Check it with `scripts/snapshot-schedule.sh status`; logs are in `~/Library/Logs/fantasy-helper/` (JSON lines). A sleeping Mac runs missed jobs on wake; a Mac that's shut down skips them. **The cloud job is live** since 2026-11-07 10:56 ET (`.github/workflows/snapshot.yml`, 06:17 and 17:17 Eastern, writing to R2; first run 17:17 that day). The laptop keeps saving to its own disk, independently, until four clean cloud runs **and** the Healthchecks watchdog (part 5); then launchd is removed (ADR 0023, Update 2026-11-07). The backlog (1,716 files on 2026-11-07) isn't in R2 yet: cutover step 2.
 - **`fh ingest`** is run by hand for now. It loads every not-yet-loaded snapshot plus fresh league data into Supabase, takes about 30 seconds, and is idempotent. First live run: 1,100 ESPN players; **all 1,852 active Sleeper players** (the Sleeper league has 142 rostered, all linked to ESPN, and **1,710 free agents**, 889 linked to ESPN and 410 with Sleeper projections); 1,200 games; 9 projection snapshots (8,490 rows); 226 injury changes; full rosters, matchups and transactions for all three leagues.
 - **`fh run daily` and `fh run weekly`** are run by hand (M3 schedules them). Each runs ingest first, which now also loads box scores and ESPN's lineup for each finished day. They write local HTML pages (`--open` opens them) and log every call in the registry. `fh run daily --dry-run` saves nothing.
-- **Supabase dev project**, migrated to **0005**. There's no prod project yet (M3).
+- **Supabase dev project**, migrated to **0005**. The **prod project** exists since 2026-11-07 and its `DATABASE_URL` is in GitHub's `prod` environment; it isn't migrated yet (part 2).
 - **LangSmith tracing** works (`fh doctor` sends a smoke trace). **ntfy run events** reach Adam's phone: every run sends started, steps and success quietly and failures loudly, and it's ops only; product notifications come from the PWA ([runbooks/run-events.md](runbooks/run-events.md), added 2026-11-06). iPhone notifications needed a settings fix, which is done.
-- **GitHub:** `adamhrogers/fantasy-helper`, public. CI runs lint, mypy, contracts, tests on Postgres 17, `alembic check`, and a gitleaks full-history scan. The repository secret `LANGSMITH_API_KEY` is set, and CI's smoke trace passes on `main` (checked 2026-11-06).
+- **GitHub:** `adamhrogers/fantasy-helper`, public. CI runs lint, mypy, contracts, tests on Postgres 17, `alembic check`, and a gitleaks full-history scan. The repository secret `LANGSMITH_API_KEY` is set, and CI's smoke trace passes on `main` (checked 2026-11-06). Since 2026-11-07: the `prod` environment (only `main`; 7 of 8 secrets), the `main` ruleset (both CI jobs required, admin bypass), and Dependabot with auto-merge. Every action is pinned to a commit.
 
 ### Adam's three leagues (all 10 teams, season 2026-27 = `season 2027`)
 | Fixture alias | Platform / format | Adam's team | Key rules |
@@ -213,25 +213,25 @@ TCP only, because long scratch paths exceed the 103-byte Unix socket limit. `LC_
 ## 7. Exactly what's next
 
 ### Found on 2026-11-07
-- **The laptop runs M1 code.** Its main checkout was 8 commits behind (`git pull` never ran after PR #3), so launchd's snapshots have no `espn.game_logs` (box scores can be backfilled with `fh snapshot --only espn.game_logs --game-log-depth 30`) and no M2 run events. Fix: `git pull` in `~/projects/fantasy-helper`.
+- **The laptop ran M1 code. Fixed:** its main checkout is at `02c3f0f` (M3 part 1) since 2026-11-07. After every merge, `git pull` there: launchd runs whatever that checkout holds.
 - **Sleeper re-issued its season projections** (06:30 run, 2026-11-07): 1,334 rows that held only ADP fields went empty, `gp`, `dd`, `td` and `dreb` were dropped, minutes became realistic, and 564 players have a points projection (524 the day before). Still per-game averages. The old check (half of all rows must have stats) flagged it; it now requires 300+ players with a points projection, like the ESPN check. None of Adam's leagues score the dropped stats.
 
 ### Left from M2 (none blocks M3)
 - **ESPN matchup periods:** map `scheduleSettings.matchupPeriods` to scoring days **before the All-Star break** (February). Until then a period that started before this calendar week is flagged (`period_mismatch`), with no banked points or win probability.
 - **Mid-week win probability for lock-in leagues:** needs lock data. Lock detection is parked (Adam, 2026-11-06); the plan is the one-tap "I locked / I passed" button in the PWA (lock-in v2, M5).
 - **Categories-league valuation:** P9. The 9-cat league gets games and roster facts only.
-- **Snapshot days are permanent:** keep launchd running until M3's cloud schedule is live.
+- **Snapshot days are permanent:** keep launchd running until the cloud has four clean runs **and** the part 5 watchdog is live.
 
 ### M3: Phone app and delivery (Nov 7–12), branch `m3-phone-app`
 Approved by Adam on 2026-11-06, in five parts, each a checkpoint he approves:
 
 | Part | Builds | Needs from Adam | Status |
 |---|---|---|---|
-| **1. Snapshots to the cloud** | `R2RawStore` (`storage/r2_store.py`), `fh raw upload`, `fh doctor --only raw`, `.github/workflows/snapshot.yml` with the DST gate (`pipeline/cron.py`), once-a-day guard for Sleeper's player list, crash alerts. ADR 0023 | Setup sections 1 and 4; then [runbooks/cloud-snapshots.md](runbooks/cloud-snapshots.md) | **Built**, 311 tests green. Live after merge + cutover |
-| **2. Prod database and scheduled runs** | Prod migrated, Adam's user and leagues in prod (local git-ignored prod env file), full history ingested from R2, migration 0006 (`reports`, `push_subscriptions`), `daily.yml` and `weekly.yml`, run log in the snapshot job | Sections 2 and 3; ESPN cookies typed once at the hidden prompt | Next |
-| **3. API on Cloud Run** | FastAPI (reports, push subscriptions), Supabase JWT checked against its public keys (JWKS), every query scoped to the user, Docker image, keyless deploy (Workload Identity Federation), Secret Manager, max 2 instances | Section 5, plus the WIF commands | |
+| **1. Snapshots to the cloud** | `R2RawStore` (`storage/r2_store.py`), `fh raw upload`, `fh doctor --only raw`, `.github/workflows/snapshot.yml` with the DST gate (`pipeline/cron.py`), once-a-day guard for Sleeper's player list, crash alerts. ADR 0023 | Setup sections 1, 3 and 4 (**done**); then [runbooks/cloud-snapshots.md](runbooks/cloud-snapshots.md) | **Merged** (PR #4, 2026-11-07), **live**. Cutover: step 1 done; backlog upload, first run (17:17 ET) and the overlap to go |
+| **2. Prod database and scheduled runs** | Prod migrated, Adam's user and leagues in prod (local git-ignored prod env file), full history ingested from R2, migration 0006 (`reports`, `push_subscriptions`), `daily.yml` and `weekly.yml`, run log in the snapshot job | Sections 2 and 3 (**done**); ESPN cookies typed once at the hidden prompt | Next |
+| **3. API on Cloud Run** | FastAPI (reports, push subscriptions), Supabase JWT checked against its public keys (JWKS), every query scoped to the user, Docker image, keyless deploy (Workload Identity Federation), Secret Manager, max 2 instances | Section 5 (**not started**), plus the WIF commands | |
 | **4. The phone app** | `web/` PWA: sign-in, Today and This Week tabs, Home Screen install, Enable notifications, types from OpenAPI, Cloudflare Pages | Connect Pages to GitHub; the iPhone | |
-| **5. Push, ops, exit test** | VAPID keys straight into secrets, "report ready" push, Healthchecks pings (missed run, 7:45 late report), size alert, nightly backup and restore drill, broken-run test, laptop-closed test | Section 6; check schedules | |
+| **5. Push, ops, exit test** | VAPID keys straight into secrets, "report ready" push, Healthchecks pings (missed run, 7:45 late report), size alert, nightly backup and restore drill, broken-run test, laptop-closed test | Section 6 (**not started**); check schedules | |
 
 **Decided with Adam (2026-11-06):**
 - **Sign-in by 6-digit email code, not a magic link.** A Home Screen app on iOS doesn't share Safari's session, so a tapped link would sign in Safari, not the app. Same Supabase Auth; the email template shows `{{ .Token }}`.
@@ -242,7 +242,7 @@ Approved by Adam on 2026-11-06, in five parts, each a checkpoint he approves:
 **Done when:** a scheduled run, with the laptop closed, pushes the daily report (lock-or-pass cards) and the weekly overview to his phone, and they open after sign-in; a deliberately broken run produces an ops alert; a backup restores into a scratch database.
 
 ### Dependency updates (ADR 0024)
-Dependabot opens grouped PRs (security fixes as they land; version updates Mondays 07:00 Eastern, 7-day cooldown, no Python majors), and `dependabot-auto-merge.yml` merges each one once CI passes. It refuses unless `main`'s ruleset requires both CI jobs ([runbooks/dependency-updates.md](runbooks/dependency-updates.md)); the ruleset `main` was created on 2026-11-07, with an admin bypass. **To check after the merge:** Dependabot's first PRs open, pass CI and merge; the first security PR's job log shows the major-version `ignore` doesn't apply to security updates.
+Dependabot opens grouped PRs (security fixes as they land; version updates Mondays 07:00 Eastern, 7-day cooldown, no Python majors), and `dependabot-auto-merge.yml` merges each one once CI passes. It refuses unless `main`'s ruleset requires both CI jobs ([runbooks/dependency-updates.md](runbooks/dependency-updates.md)); the ruleset `main` was created on 2026-11-07, with an admin bypass. **First run, 2026-11-07 (checked):** within five minutes of the merge, Dependabot opened PRs #6 (setup-uv 7.6.0 → 10.3.3), #7 (six Python updates) and #8 (the `uv_build` range), and each merged itself only after both CI jobs passed. GitHub doesn't rerun CI on `main` after these merges (ADR 0024), so the combined `main` was checked by hand: lockfile consistent, all checks and 310 tests pass. **Still to see:** the first security PR, whose job log should show the major-version `ignore` doesn't apply to security updates.
 
 ### Tabled from the PR #4 review (2026-11-07)
 - **4, shared crash guard:** `alert_crash` and `REPORTED_EXIT` exist and the snapshot uses them. `fh ingest`, `fh run daily` and `fh run weekly` adopt them in **M3 part 2**, when they get workflows.
@@ -252,6 +252,8 @@ Dependabot opens grouped PRs (security fixes as they land; version updates Monda
 - **10 and 12, `fh raw upload` efficiency** (re-HEADs listed objects; orphans checked against a list). Fold into the next change to `raw_upload.py`.
 
 ### Open items
+- **Security, R2:** each machine gets its own R2 key at the end of the cutover (step 5; the laptop's needs write, because ingest saves league responses). Part 5 adds a bucket lock on the **public** dataset prefixes only: league data must stay deletable for a beta friend who leaves (ADR 0023, Update 2026-11-07).
+- **Not verified by Claude:** prod Supabase's region, plan and the sign-ups-off setting (Adam did section 2). Part 2 checks them when it migrates prod.
 - **Q6:** how fast projections react to injuries. Analyze `projection_rows` against `injury_observations` once a week or so of snapshots exists.
 - Beta friends and leagues (needed by M7). The RatBall note goes out only if RatBall data is used.
 - The 821 unmatched Sleeper players are all non-rostered and **aren't in ESPN Fantasy's player pool**, so there's nothing to link them to. Overrides stay empty until ingest warns about a rostered one. Ingest reports linked pairs with conflicting birth dates (2 known data errors: Gortman, Edey); that's informational.
@@ -267,3 +269,4 @@ Dependabot opens grouped PRs (security fixes as they land; version updates Monda
 - **2026-11-06:** M1. Snapshots started and scheduled; `fh league add` for three leagues; ESPN and Sleeper explored; the redacting recorder; mappers; identity; tables; `fh ingest` run live twice; ADRs 0016–0019; roadmap v0.4; this handoff doc. PR #2 merged.
 - **2026-11-06 (pre-M2 review):** Adam asked for low latency for agents and a future chat, and for room to keep history for future years. Latency was measured against Supabase dev, and one and five synthetic seasons were benchmarked locally. Result: ADR 0020 (read models, few batched tools, in-process MCP, one region) and ADR 0021 (typed projection columns, a size alert, the season archive to R2, nightly backups). Sleeper lock-in moved to M2, as cards in the daily report. The M3 account-setup runbook was written for Adam.
 - **2026-11-06 (M2):** one box score for every league (ADR 0022) and scoring verified against both platforms; run events and retries; lock-in v1 in an engine-only daily report (lock detection parked after Adam's real locks fit no rule); the weekly overview with FactSheet v1 and read models; the daily reconciliation; a mid-week win probability for daily-lineup leagues (exact against ESPN's daily totals). PR #3 opened with Auto-fix on; a `/code-review` posted 15 findings as inline comments, all fixed in one commit, each comment answered and resolved.
+- **2026-11-07 (M3 part 1):** cloud snapshots built (ADR 0023) and verified live against R2 (conditional writes enforced; the secret key had been mistyped and was re-derived). Sleeper re-issued its projections, and the check was fixed. PR #4 opened with Auto-fix; a `/code-review` posted 14 findings (7 fixed, 1 partly with the rest moved to part 2, 6 tabled), every thread answered and resolved; merged. Adam set up the `prod` environment, R2, the prod encryption key and ntfy topic, Supabase prod, and Bitwarden; the repo stays public (roadmap). Dependabot with guarded auto-merge (ADR 0024, PR #5) and the `main` ruleset; the first three Dependabot PRs merged themselves. The overlap was revised: the laptop stays on its own disk until the watchdog. The accounts-and-secrets inventory was started.

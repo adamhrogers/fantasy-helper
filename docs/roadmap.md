@@ -129,7 +129,11 @@ These steps depend on each other, so they're ordered. B and C run in parallel at
 
 **Goal:** prove the whole path from scheduled job to sign-in to push before any LLM work starts.
 
-**Status (Nov 6):** started on branch `m3-phone-app`, in five parts (session-handoff §7). **Part 1, cloud snapshots, is built** (ADR 0023): the raw store on R2, `fh raw upload` for the laptop's backlog, and the snapshot job on GitHub Actions on Eastern time. It goes live after Adam's accounts and a two-day overlap with launchd. Because scheduled workflows run only from `main`, M3 merges part by part.
+**Status (Nov 7):** in five parts (session-handoff §7). Because scheduled workflows run only from `main`, M3 merges part by part.
+- **Part 1, cloud snapshots: merged and live** (PR #4, ADR 0023). The raw store is on R2, and the snapshot job runs on GitHub Actions on Eastern time. The laptop keeps saving to its own disk as an independent backup until the part 5 watchdog is live ([runbooks/cloud-snapshots.md](runbooks/cloud-snapshots.md)).
+- **Dependabot: merged** (PR #5, ADR 0024). Dependency updates merge themselves once CI passes.
+- **Adam's accounts:** sections 1–4 done (GitHub `prod`, Supabase prod, the prod key and topic, R2); 5 (Google Cloud) and 6 (Healthchecks) are next. Inventory: [runbooks/accounts-and-secrets.md](runbooks/accounts-and-secrets.md).
+- **Next:** part 2, the prod database and scheduled runs.
 
 | Lane | Work |
 |---|---|
