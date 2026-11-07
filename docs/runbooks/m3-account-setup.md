@@ -69,11 +69,19 @@ uv run fh keygen
 gh secret set FH_ENCRYPTION_KEY --env prod
 ```
 
-- [ ] Reuse your existing ntfy topic, so production alerts reach the same phone app. Copy `FH_NTFY_TOPIC` from `.env` and run:
+- [ ] Give production its **own** ntfy topic, separate from the laptop's (decided 2026-11-07). You can tell at a glance which machine is talking, mute one without the other, and a leaked dev topic doesn't expose prod. Generate one in your own Terminal app and copy it into your password manager:
+
+```bash
+uv run fh keygen --topic
+```
+
+- [ ] Put it into the `prod` environment:
 
 ```bash
 gh secret set FH_NTFY_TOPIC --env prod
 ```
+
+- [ ] In the ntfy app on your iPhone, tap **+**, subscribe to the new topic, and name it "Fantasy Helper prod". Keep the old subscription: the laptop still uses it.
 
 ## 4. Cloudflare: R2 for the raw archive and backups (10 min)
 
@@ -158,7 +166,7 @@ A run that never starts can't report itself: the GitHub scheduler skipped it, or
 - [ ] Sign up at [healthchecks.io](https://healthchecks.io) on the free plan, and turn on two-factor authentication.
 - [ ] Open your project and go to **Integrations → ntfy → Add integration**:
   - **Server URL:** `https://ntfy.sh`
-  - **Topic:** your existing `FH_NTFY_TOPIC` from `.env`
+  - **Topic:** the prod topic from section 3
   - **Priority for "down" events:** High
 - [ ] Remove the **email** integration that's on by default, unless you also want these alerts by email.
 - [ ] Go to **Settings** (the project's, not your account's) → **Ping key** → **Create**. Copy it into your password manager, then run:
@@ -192,7 +200,7 @@ I'll check with `gh secret list --env prod`, which shows names only, never value
 |---|---|
 | `DATABASE_URL` | Supabase prod, session pooler |
 | `FH_ENCRYPTION_KEY` | `uv run fh keygen` (new, prod only) |
-| `FH_NTFY_TOPIC` | Your existing `.env` |
+| `FH_NTFY_TOPIC` | `uv run fh keygen --topic` (new, prod only) |
 | `LANGSMITH_API_KEY` | LangSmith (also set as a repository secret, for CI) |
 | `FH_R2_ACCESS_KEY_ID` | Cloudflare R2 API token |
 | `FH_R2_SECRET_ACCESS_KEY` | Cloudflare R2 API token |

@@ -104,6 +104,10 @@ def check_tracing(settings: Settings) -> Result:
 
 
 def check_alerts(settings: Settings, *, send: bool) -> Result:
+    if settings.ntfy_topic is None and settings.env == "prod":
+        return Result(
+            Check.ALERTS, Status.FAIL, "FH_NTFY_TOPIC not set: prod runs can't reach the phone"
+        )
     if settings.ntfy_topic is None:
         return Result(
             Check.ALERTS, Status.SKIP, "FH_NTFY_TOPIC not set (generate: uv run fh keygen --topic)"

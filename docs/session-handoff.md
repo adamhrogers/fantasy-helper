@@ -212,6 +212,10 @@ TCP only, because long scratch paths exceed the 103-byte Unix socket limit. `LC_
 
 ## 7. Exactly what's next
 
+### Found on 2026-11-07
+- **The laptop runs M1 code.** Its main checkout was 8 commits behind (`git pull` never ran after PR #3), so launchd's snapshots have no `espn.game_logs` (box scores can be backfilled with `fh snapshot --only espn.game_logs --game-log-depth 30`) and no M2 run events. Fix: `git pull` in `~/projects/fantasy-helper`.
+- **Sleeper re-issued its season projections** (06:30 run, 2026-11-07): 1,334 rows that held only ADP fields went empty, `gp`, `dd`, `td` and `dreb` were dropped, minutes became realistic, and 564 players have a points projection (524 the day before). Still per-game averages. The old check (half of all rows must have stats) flagged it; it now requires 300+ players with a points projection, like the ESPN check. None of Adam's leagues score the dropped stats.
+
 ### Left from M2 (none blocks M3)
 - **ESPN matchup periods:** map `scheduleSettings.matchupPeriods` to scoring days **before the All-Star break** (February). Until then a period that started before this calendar week is flagged (`period_mismatch`), with no banked points or win probability.
 - **Mid-week win probability for lock-in leagues:** needs lock data. Lock detection is parked (Adam, 2026-11-06); the plan is the one-tap "I locked / I passed" button in the PWA (lock-in v2, M5).

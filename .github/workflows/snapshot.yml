@@ -44,39 +44,55 @@ jobs:
       FH_NTFY_TOPIC: ${{ secrets.FH_NTFY_TOPIC }}
       # DATABASE_URL (the run log) is added once prod is migrated, in M3 part 2.
     steps:
-      - uses: actions/checkout@v7
+      # Actions are pinned to commits: this job holds prod secrets (tests/unit/test_workflows.py).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          persist-credentials: false  # the job never pushes; don't leave a token on disk
 
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7
         with:
           enable-cache: true
 
       - name: Install
         run: uv sync --locked --no-dev
 
+      # Exit 3 means the app already sent this failure to the phone (run-events runbook).
+      # Anything else (a crash before the app could alert, a kill) is left to the next step.
       - name: Snapshot
         id: snapshot
         env:
           CRON: ${{ github.event.schedule }}
           SET: ${{ inputs.set }}
         run: |
+          code=0
           if [ -n "$CRON" ]; then
-            uv run --no-sync fh snapshot --cron "$CRON"
+            uv run --no-sync fh snapshot --cron "$CRON" || code=$?
           else
-            uv run --no-sync fh snapshot --set "$SET"
+            uv run --no-sync fh snapshot --set "$SET" || code=$?
           fi
+          [ "$code" -ne 3 ] || echo "reported=true" >> "$GITHUB_OUTPUT"
+          exit "$code"
 
-      # The app reports its own failures, including crashes. This covers the steps before it
-      # (checkout, install), which fail before any Python runs.
-      - name: Alert if the job failed before the snapshot ran
-        if: failure() && steps.snapshot.outcome != 'failure'
+      - name: Alert on a failure the app didn't report
+        if: (failure() || cancelled()) && steps.snapshot.outputs.reported != 'true'
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           [ -n "$FH_NTFY_TOPIC" ] || exit 0
           curl -sS --max-time 20 \
-            -H "Title: Snapshot job failed before it started" \
+            -H "Title: Snapshot job failed" \
             -H "Priority: urgent" \
             -H "Tags: rotating_light" \
             -H "Click: $RUN_URL" \
-            -d "The GitHub job broke before the snapshot ran. Tap to open the run." \
-            "https://ntfy.sh/$FH_NTFY_TOPIC"
+            -d "The job failed, timed out or was cancelled before the app could say why. Tap to open the run." \
+            "${FH_NTFY_SERVER:-https://ntfy.sh}/$FH_NTFY_TOPIC"
+
+      # Without a topic every alert above goes nowhere, so the job goes red instead (after the
+      # snapshot has saved the day).
+      - name: Require an alert channel
+        if: always()
+        run: |
+          if [ -z "$FH_NTFY_TOPIC" ]; then
+            echo "::error::FH_NTFY_TOPIC isn't set in the prod environment, so failures can't reach the phone (setup checklist, section 3)."
+            exit 1
+          fi

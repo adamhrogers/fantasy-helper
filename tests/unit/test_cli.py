@@ -7,10 +7,15 @@ import pytest
 from typer.testing import CliRunner
 
 from fantasy_helper import __version__
+from fantasy_helper.cli import main as cli_main
+from fantasy_helper.cli._common import REPORTED_EXIT
 from fantasy_helper.cli.main import app
 from fantasy_helper.domain.calendar import NBA_TIMEZONE
+from fantasy_helper.domain.runs import RunKind, RunRecord, RunStatus
 from fantasy_helper.pipeline.cron import CRON_ENTRIES
+from fantasy_helper.pipeline.snapshot import SnapshotResult, SnapshotSet
 from fantasy_helper.storage import crypto, r2_store
+from fantasy_helper.storage.raw_store import LocalRawStore, RawStoreError
 from tests.fake_s3 import FakeS3, client_error, fake_store
 
 runner = CliRunner()
@@ -103,7 +108,7 @@ def test_snapshot_refuses_to_start_without_its_r2_settings(
 ) -> None:
     monkeypatch.setenv("FH_RAW_STORE", "r2")
     result = runner.invoke(app, ["snapshot", "--set", "evening"])
-    assert result.exit_code == 1
+    assert result.exit_code == REPORTED_EXIT  # alerted, so the workflow doesn't alert again
     assert "FH_R2_ENDPOINT" in result.output
 
 
@@ -158,3 +163,56 @@ def test_doctor_fails_when_r2_would_overwrite(r2_env: FakeS3) -> None:
     result = runner.invoke(app, ["doctor", "--only", "raw"])
     assert result.exit_code == 1
     assert "accepted an overwrite" in result.stdout
+
+
+def _succeeded(*_args: object, **_kwargs: object) -> SnapshotResult:
+    now = datetime.now(UTC)
+    run = RunRecord(kind=RunKind.SNAPSHOT, status=RunStatus.SUCCEEDED, started_at=now, ended_at=now)
+    return SnapshotResult(run_set=SnapshotSet.EVENING, run=run, results=(), recorded=False)
+
+
+def test_a_snapshot_crash_is_alerted_and_exits_reported(monkeypatch: pytest.MonkeyPatch) -> None:
+    def crash(*_args: object, **_kwargs: object) -> SnapshotResult:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(cli_main, "run_snapshot", crash)
+    result = runner.invoke(app, ["snapshot", "--set", "evening"])
+    assert result.exit_code == REPORTED_EXIT
+
+
+def test_a_misconfigured_store_still_snapshots_then_fails_loudly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bucket path in FH_R2_ENDPOINT lets writes land under the wrong key while listing fails:
+    the day is still saved, and the run exits as a reported failure."""
+
+    class MisplacedStore(LocalRawStore):
+        def check_access(self) -> None:
+            raise RawStoreError("R2 list failed: NoSuchKey")
+
+    ran: list[bool] = []
+
+    def snapshot(*args: object, **kwargs: object) -> SnapshotResult:
+        ran.append(True)
+        return _succeeded()
+
+    monkeypatch.setattr(cli_main, "raw_store_from_settings", lambda _s: MisplacedStore(tmp_path))
+    monkeypatch.setattr(cli_main, "run_snapshot", snapshot)
+    result = runner.invoke(app, ["snapshot", "--set", "evening"])
+    assert ran == [True]
+    assert result.exit_code == REPORTED_EXIT
+    assert "raw store check: R2 list failed: NoSuchKey" in result.output
+
+
+def test_a_healthy_snapshot_exits_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli_main, "raw_store_from_settings", lambda _s: LocalRawStore(tmp_path))
+    monkeypatch.setattr(cli_main, "run_snapshot", _succeeded)
+    result = runner.invoke(app, ["snapshot", "--set", "evening"])
+    assert result.exit_code == 0, result.output
+
+
+def test_doctor_fails_when_prod_has_no_alert_topic(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FH_ENV", "prod")
+    result = runner.invoke(app, ["doctor", "--only", "alerts"])
+    assert result.exit_code == 1
+    assert "prod runs can't reach the phone" in result.stdout

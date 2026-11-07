@@ -272,7 +272,8 @@ def _saved_today(dataset: Dataset, store: RawStore, today: date) -> DatasetResul
         return None
     try:
         saved = store.keys_on(dataset.source, dataset.name, today)
-    except (RawStoreError, OSError):
+    except (RawStoreError, OSError) as exc:
+        log.warning("snapshot_once_a_day_check_failed", dataset=dataset.label, error=str(exc))
         return None
     if not saved:
         return None

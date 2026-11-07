@@ -8,9 +8,26 @@ from sqlalchemy import pool
 from sqlalchemy.orm import Session
 
 from fantasy_helper.config import Settings
+from fantasy_helper.domain.runs import RunKind
+from fantasy_helper.observability.events import events_from_settings
 from fantasy_helper.storage import crypto
 from fantasy_helper.storage.db import make_engine
 from fantasy_helper.storage.raw_store import RawStore, RawStoreError, raw_store_from_settings
+
+# Exit code for a failure the app has already sent to the phone. A scheduled workflow alerts on
+# any other failure, including a timeout, so nothing fails silently (run-events runbook).
+REPORTED_EXIT = 3
+
+
+def alert_crash(settings: Settings, kind: RunKind, label: str, what: str) -> typer.Exit:
+    """An urgent alert for a run that stopped outside its own run events, and the exit to raise.
+    Names the kind of failure only, never an exception's text."""
+    events_from_settings(settings, kind, label=label).failed(
+        f"It stopped on {what}. Nothing after that ran; see the run's log.",
+        title=f"{label} crashed",
+        urgent=True,
+    )
+    return typer.Exit(code=REPORTED_EXIT)
 
 
 def fail(message: str) -> typer.Exit:

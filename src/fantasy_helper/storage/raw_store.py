@@ -56,6 +56,8 @@ class RawStore(Protocol):
 
     def keys_on(self, source: str, dataset: str, day: date) -> list[str]: ...
 
+    def check_access(self) -> None: ...
+
 
 def make_key(source: str, dataset: str, fetched_at: datetime) -> str:
     if fetched_at.tzinfo is None:
@@ -130,6 +132,9 @@ class LocalRawStore:
             str(path.relative_to(self._root)).removesuffix(PAYLOAD_SUFFIX)
             for path in base.glob(f"*/*{PAYLOAD_SUFFIX}")
         )
+
+    def check_access(self) -> None:
+        """Nothing to check up front: a local folder is created on the first write."""
 
     def keys_on(self, source: str, dataset: str, day: date) -> list[str]:
         """The payloads a dataset saved on one UTC day, oldest first."""

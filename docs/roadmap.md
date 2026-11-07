@@ -230,6 +230,15 @@ Yahoo adapter (OAuth, which also solves sign-up for Yahoo users), self-serve ESP
 
 ---
 
+## When the repo goes private
+
+**Decided 2026-11-07: stay public for now** (ADR 0012). Nothing that's hard to copy is in the repo yet, going private is one setting, and a private repo on the free plan loses free secret scanning, the `prod` environment's branch rule and required CI checks (those need GitHub Pro). Go private at the **first** of these:
+- before the M8 council prompts land: the most copyable part of the product;
+- before anyone pays (P12);
+- if strangers start forking or starring the repo.
+
+Users' league data never lives in the repo, so the friends beta doesn't force it. When it happens: budget GitHub Pro ($4 a month), check the `prod` branch rule and the `main` ruleset survived, and watch Actions minutes (2,000 a month free).
+
 ## Critical path and the levers if it slips
 
 ```

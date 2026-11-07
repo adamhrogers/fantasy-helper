@@ -92,6 +92,14 @@ def test_validators_catch_shrunken_payloads() -> None:
     assert sleeper.validate_state({"season": "2026", "week": 3}) is None
 
 
+def test_sleeper_validator_expects_a_projected_core_not_a_fraction() -> None:
+    """2026-11-07: Sleeper emptied 1,334 ADP-only rows; 564 of 2,132 real projections is fine."""
+    rows = [{"stats": {"pts": 12.0}}] * 564 + [{"stats": {}}] * 1568
+    assert sleeper.validate_projections(rows) is None
+    adp_only = [{"stats": {"adp_std": 90.0, "adp_dynasty": 80.0}}] * 2000
+    assert "0 players" in (sleeper.validate_projections(adp_only) or "")
+
+
 def test_espn_validator_expects_a_projected_core_not_a_fraction() -> None:
     def players(projected: int, total: int) -> dict[str, object]:
         rows = [{"player": {"stats": [{"statSourceId": 1}]}} for _ in range(projected)]

@@ -90,7 +90,10 @@ There are three layers, from fastest to slowest:
 - `Morning snapshot incomplete` (loud): which datasets failed, why, and after how many attempts. The others are still saved.
 - `Morning snapshot failed` (urgent): every dataset failed.
 - `Morning snapshot crashed` (urgent): it stopped on something unexpected, or the raw store isn't configured. Names the kind of error only.
-- `Snapshot job failed before it started` (urgent, from the workflow itself): GitHub couldn't check out or install. Tap it to open the run.
+- `Morning snapshot: raw store check failed` (urgent): R2 answered, but not correctly (wrong endpoint, bad keys). The snapshot still ran, so the day is saved, but the files may not be where ingest looks.
+- `Snapshot job failed` (urgent, from the workflow itself): the job failed, timed out or was cancelled before the app could say why (a settings error, a failed install, a killed process). Tap it to open the run.
+
+**Exit codes (M3):** a scheduled command exits **3** once it has sent its failure to the phone, and the workflow alerts on any other failure, so a failure is reported exactly once and never silently. A prod job without `FH_NTFY_TOPIC` goes red on purpose, after saving the day. Prod and the laptop use different topics (decided 2026-11-07).
 
 **Ingest (`fh ingest`, by hand until M3):**
 - `Ingest started`

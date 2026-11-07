@@ -12,19 +12,25 @@ from fantasy_helper import __version__
 from fantasy_helper.adapters._http import make_client
 from fantasy_helper.adapters.espn.public import GAME_LOG_DEPTH
 from fantasy_helper.cli import fixtures, leagues, raw, run
-from fantasy_helper.cli._common import fail
+from fantasy_helper.cli._common import REPORTED_EXIT, alert_crash
 from fantasy_helper.cli.doctor import Check, Status, run_checks
 from fantasy_helper.cli.ingest import ingest as ingest_command
 from fantasy_helper.config import Settings, get_settings
-from fantasy_helper.domain.ports import Alert, AlertPriority, Notifier, SystemClock
-from fantasy_helper.domain.runs import RunRecord, RunStatus
+from fantasy_helper.domain.ports import SystemClock
+from fantasy_helper.domain.runs import RunKind, RunRecord, RunStatus
 from fantasy_helper.observability.alerts import notifier_from_settings
+from fantasy_helper.observability.events import events_from_settings
 from fantasy_helper.observability.logs import configure_logging, get_logger
 from fantasy_helper.pipeline.cron import UnknownCronError, job_for
 from fantasy_helper.pipeline.snapshot import DATASETS, SnapshotSet, run_snapshot
 from fantasy_helper.storage.crypto import generate_key
 from fantasy_helper.storage.db import make_engine
-from fantasy_helper.storage.raw_store import RawStoreError, raw_store_from_settings
+from fantasy_helper.storage.raw_store import (
+    RawStore,
+    RawStoreError,
+    RawStoreUnavailableError,
+    raw_store_from_settings,
+)
 from fantasy_helper.storage.repositories.runs import record_run
 
 log = get_logger(__name__)
@@ -138,14 +144,17 @@ def snapshot(
             raise typer.Exit(code=2)
         run_set = _SNAPSHOT_JOBS[job]
     run_set = run_set or SnapshotSet.MORNING
+    # A settings error stops here with exit 1, before any alert channel is known: the workflow
+    # alerts for it. Every failure after this point is sent to the phone and exits REPORTED_EXIT.
     settings = get_settings()
-    notifier = notifier_from_settings(settings)
     label = f"{run_set.value.title()} snapshot"
     try:
         store = raw_store_from_settings(settings)
     except RawStoreError as exc:
-        _alert_crash(notifier, label, "the raw store isn't configured")
-        raise fail(str(exc)) from exc
+        typer.echo(f"✗ {exc}", err=True)
+        what = "the raw store isn't configured"
+        raise alert_crash(settings, RunKind.SNAPSHOT, label, what) from exc
+    store_problem = _check_store(store)
     record = _run_log(settings)
     try:
         with make_client() as client:
@@ -153,15 +162,17 @@ def snapshot(
                 run_set,
                 client=client,
                 store=store,
-                notifier=notifier,
+                notifier=notifier_from_settings(settings),
                 record=record,
                 only=frozenset(only) if only else None,
                 game_log_depth=game_log_depth,
                 progress=settings.notify_progress,
             )
     except Exception as exc:
-        _alert_crash(notifier, label, f"an unexpected {type(exc).__name__}")
-        raise
+        log.exception("snapshot_crashed", error=type(exc).__name__)
+        raise alert_crash(
+            settings, RunKind.SNAPSHOT, label, f"an unexpected {type(exc).__name__}"
+        ) from exc
     for r in result.results:
         if r.reused:
             detail = "already saved today"
@@ -174,24 +185,30 @@ def snapshot(
     else:
         logged = "run logged" if result.recorded else "run NOT logged"
     typer.echo(f"{result.run.status.value}: {ok}/{len(result.results)} datasets saved, {logged}")
-    if result.run.status is not RunStatus.SUCCEEDED or (record is not None and not result.recorded):
-        raise typer.Exit(code=1)
-
-
-def _alert_crash(notifier: Notifier, label: str, what: str) -> None:
-    """A loud alert for a run that stopped before or outside its own run events. Names the
-    kind of failure only, never the exception's text. Never raises."""
-    try:
-        notifier.send(
-            Alert(
-                title=f"{label} crashed",
-                message=f"It stopped on {what}. Nothing after that ran; see the run's log.",
-                priority=AlertPriority.URGENT,
-                tags=("rotating_light",),
-            )
+    if store_problem is not None:
+        typer.echo(f"✗ raw store check: {store_problem}", err=True)
+        events_from_settings(settings, RunKind.SNAPSHOT, label=label).failed(
+            f"{store_problem}. The snapshot ran anyway, but its files may not be where ingest "
+            "looks. Check FH_R2_ENDPOINT and the R2 keys (docs/runbooks/cloud-snapshots.md).",
+            title=f"{label}: raw store check failed",
+            urgent=True,
         )
-    except Exception as exc:
-        log.error("crash_alert_failed", error=type(exc).__name__)
+        raise typer.Exit(code=REPORTED_EXIT)
+    if result.run.status is not RunStatus.SUCCEEDED or (record is not None and not result.recorded):
+        raise typer.Exit(code=REPORTED_EXIT)  # the run's own events already said why
+
+
+def _check_store(store: RawStore) -> str | None:
+    """A misconfigured store (wrong endpoint, bad keys) can still accept writes in the wrong
+    place, so it's checked up front. The snapshot runs either way: a day can't be recovered.
+    An outage isn't a misconfiguration; the run's own retries handle it."""
+    try:
+        store.check_access()
+    except RawStoreUnavailableError:
+        return None
+    except RawStoreError as exc:
+        return str(exc)
+    return None
 
 
 def _run_log(settings: Settings) -> Callable[[RunRecord], None] | None:

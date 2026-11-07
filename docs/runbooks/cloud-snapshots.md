@@ -5,7 +5,8 @@
 The snapshot job moves from the Mac's schedule (launchd) to GitHub Actions, and the raw files move from `data/raw` to the R2 bucket. No day may be missed (rule 8), so the Mac keeps running until the cloud has two clean days behind it.
 
 **Before you start:**
-- Sections 1 and 4 of [m3-account-setup.md](m3-account-setup.md) are done: the `prod` environment exists, and the bucket and the three `FH_R2_*` secrets are set.
+- Sections 1, 3 and 4 of [m3-account-setup.md](m3-account-setup.md) are done: the `prod` environment exists with the three `FH_R2_*` secrets, and **`FH_NTFY_TOPIC` is set in `prod`** (a topic of its own). Without the topic, cloud runs can't reach your phone, so the job goes red on purpose.
+- `FH_R2_ENDPOINT` in `prod` is exactly the value in your `.env` (checked live on 2026-11-07): `https://<account id>.r2.cloudflarestorage.com`, with **nothing after `.com`**. Cloudflare's bucket page shows the address with `/fantasy-helper-raw` on the end; with that ending, writes would land in the wrong place. If you're not sure, set it again from `.env`: `gh secret set FH_R2_ENDPOINT --env prod`.
 - The M3 part 1 PR is merged, and your main checkout is up to date (`git pull` in `~/projects/fantasy-helper`).
 
 All commands run in your own Terminal app, from `~/projects/fantasy-helper`.
@@ -67,7 +68,8 @@ uv run fh raw upload
 On GitHub: **Actions → Snapshot → Run workflow**, choose **evening** (it's safe at any hour), and run it. This is the first time ESPN and Sleeper are called from GitHub's servers.
 
 - The run should finish green in a minute or two.
-- Your phone gets a quiet `Evening snapshot succeeded`.
+- Your phone gets a quiet `Evening snapshot succeeded` on the **prod** topic.
+- A wrong endpoint or bad keys still save the day's files, then fail loudly: `Evening snapshot: raw store check failed`.
 - If it fails, the phone says why. Tell Claude; the Mac is still saving every day.
 
 ## 5. Two days of overlap
