@@ -113,6 +113,16 @@ There are three layers, from fastest to slowest:
 
 The report itself, with the lock-or-pass calls, is a local page (`data/reports/<date>/daily.html`) until the phone app (M3) shows it. It never goes through ntfy.
 
+**Weekly run (`fh run weekly`, by hand until M3; `--open` opens the overview):**
+- `Weekly run started`
+- The three ingest steps
+- `Weekly run: Weekly overview built` ("3 of 3 leagues; 1 streaming moves; 2 calls newly logged.")
+- `Weekly run: Report built`
+- Retries as for the daily run.
+- Then `succeeded` (quiet), `finished with warnings` (normal) or `failed` (loud).
+
+The overview itself is a local page (`data/reports/<date>/weekly.html`) until the phone app shows it.
+
 **Test:** `uv run fh doctor --alert` sends one test event.
 
 The 06:30 and 17:30 jobs run the code in your main checkout, so the snapshot events start once the M2 branch is merged.

@@ -45,3 +45,9 @@ def sleeper_week_of(season_start: date, day: date) -> int:
     if day <= first_sunday:
         return 1
     return 2 + (day - first_sunday - timedelta(days=1)).days // 7
+
+
+# ESPN's matchup weeks follow the same Monday-to-Sunday calendar from opening night (both
+# leagues were in week 3 on 2026-11-06). The All-Star break may make a long week: check in Feb.
+matchup_week_bounds = sleeper_week_bounds
+matchup_week_of = sleeper_week_of

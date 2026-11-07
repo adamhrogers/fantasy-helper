@@ -243,3 +243,53 @@ def reported_player_points(
     side = "home" if row.home_team == team_external_id else "away"
     points = (row.detail.get(side) or {}).get("player_points") or {}
     return {str(k): float(v) for k, v in points.items()}
+
+
+def team_names(session: Session, league_id: UUID) -> dict[str, str]:
+    rows = session.execute(
+        select(TeamRow.external_id, TeamRow.name).where(TeamRow.league_id == league_id)
+    )
+    return {ext: name for ext, name in rows}
+
+
+def opponent(session: Session, league_id: UUID, period: int, team_external_id: str) -> str | None:
+    """The team I face in a matchup period (ESPN's matchup period, Sleeper's week)."""
+    row = session.scalars(
+        select(MatchupRow).where(
+            MatchupRow.league_id == league_id,
+            MatchupRow.period == period,
+            (MatchupRow.home_team == team_external_id) | (MatchupRow.away_team == team_external_id),
+        )
+    ).first()
+    if row is None:
+        return None
+    return row.away_team if row.home_team == team_external_id else row.home_team
+
+
+def latest_rosters(session: Session, league_id: UUID) -> list[tuple[str, UUID, str]]:
+    """(team, player ID, slot) for every team, from the league's latest daily snapshot."""
+    as_of = session.scalar(
+        select(func.max(RosterEntryRow.as_of)).where(RosterEntryRow.league_id == league_id)
+    )
+    if as_of is None:
+        return []
+    rows = session.execute(
+        select(
+            RosterEntryRow.team_external_id, RosterEntryRow.player_id, RosterEntryRow.slot
+        ).where(RosterEntryRow.league_id == league_id, RosterEntryRow.as_of == as_of)
+    )
+    return [(team, pid, slot) for team, pid, slot in rows]
+
+
+def adds_since(session: Session, league_id: UUID, team_external_id: str, since: datetime) -> int:
+    """Completed pickups (free agent or waiver, with an add) by one team since a moment."""
+    rows = session.scalars(
+        select(TransactionRow).where(
+            TransactionRow.league_id == league_id,
+            TransactionRow.team_external_id == team_external_id,
+            TransactionRow.kind.in_(["free_agent", "waiver"]),
+            TransactionRow.status == "executed",
+            TransactionRow.proposed_at >= since,
+        )
+    )
+    return sum(1 for t in rows if any(i.get("action") == "add" for i in t.items))

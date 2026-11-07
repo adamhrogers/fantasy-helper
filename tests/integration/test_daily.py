@@ -12,6 +12,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 from fantasy_helper.adapters import _http
+from fantasy_helper.domain.facts import TOKEN_BUDGET
 from fantasy_helper.domain.league import LeagueFormat, Platform
 from fantasy_helper.domain.recommendations import (
     Action,
@@ -24,9 +25,10 @@ from fantasy_helper.domain.recommendations import (
 )
 from fantasy_helper.pipeline.daily import run_daily
 from fantasy_helper.pipeline.lock_calls import ENGINE_PRODUCER
+from fantasy_helper.pipeline.weekly import run_weekly
 from fantasy_helper.registry.calls import TipOffPassedError, log_call
 from fantasy_helper.storage.repositories import leagues
-from fantasy_helper.storage.tables import RecommendationRow
+from fantasy_helper.storage.tables import FactSheetRow, LeaguePlayerValueRow, RecommendationRow
 from tests.integration.test_ingest import (
     KEY,
     NOW,
@@ -118,3 +120,33 @@ def test_the_daily_run_logs_each_call_once(session: Session, tmp_path: Path) -> 
     assert again.leagues[0].new_calls == 0  # a rerun logs nothing new
     assert again.leagues[0].calls == daily.calls
     assert count(session, RecommendationRow.id) == daily.calls
+
+
+def test_the_weekly_run_builds_every_league_and_stores_its_facts(
+    session: Session, tmp_path: Path
+) -> None:
+    owner = setup_owner(session)
+    for lg in leagues.list_for_user(session, owner.id):
+        team = "1" if lg.platform is Platform.SLEEPER else "13"
+        leagues.upsert(session, lg.model_copy(update={"my_team_external_id": team}))
+    store = seed_snapshots(tmp_path / "raw")
+    client = _http.make_client(transport=httpx.MockTransport(serve_fixtures))
+
+    result = run_weekly(session, client, store=store, user=owner, key=KEY, clock=FixedClock())
+    assert len(result.leagues) == 3
+    assert all(lg.failure is None for lg in result.leagues), [lg.failure for lg in result.leagues]
+    for built in result.leagues:
+        assert built.sheet is not None
+        assert built.sheet.approx_tokens() < TOKEN_BUDGET
+        assert built.report is not None
+    sheets = count(session, FactSheetRow.id)
+    values = count(session, LeaguePlayerValueRow.player_id)
+    calls = count(session, RecommendationRow.id)
+    assert sheets == 3
+    assert values > 0
+
+    again = run_weekly(session, client, store=store, user=owner, key=KEY, clock=FixedClock())
+    assert all(lg.new_calls == 0 for lg in again.leagues)  # calls are logged once
+    assert count(session, FactSheetRow.id) == sheets  # the same facts aren't stored twice
+    assert count(session, LeaguePlayerValueRow.player_id) == values  # replaced, not appended
+    assert count(session, RecommendationRow.id) == calls

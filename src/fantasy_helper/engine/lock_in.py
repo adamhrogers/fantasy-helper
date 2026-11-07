@@ -115,3 +115,13 @@ def decide(
         baseline=baseline,
         games_left=len(remaining),
     )
+
+
+def week_value(games: Sequence[GameDistribution], *, seed: int = 0) -> tuple[float, float]:
+    """A lock-in player's week: the expected score of the game that counts under optimal
+    locking, and its variance (from the same seeded simulation)."""
+    if not games:
+        return 0.0, 0.0
+    outcomes = simulate_waiting(games, seed=seed)
+    mean = sum(outcomes) / len(outcomes)
+    return mean, sum((o - mean) ** 2 for o in outcomes) / len(outcomes)

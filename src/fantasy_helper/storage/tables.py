@@ -459,3 +459,44 @@ class RecommendationRow(Base):
     outcome_window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     first_tip_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     is_shadow: Mapped[bool] = mapped_column(Boolean)
+
+
+# ------------------------------------------------------------- M2: read models (ADR 0020)
+
+
+class FactSheetRow(Base):
+    """Every FactSheet built, append-only: the replay unit for evals and shadow runs."""
+
+    __tablename__ = "fact_sheets"
+    __table_args__ = (
+        UniqueConstraint("league_id", "kind", "content_hash"),
+        Index("ix_fact_sheets_league_id_as_of", "league_id", "as_of"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    league_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("leagues.id", ondelete="CASCADE"))
+    kind: Mapped[str] = mapped_column(Text)
+    week: Mapped[int] = mapped_column(Integer)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    content_hash: Mapped[str] = mapped_column(Text)
+    sheet: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = _created_at()
+
+
+class LeaguePlayerValueRow(Base):
+    """The hot read model: each relevant player's value in one league right now, replaced on
+    every weekly run (a rebuildable cache, not evidence)."""
+
+    __tablename__ = "league_player_values"
+
+    league_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("leagues.id", ondelete="CASCADE"), primary_key=True
+    )
+    player_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("players.id"), primary_key=True)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    team_external_id: Mapped[str | None] = mapped_column(Text)  # None for a free agent
+    slot: Mapped[str] = mapped_column(Text)
+    games_left: Mapped[int] = mapped_column(Integer)
+    startable_left: Mapped[int] = mapped_column(Integer)
+    per_game: Mapped[float] = mapped_column(REAL)
+    value_over_replacement: Mapped[float | None] = mapped_column(REAL)

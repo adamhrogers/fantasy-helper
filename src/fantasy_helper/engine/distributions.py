@@ -1,9 +1,12 @@
 """One game's fantasy points as a distribution, in a league's own scoring. Pure functions.
 
-v1 (M2): the mean is the provider's projection for that game, scored by the league's rules,
-plus the expected value of the league's threshold bonuses. The spread comes from the player's own
-box scores this season, shrunk toward a league-wide prior so a player with three games doesn't
-get a spread from three numbers. A game the provider expects him to sit is a 0.
+v1 (M2): the mean blends the provider's projection for that game (scored by the league's rules,
+plus the expected value of its threshold bonuses) with the player's own average this season: the
+projection counts as PROJECTION_GAMES games of evidence, each game played counts as one. Early
+in the season the projection leads; as games pile up, what he actually does takes over. (On
+2026-11-06 a provider projected a bench player at 28.4 a game who'd averaged 10.9.) The spread
+comes from his own box scores, shrunk toward a league-wide prior. A game the provider expects
+him to sit is a 0.
 """
 
 import math
@@ -15,6 +18,7 @@ from fantasy_helper.domain.stats import Stat, StatLine
 from fantasy_helper.engine.scoring import projected_points
 
 PRIOR_GAMES = 5.0  # how many games' worth of weight the prior spread gets
+PROJECTION_GAMES = 10.0  # how many games' worth of evidence a projection is
 DEFAULT_CV = 0.32  # spread / mean of a game's fantasy points, used until there's data
 MIN_PRIOR_SAMPLE = 30  # players with 5+ games needed before the league's own prior is trusted
 
@@ -112,5 +116,16 @@ def game_distribution(
     the provider doesn't expect him to play."""
     if not projection:
         return GameDistribution(mean=0.0, sd=0.0, play_probability=0.0)
-    mean = projected_points(projection, scoring) + expected_bonus(projection, scoring, stat_sds)
+    projected = projected_points(projection, scoring) + expected_bonus(
+        projection, scoring, stat_sds
+    )
+    mean = blended_mean(projected, history)
     return GameDistribution(mean=mean, sd=shrunk_sd(history, mean, prior_cv))
+
+
+def blended_mean(projected: float, history: Sequence[float]) -> float:
+    """The projection weighted as PROJECTION_GAMES games, plus each game he's played."""
+    if not history:
+        return projected
+    n = len(history)
+    return (PROJECTION_GAMES * projected + sum(history)) / (PROJECTION_GAMES + n)

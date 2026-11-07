@@ -265,3 +265,32 @@ def projection_rows(
             )
         )
     )
+
+
+def games_between(
+    session: Session, season: int, first: date, last: date
+) -> list[tuple[UUID, datetime, date, str, str]]:
+    """(game ID, tip UTC, game date ET, home, away) for every game between two dates."""
+    out = []
+    for gid, tip, home, away in session.execute(
+        select(NbaGameRow.id, NbaGameRow.tip_utc, NbaGameRow.home_team, NbaGameRow.away_team)
+        .where(NbaGameRow.season == season)
+        .order_by(NbaGameRow.tip_utc)
+    ):
+        day = nba_game_date(tip)
+        if first <= day <= last:
+            out.append((gid, tip, day, home, away))
+    return out
+
+
+def projected_players(session: Session, snapshot_ids: Sequence[UUID]) -> set[UUID]:
+    """Players with a row in any of these projection snapshots."""
+    if not snapshot_ids:
+        return set()
+    return set(
+        session.scalars(
+            select(ProjectionValueRow.player_id)
+            .where(ProjectionValueRow.snapshot_id.in_(snapshot_ids))
+            .distinct()
+        )
+    )

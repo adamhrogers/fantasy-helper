@@ -30,9 +30,19 @@ A fantasy basketball assistant for Adam (customer one), then a friends beta, the
 - `engine/scoring.py` with golden and property tests, verified against ESPN (155/155) and Sleeper (417/417 on Sleeper's own stats; 405/417 on ESPN's, the 12 from one-stat feed differences): [spikes/m2-scoring-check.md](spikes/m2-scoring-check.md)
 
 - **lock-in v1 built (uncommitted at first):** `engine/distributions.py`, `engine/lock_in.py`, `facts/lock_in.py`, the append-only `recommendations` table (migration 0004, a trigger refuses UPDATE and DELETE; dev is at 0004), `fh run daily [--dry-run] [--open]`, and the engine-only daily report as a local page. The first 8 calls were logged in dev on 2026-11-06 at 7:54 pm ET.
-- **Locks:** Adam gave his real week-3 locks. Sleeper's weekly numbers fit no rule against them (they flip between pulls minutes apart), so cards show every open decision and the next lock-in step is a **user-set lock flag on the roster** (one tap in the PWA, or a CLI command until then).
+- **Locks:** Adam gave his real week-3 locks. Sleeper's weekly numbers fit no rule against them (they flip between pulls minutes apart), so cards show every open decision and lock detection is **parked** (Adam, 2026-11-06): the lock-or-pass recommendation is enough for now. A user-set lock flag on the roster stays an idea for later.
 
-Next: the reconciliation check, then the rest of the engine (schedule, valuation, streaming, win probability), FactSheet v1 and the weekly report. |
+- **Weekly overview built:**
+  - `engine/schedule.py` (daily lineups, most specific slot first)
+  - `engine/valuation.py`, `engine/win_probability.py`, `engine/streaming.py` (greedy; only drops players below replacement on their season average) and `engine/baselines.py`
+  - `facts/weekly.py`, `domain/facts.py` (FactSheet v1, about 1,400 tokens)
+  - migration 0005: `fact_sheets` (append-only) and `league_player_values` (replaced each run); dev is at 0005
+  - `reports/weekly.py`, `fh run weekly`
+  - Moves and the whole-week matchup forecast are logged as calls.
+- **Mid-week runs project the rest of the week only,** with no win probability, because realized points so far aren't counted yet.
+- **Projections are blended with game logs:** the projection counts as 10 games of evidence, because RotoWire sometimes projects a bench player far above what he does.
+
+Next: the reconciliation check, realized points mid-week, then M2's PR. |
 | M3 Phone app + delivery | **Next, in parallel with M2** (Nov 7–12). Adam is creating the accounts ([runbooks/m3-account-setup.md](runbooks/m3-account-setup.md)). |
 | M4–M8, P9–P12 | See `docs/roadmap.md` v0.5. Friends beta **Nov 29**, hard stop **Dec 15**. |
 

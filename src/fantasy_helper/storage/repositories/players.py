@@ -93,3 +93,24 @@ def external_ids(session: Session, player_ids: list[UUID], source: str) -> dict[
     for pid, ext in rows:
         out.setdefault(pid, ext)
     return out
+
+
+def profiles(
+    session: Session, player_ids: list[UUID]
+) -> dict[UUID, tuple[str, str | None, tuple[str, ...]]]:
+    """Name, NBA team and positions for each player."""
+    rows = session.execute(
+        select(PlayerRow.id, PlayerRow.full_name, PlayerRow.nba_team, PlayerRow.positions).where(
+            PlayerRow.id.in_(player_ids)
+        )
+    )
+    return {pid: (name, team, tuple(pos or ())) for pid, name, team, pos in rows}
+
+
+def with_external_id(session: Session, source: str) -> set[UUID]:
+    """Every canonical player that platform knows (its player pool)."""
+    return set(
+        session.scalars(
+            select(PlayerExternalIdRow.player_id).where(PlayerExternalIdRow.source == source)
+        )
+    )
