@@ -28,3 +28,11 @@ The overlap means no day depends on an untested path: ESPN and Sleeper have neve
 - Ingest reads each payload's time from its key instead of its sidecar, saving one R2 request per payload on every run.
 - `prod` is limited to `main`, and GitHub runs scheduled workflows only from the default branch, so this milestone merges in parts rather than as one PR at the end.
 - The snapshot job doesn't log runs to the database until prod is migrated (M3 part 2). A snapshot without `DATABASE_URL` succeeds and says the run wasn't logged.
+
+**Update, 2026-11-07: the overlap runs on two separate paths, until the watchdog is live.** Decided with Adam after PR #4 merged, which started the cloud schedule.
+- **The laptop keeps saving to its own disk during the overlap**, not to R2. This replaces the first Consequence above. If both machines saved to R2, with the same key and the same new code, one bad key, one bug or one R2 outage would stop both on the same run. The overlap is a backup only if its two paths can't fail together, and the laptop's disk is the proven one. What it costs: Sleeper's player list is fetched once a day per machine, and the laptop's copies of the overlap days go up afterwards with `fh raw upload` as extra captures. Nothing is overwritten.
+- **The laptop's schedule stays until the missed-run watchdog is live (M3 part 5)**, not just two clean days. GitHub can delay scheduled runs and sometimes drops them, and a run that never starts sends no alert.
+- **Each machine gets its own R2 key** at the end of the overlap, so either can be revoked without breaking the other. The laptop's key needs to write, because `fh ingest` saves the league responses it fetches.
+- **The bucket also holds those league responses** (`espn/leagues/…`, `sleeper/leagues/…`; about half of the backlog). It stays one private bucket for every environment, because a response is the same fact whichever environment fetched it. Unlike the public datasets, though, league data must stay deletable, for a beta friend who leaves. So the bucket lock planned for part 5 covers only the public datasets' prefixes.
+
+The cutover steps are in [runbooks/cloud-snapshots.md](../runbooks/cloud-snapshots.md).

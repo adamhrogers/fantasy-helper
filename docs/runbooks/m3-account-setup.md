@@ -4,10 +4,28 @@
 
 This prepares everything M3 needs, so that M3 can start building as soon as M2's first pieces land. It doesn't build or deploy anything.
 
-**Checked 2026-11-06, at the start of M3:** the repository secret `LANGSMITH_API_KEY` is set, and CI's LangSmith smoke trace passes on `main`. Nothing else is done yet: there's no `prod` environment and `gcloud` isn't installed. Two fixes since the first version: the gcloud install command (section 5), and a new section 6 for the missed-run watchdog that docs/runbooks/run-events.md plans for M3.
+## Progress
+
+**Checked 2026-11-07 by Claude**, against `gh secret list` (names and dates only), the names in the laptop's `.env`, and live checks. No value was read. What now exists, dev and prod side by side: [accounts-and-secrets.md](accounts-and-secrets.md).
+
+| Section | Status |
+|---|---|
+| 1. GitHub `prod` environment | **Done.** `prod` exists and only `main` can use it; `LANGSMITH_API_KEY` is set there |
+| 2. Supabase prod | **Done** (Adam, 2026-11-07). `DATABASE_URL` is in `prod`. Claude hasn't checked the region, plan or sign-up setting; part 2 checks them when it migrates prod |
+| 3. Encryption key and alerts | **Done.** `FH_ENCRYPTION_KEY` and `FH_NTFY_TOPIC` are in `prod`. The phone's prod subscription is proven by the first cloud run's notification |
+| 4. Cloudflare R2 | **Done.** Bucket, token, and the three values in `prod` and the laptop's `.env`. `fh doctor --only raw` passed against the live bucket |
+| 5. Google Cloud | **Not started** (`gcloud` isn't installed). Needed for part 3 |
+| 6. Healthchecks.io | **Not started.** Needed for part 5. The laptop keeps its snapshot schedule until this is live |
+| 7. iPhone | iOS version not confirmed yet. Needed for part 4 |
+
+Seven of the eight `prod` secrets are set; `FH_HEALTHCHECKS_PING_KEY` waits for section 6. Your password manager is **Bitwarden** (2026-11-07).
+
+*Earlier check, 2026-11-06, at the start of M3:* the repository secret `LANGSMITH_API_KEY` was set and CI's LangSmith smoke trace passed on `main`; nothing else was done. Two fixes since the first version: the gcloud install command (section 5), and a new section 6 for the missed-run watchdog that docs/runbooks/run-events.md plans for M3.
+
+## Before each step
 
 **Two rules for every step:**
-- **Secrets never go into the chat.** As soon as a value appears, save it in your password manager. Where a step ends in `gh secret set`, run it in your own Terminal app and paste the value at its hidden prompt.
+- **Secrets never go into the chat.** As soon as a value appears, save it in Bitwarden. Where a step ends in `gh secret set`, run it in your own Terminal app and paste the value at its hidden prompt.
 - **Names, regions and project IDs aren't secret.** Tell me those when you're done.
 
 All production secrets go into a GitHub **environment** called `prod`, not into plain repository secrets. Only the deploy and scheduled jobs get access to it, so CI runs on pull requests can't touch production.
@@ -16,15 +34,15 @@ All production secrets go into a GitHub **environment** called `prod`, not into 
 
 ## 1. GitHub: the `prod` environment (5 min)
 
-- [ ] On GitHub, open the repo and go to **Settings → Environments → New environment**. Name it `prod`.
-- [ ] Under **Deployment branches and tags**, choose **Selected branches and tags** and add `main`.
+- [x] On GitHub, open the repo and go to **Settings → Environments → New environment**. Name it `prod`.
+- [x] Under **Deployment branches and tags**, choose **Selected branches and tags** and add `main`.
 - [x] Finish the open item from M1: set the LangSmith key as a *repository* secret so CI can send its smoke trace. **Done** (set 2026-11-06; the smoke trace passes on `main`). For reference, the command was:
 
 ```bash
 gh secret set LANGSMITH_API_KEY
 ```
 
-- [ ] Add the same key to `prod`, because production jobs trace too:
+- [x] Add the same key to `prod`, because production jobs trace too:
 
 ```bash
 gh secret set LANGSMITH_API_KEY --env prod
@@ -32,24 +50,24 @@ gh secret set LANGSMITH_API_KEY --env prod
 
 ## 2. Supabase: the production project (10 min)
 
-- [ ] Open [supabase.com/dashboard](https://supabase.com/dashboard). Go to **Organization settings → Billing** and check that it says **Free plan**. This confirms the limits in ADR 0021: a 500 MB database, 2 active projects, no automatic backups.
-- [ ] Create a **New project** in the same organization as dev:
+- [x] Open [supabase.com/dashboard](https://supabase.com/dashboard). Go to **Organization settings → Billing** and check that it says **Free plan**. This confirms the limits in ADR 0021: a 500 MB database, 2 active projects, no automatic backups.
+- [x] Create a **New project** in the same organization as dev:
   - **Name:** `fantasy-helper-prod`
   - **Region:** **East US (North Virginia)**, which is `us-east-1`, the same region as dev (ADR 0020)
   - **Database password:** click Generate, then save it in your password manager right away. Supabase won't show it again.
-- [ ] Don't create a third project. The free plan allows two active projects, and dev plus prod uses both.
-- [ ] When the project is ready, click **Connect** and copy two connection strings into your password manager, each with your password filled in:
+- [x] Don't create a third project. The free plan allows two active projects, and dev plus prod uses both.
+- [x] When the project is ready, click **Connect** and copy two connection strings into your password manager, each with your password filled in:
   - **Session pooler** (port 5432): this is the prod `DATABASE_URL`
   - **Transaction pooler** (port 6543): the API may use this one
-- [ ] Put the session pooler URL into the `prod` environment:
+- [x] Put the session pooler URL into the `prod` environment:
 
 ```bash
 gh secret set DATABASE_URL --env prod
 ```
 
-- [ ] Save the **Project URL** and the **publishable (anon) key** from **Project Settings → API** in your password manager. They aren't secret (the phone app ships them), but they stay out of the public repo. M3 puts them where they're needed.
-- [ ] Go to **Authentication → Sign In / Providers**. Keep **Email** on, and turn **off** "Allow new users to sign up". The app is invite-only.
-- [ ] Leave Site URL, redirect URLs and email templates alone. M3 sets them once the app has an address.
+- [x] Save the **Project URL** and the **publishable (anon) key** from **Project Settings → API** in your password manager. They aren't secret (the phone app ships them), but they stay out of the public repo. M3 puts them where they're needed.
+- [x] Go to **Authentication → Sign In / Providers**. Keep **Email** on, and turn **off** "Allow new users to sign up". The app is invite-only.
+- [x] Leave Site URL, redirect URLs and email templates alone. M3 sets them once the app has an address.
 
 **Good to know:** Supabase's built-in email only delivers to members of your Supabase organization, and at most 2 emails an hour. That's fine for you as user one, as long as you sign in to the app with **the same email your Supabase account uses**. Friends (M7) will need a custom email sender, which needs a domain you own (see section 6).
 
@@ -57,48 +75,48 @@ gh secret set DATABASE_URL --env prod
 
 Production gets its **own** encryption key, different from dev (ADR 0007). Losing it isn't a disaster: you would re-enter your ESPN cookies. Keep it in your password manager anyway.
 
-- [ ] In your own Terminal app (not the Claude app), from the project folder, generate the key and copy it into your password manager:
+- [x] In your own Terminal app (not the Claude app), from the project folder, generate the key and copy it into your password manager:
 
 ```bash
 uv run fh keygen
 ```
 
-- [ ] Paste it into the `prod` environment:
+- [x] Paste it into the `prod` environment:
 
 ```bash
 gh secret set FH_ENCRYPTION_KEY --env prod
 ```
 
-- [ ] Give production its **own** ntfy topic, separate from the laptop's (decided 2026-11-07). You can tell at a glance which machine is talking, mute one without the other, and a leaked dev topic doesn't expose prod. Generate one in your own Terminal app and copy it into your password manager:
+- [x] Give production its **own** ntfy topic, separate from the laptop's (decided 2026-11-07). You can tell at a glance which machine is talking, mute one without the other, and a leaked dev topic doesn't expose prod. Generate one in your own Terminal app and copy it into your password manager:
 
 ```bash
 uv run fh keygen --topic
 ```
 
-- [ ] Put it into the `prod` environment:
+- [x] Put it into the `prod` environment:
 
 ```bash
 gh secret set FH_NTFY_TOPIC --env prod
 ```
 
-- [ ] In the ntfy app on your iPhone, tap **+**, subscribe to the new topic, and name it "Fantasy Helper prod". Keep the old subscription: the laptop still uses it.
+- [ ] In the ntfy app on your iPhone, tap **+**, subscribe to the new topic, and name it "Fantasy Helper prod". Keep the old subscription: the laptop still uses it. *(The first cloud run, 2026-11-07 at 17:17 Eastern, proves this: its success notification arrives on this subscription.)*
 
 ## 4. Cloudflare: R2 for the raw archive and backups (10 min)
 
 R2 holds every raw snapshot forever, the end-of-season archives and the nightly database backups (ADR 0021). The free tier gives 10 GB of storage, 1 million writes and 10 million reads a month, and downloads are free. We expect to use about 0.3 GB a season.
 
-- [ ] Sign up at [dash.cloudflare.com](https://dash.cloudflare.com) on the Free plan, and turn on two-factor authentication.
-- [ ] Open **R2 Object Storage** and finish the R2 checkout. It's free; Cloudflare may ask for a card on file.
-- [ ] **Create bucket:**
+- [x] Sign up at [dash.cloudflare.com](https://dash.cloudflare.com) on the Free plan, and turn on two-factor authentication.
+- [x] Open **R2 Object Storage** and finish the R2 checkout. It's free; Cloudflare may ask for a card on file.
+- [x] **Create bucket:**
   - **Name:** `fantasy-helper-raw`
   - **Location:** Automatic, with the hint **Eastern North America (ENAM)**
   - **Default storage class:** **Standard**. Infrequent Access isn't covered by the free tier.
   - **Public access:** leave it off
-- [ ] Go to **R2 → Manage API tokens → Create API token**:
+- [x] Go to **R2 → Manage API tokens → Create API token**:
   - **Permissions:** **Object Read & Write**
   - **Scope:** **Apply to specific buckets only**, then pick `fantasy-helper-raw`
   - **TTL:** forever
-- [ ] Copy the **Access Key ID**, the **Secret Access Key** (shown only once) and the S3 endpoint (`https://<account id>.r2.cloudflarestorage.com`) into your password manager. Then run these three commands one at a time, pasting each value:
+- [x] Copy the **Access Key ID**, the **Secret Access Key** (shown only once) and the S3 endpoint (`https://<account id>.r2.cloudflarestorage.com`) into your password manager. Then run these three commands one at a time, pasting each value:
 
 ```bash
 gh secret set FH_R2_ACCESS_KEY_ID --env prod
@@ -112,7 +130,8 @@ gh secret set FH_R2_SECRET_ACCESS_KEY --env prod
 gh secret set FH_R2_ENDPOINT --env prod
 ```
 
-- [ ] Skip Cloudflare Pages for now. In M3 you'll click **Connect to Git** once and authorize Cloudflare's GitHub app. M3 also asks you to put the three R2 values into your local `.env` for the one-time upload of the laptop's snapshot backlog.
+- [x] The three R2 values are in the laptop's `.env` too (2026-11-07), for the one-time upload of the snapshot backlog.
+- **Later, in part 4:** Cloudflare Pages. You'll click **Connect to Git** once and authorize Cloudflare's GitHub app.
 
 ## 5. Google Cloud: Cloud Run for the API (15–20 min)
 
@@ -194,7 +213,7 @@ gh secret set FH_HEALTHCHECKS_PING_KEY --env prod
 - "GCP project ID: …, billing and the $5 budget on, gcloud signed in"
 - "Healthchecks ntfy integration and ping key done"
 
-I'll check with `gh secret list --env prod`, which shows names only, never values. The list should have these 8 names:
+I'll check with `gh secret list --env prod`, which shows names only, never values. The list should have these 8 names (7 set on 2026-11-07; the Healthchecks key waits for section 6):
 
 | Secret (`prod` environment) | From |
 |---|---|
