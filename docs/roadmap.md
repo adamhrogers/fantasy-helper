@@ -129,6 +129,8 @@ These steps depend on each other, so they're ordered. B and C run in parallel at
 
 **Goal:** prove the whole path from scheduled job to sign-in to push before any LLM work starts.
 
+**Status (Nov 6):** started on branch `m3-phone-app`, in five parts (session-handoff §7). **Part 1, cloud snapshots, is built** (ADR 0023): the raw store on R2, `fh raw upload` for the laptop's backlog, and the snapshot job on GitHub Actions on Eastern time. It goes live after Adam's accounts and a two-day overlap with launchd. Because scheduled workflows run only from `main`, M3 merges part by part.
+
 | Lane | Work |
 |---|---|
 | A — API + auth | FastAPI on Cloud Run in **`us-east4`** with one pooled database engine per process, **Supabase Auth** (magic link; Adam is user one), reports and push-subscription routes, Supabase prod project in **`us-east-1`** (ADR 0020) |
@@ -227,6 +229,15 @@ Final scorecard per league, the trend across the season, the effect of each chan
 Yahoo adapter (OAuth, which also solves sign-up for Yahoo users), self-serve ESPN connect, a managed key service for credential encryption, pricing, a hosting review for paying users, a decision on a native app, and the fall 2027 launch.
 
 ---
+
+## When the repo goes private
+
+**Decided 2026-11-07: stay public for now** (ADR 0012). Nothing that's hard to copy is in the repo yet, going private is one setting, and a private repo on the free plan loses free secret scanning, the `prod` environment's branch rule and required CI checks (those need GitHub Pro). Go private at the **first** of these:
+- before the M8 council prompts land: the most copyable part of the product;
+- before anyone pays (P12);
+- if strangers start forking or starring the repo.
+
+Users' league data never lives in the repo, so the friends beta doesn't force it. When it happens: budget GitHub Pro ($4 a month), check the `prod` branch rule and the `main` ruleset survived, and watch Actions minutes (2,000 a month free).
 
 ## Critical path and the levers if it slips
 

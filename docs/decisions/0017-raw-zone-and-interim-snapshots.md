@@ -14,3 +14,5 @@ A missed day of projections can never be recovered (ADR 0014), and the season ha
 
 ## Consequences
 Until M3, a Mac that's shut down (not asleep) at the scheduled time misses that run; a sleeping Mac runs it on wake.
+
+**Update, 2026-11-06 (M3 part 1):** the move to the cloud is built, as ADR 0023 describes: `R2RawStore` with the same layout, `fh raw upload` for the laptop's backlog, and `.github/workflows/snapshot.yml` on Eastern time. Launchd keeps running through a two-day overlap and is then removed (docs/runbooks/cloud-snapshots.md).

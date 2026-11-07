@@ -1,0 +1,98 @@
+# Daily snapshots in the cloud (ADR 0023): the raw public data, saved twice a day to R2.
+# A missed day can't be recovered (ADR 0014), so this runs whether or not the laptop is on.
+#
+# GitHub's cron is UTC. Each set has an entry for Eastern Standard Time and one for Eastern
+# Daylight Time; `fh snapshot --cron` runs only the entry that matches New York's offset today,
+# so the sets run at 06:17 and 17:17 Eastern all year (pipeline/cron.py, tested against this
+# file). Off the hour on purpose: GitHub delays scheduled runs most at the top of the hour.
+name: Snapshot
+
+on:
+  schedule:
+    - cron: "17 11 * * *"  # morning, 06:17 EST
+    - cron: "17 10 * * *"  # morning, 06:17 EDT
+    - cron: "17 22 * * *"  # evening, 17:17 EST
+    - cron: "17 21 * * *"  # evening, 17:17 EDT
+  workflow_dispatch:
+    inputs:
+      set:
+        description: "Which set to capture"
+        type: choice
+        options: [morning, evening]
+        default: morning
+
+permissions:
+  contents: read
+
+concurrency:
+  group: snapshot
+  cancel-in-progress: false  # never cancel a snapshot that's saving
+
+jobs:
+  snapshot:
+    name: Save today's snapshot
+    runs-on: ubuntu-latest
+    environment: prod
+    timeout-minutes: 30  # a full set with two retry waits takes about 10 minutes
+    env:
+      FH_ENV: prod
+      FH_LOG_JSON: "true"
+      FH_RAW_STORE: r2
+      FH_R2_ENDPOINT: ${{ secrets.FH_R2_ENDPOINT }}
+      FH_R2_ACCESS_KEY_ID: ${{ secrets.FH_R2_ACCESS_KEY_ID }}
+      FH_R2_SECRET_ACCESS_KEY: ${{ secrets.FH_R2_SECRET_ACCESS_KEY }}
+      FH_NTFY_TOPIC: ${{ secrets.FH_NTFY_TOPIC }}
+      # DATABASE_URL (the run log) is added once prod is migrated, in M3 part 2.
+    steps:
+      # Actions are pinned to commits: this job holds prod secrets (tests/unit/test_workflows.py).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          persist-credentials: false  # the job never pushes; don't leave a token on disk
+
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7
+        with:
+          enable-cache: true
+
+      - name: Install
+        run: uv sync --locked --no-dev
+
+      # Exit 3 means the app already sent this failure to the phone (run-events runbook).
+      # Anything else (a crash before the app could alert, a kill) is left to the next step.
+      - name: Snapshot
+        id: snapshot
+        env:
+          CRON: ${{ github.event.schedule }}
+          SET: ${{ inputs.set }}
+        run: |
+          code=0
+          if [ -n "$CRON" ]; then
+            uv run --no-sync fh snapshot --cron "$CRON" || code=$?
+          else
+            uv run --no-sync fh snapshot --set "$SET" || code=$?
+          fi
+          [ "$code" -ne 3 ] || echo "reported=true" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+      - name: Alert on a failure the app didn't report
+        if: (failure() || cancelled()) && steps.snapshot.outputs.reported != 'true'
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          [ -n "$FH_NTFY_TOPIC" ] || exit 0
+          curl -sS --max-time 20 \
+            -H "Title: Snapshot job failed" \
+            -H "Priority: urgent" \
+            -H "Tags: rotating_light" \
+            -H "Click: $RUN_URL" \
+            -d "The job failed, timed out or was cancelled before the app could say why. Tap to open the run." \
+            "${FH_NTFY_SERVER:-https://ntfy.sh}/$FH_NTFY_TOPIC"
+
+      # Without a topic every alert above goes nowhere, so the job goes red instead (after the
+      # snapshot has saved the day).
+      - name: Require an alert channel
+        if: always()
+        run: |
+          if [ -z "$FH_NTFY_TOPIC" ]; then
+            echo "::error::FH_NTFY_TOPIC isn't set in the prod environment, so failures can't reach the phone (setup checklist, section 3)."
+            exit 1
+          fi

@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.20.1",
+    "boto3>=1.43.126",
     "cryptography>=50.0.2",
     "httpx>=0.28.1",
     "langsmith>=0.14.12",
@@ -130,4 +131,5 @@ dev = [
     "pre-commit>=4.7.0",
     "pytest>=9.1.1",
     "ruff>=0.17.2",
+    "types-boto3[s3]>=1.43.126",
 ]

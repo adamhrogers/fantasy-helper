@@ -65,6 +65,7 @@ There are three layers, from fastest to slowest:
 | Not found (league or endpoint gone) | No | |
 | The platform changed its data format; a bug in our code | No: the code has to change | |
 | Couldn't save the file | No | |
+| The raw store (R2) was unreachable | Yes: nothing was saved, so trying again can help | |
 
 **Why 3 attempts:** request-level retries already absorb blips. Two waits (2 and 5 minutes) cover a short outage, and a 06:30 run still finishes well before the 8 a.m. report. Outages longer than about 7 minutes rarely clear by waiting a little more, and those cases are what the late-report and missed-run alerts are for.
 
@@ -82,12 +83,17 @@ There are three layers, from fastest to slowest:
 
 ## What you get today
 
-**Morning snapshot (06:30) and evening snapshot (17:30):**
+**Morning and evening snapshots** (GitHub Actions at 06:17 and 17:17 Eastern from M3 part 1, ADR 0023; the Mac's 06:30 and 17:30 jobs during the overlap):
 - `Morning snapshot started` (quiet): "9 datasets to save."
-- `Morning snapshot: retrying (attempt 2 of 3)` (normal), only when needed.
-- `Morning snapshot succeeded` (quiet): "9/9 datasets saved, 3.9 MB. Took 41 s."
+- `Morning snapshot: retrying (attempt 2 of 3)` (normal), only when needed. An R2 outage while saving counts as retryable ("the raw store (R2) was unreachable").
+- `Morning snapshot succeeded` (quiet): "9/9 datasets saved, 3.9 MB. Took 41 s." While the Mac and the cloud overlap, the second morning run adds "1 already saved today by another run": Sleeper's player list is fetched once a day.
 - `Morning snapshot incomplete` (loud): which datasets failed, why, and after how many attempts. The others are still saved.
 - `Morning snapshot failed` (urgent): every dataset failed.
+- `Morning snapshot crashed` (urgent): it stopped on something unexpected, or the raw store isn't configured. Names the kind of error only.
+- `Morning snapshot: raw store check failed` (urgent): R2 answered, but not correctly (wrong endpoint, bad keys). The snapshot still ran, so the day is saved, but the files may not be where ingest looks.
+- `Snapshot job failed` (urgent, from the workflow itself): the job failed, timed out or was cancelled before the app could say why (a settings error, a failed install, a killed process). Tap it to open the run.
+
+**Exit codes (M3):** a scheduled command exits **3** once it has sent its failure to the phone, and the workflow alerts on any other failure, so a failure is reported exactly once and never silently. A prod job without `FH_NTFY_TOPIC` goes red on purpose, after saving the day. Prod and the laptop use different topics (decided 2026-11-07).
 
 **Ingest (`fh ingest`, by hand until M3):**
 - `Ingest started`
@@ -200,7 +206,7 @@ From M3 the same variables live in the GitHub `prod` environment, and the schedu
 | When | Event | Why |
 |---|---|---|
 | M2 (lock-in) | `warned` when box scores disagree with ESPN's or Sleeper's own numbers more than usual (the daily reconciliation, ADR 0022) | Watches the one box score truth |
-| M3 | The same events from GitHub Actions, plus a workflow-level failure step for crashes before Python starts | The cloud runs |
+| M3 | The same events from GitHub Actions, plus a workflow-level failure step for crashes before Python starts | The cloud runs. **Snapshots done in part 1** (also a `crashed` event for unexpected errors); the daily and weekly runs follow in part 2 |
 | M3 | `failed(urgent)` if the report isn't published by 7:45 a.m. | The 8 a.m. promise |
 | M3 | Missed run: a watchdog outside the runner (Healthchecks.io, free) that alerts if a scheduled run never started | A run that never starts can't report itself |
 | M4 | AI step failed, so the report shipped engine-only; daily model cost over a cap | Brain and budget |

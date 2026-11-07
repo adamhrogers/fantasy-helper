@@ -20,7 +20,7 @@ from fantasy_helper.pipeline.retry import (
     run_with_retries,
     wait_before,
 )
-from fantasy_helper.storage.raw_store import RawStoreError
+from fantasy_helper.storage.raw_store import RawStoreError, RawStoreUnavailableError
 
 
 @pytest.mark.parametrize(
@@ -52,6 +52,7 @@ def test_http_statuses(status: int, kind: FailureKind, retryable: bool) -> None:
         (EspnMappingError("new shape"), FailureKind.FORMAT_CHANGED),
         (json.JSONDecodeError("bad", "{", 0), FailureKind.BAD_RESPONSE),
         (RawStoreError("refusing to overwrite"), FailureKind.STORAGE),
+        (RawStoreUnavailableError("R2 unreachable"), FailureKind.STORAGE_DOWN),
         (KeyError("oops"), FailureKind.BUG),
     ],
 )
@@ -64,6 +65,7 @@ def test_only_causes_that_can_clear_up_are_retried() -> None:
     assert retryable == {
         FailureKind.NETWORK, FailureKind.SERVER_ERROR, FailureKind.RATE_LIMITED,
         FailureKind.BAD_RESPONSE, FailureKind.MISSING_INPUT, FailureKind.DATABASE,
+        FailureKind.STORAGE_DOWN,  # R2 unreachable (M3): nothing was saved, so try again
     }  # fmt: skip
 
 

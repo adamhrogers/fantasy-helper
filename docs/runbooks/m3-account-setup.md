@@ -4,6 +4,8 @@
 
 This prepares everything M3 needs, so that M3 can start building as soon as M2's first pieces land. It doesn't build or deploy anything.
 
+**Checked 2026-11-06, at the start of M3:** the repository secret `LANGSMITH_API_KEY` is set, and CI's LangSmith smoke trace passes on `main`. Nothing else is done yet: there's no `prod` environment and `gcloud` isn't installed. Two fixes since the first version: the gcloud install command (section 5), and a new section 6 for the missed-run watchdog that docs/runbooks/run-events.md plans for M3.
+
 **Two rules for every step:**
 - **Secrets never go into the chat.** As soon as a value appears, save it in your password manager. Where a step ends in `gh secret set`, run it in your own Terminal app and paste the value at its hidden prompt.
 - **Names, regions and project IDs aren't secret.** Tell me those when you're done.
@@ -16,7 +18,7 @@ All production secrets go into a GitHub **environment** called `prod`, not into 
 
 - [ ] On GitHub, open the repo and go to **Settings → Environments → New environment**. Name it `prod`.
 - [ ] Under **Deployment branches and tags**, choose **Selected branches and tags** and add `main`.
-- [ ] Finish the open item from M1: set the LangSmith key as a *repository* secret so CI can send its smoke trace. Copy the value from LangSmith (Settings → API Keys) or from `.env`, then run:
+- [x] Finish the open item from M1: set the LangSmith key as a *repository* secret so CI can send its smoke trace. **Done** (set 2026-11-06; the smoke trace passes on `main`). For reference, the command was:
 
 ```bash
 gh secret set LANGSMITH_API_KEY
@@ -49,7 +51,7 @@ gh secret set DATABASE_URL --env prod
 - [ ] Go to **Authentication → Sign In / Providers**. Keep **Email** on, and turn **off** "Allow new users to sign up". The app is invite-only.
 - [ ] Leave Site URL, redirect URLs and email templates alone. M3 sets them once the app has an address.
 
-**Good to know:** Supabase's built-in email only delivers to members of your Supabase organization, and at most 2 emails an hour. That's fine for you as user one. Friends (M7) will need a custom email sender, which needs a domain you own (see section 6).
+**Good to know:** Supabase's built-in email only delivers to members of your Supabase organization, and at most 2 emails an hour. That's fine for you as user one, as long as you sign in to the app with **the same email your Supabase account uses**. Friends (M7) will need a custom email sender, which needs a domain you own (see section 6).
 
 ## 3. Encryption key and alerts for production (5 min)
 
@@ -67,11 +69,19 @@ uv run fh keygen
 gh secret set FH_ENCRYPTION_KEY --env prod
 ```
 
-- [ ] Reuse your existing ntfy topic, so production alerts reach the same phone app. Copy `FH_NTFY_TOPIC` from `.env` and run:
+- [ ] Give production its **own** ntfy topic, separate from the laptop's (decided 2026-11-07). You can tell at a glance which machine is talking, mute one without the other, and a leaked dev topic doesn't expose prod. Generate one in your own Terminal app and copy it into your password manager:
+
+```bash
+uv run fh keygen --topic
+```
+
+- [ ] Put it into the `prod` environment:
 
 ```bash
 gh secret set FH_NTFY_TOPIC --env prod
 ```
+
+- [ ] In the ntfy app on your iPhone, tap **+**, subscribe to the new topic, and name it "Fantasy Helper prod". Keep the old subscription: the laptop still uses it.
 
 ## 4. Cloudflare: R2 for the raw archive and backups (10 min)
 
@@ -111,10 +121,16 @@ The Cloud Run free tier covers 2 million requests, 180,000 vCPU-seconds and 360,
 - [ ] At [console.cloud.google.com](https://console.cloud.google.com), create a project called `fantasy-helper`. **Write down the project ID**; it can differ from the name.
 - [ ] Go to **Billing** and link a billing account. Cloud Run requires one, even when usage stays inside the free tier.
 - [ ] Go to **Billing → Budgets & alerts → Create budget**. Scope it to this project, set **$5 a month**, and turn on email alerts at 50%, 90% and 100%. A budget only warns you; it doesn't stop spending. M3 also caps the service at one or two instances.
+- [ ] Update Homebrew first. Yours is from November 2025, and it can't install the current Google Cloud package, which has also been renamed from `google-cloud-sdk` to `gcloud-cli`:
+
+```bash
+brew update
+```
+
 - [ ] Install the Google Cloud command-line tool:
 
 ```bash
-brew install --cask google-cloud-sdk
+brew install --cask gcloud-cli
 ```
 
 - [ ] Sign in. This opens your browser:
@@ -143,7 +159,25 @@ gcloud services enable run.googleapis.com artifactregistry.googleapis.com secret
 
 GitHub Actions will deploy without a key file, using Workload Identity Federation. M3 gives you the exact commands to run for that.
 
-## 6. Your phone, and the later items (2 min)
+## 6. Healthchecks.io: the missed-run watchdog (5 min)
+
+A run that never starts can't report itself: the GitHub scheduler skipped it, or scheduled workflows were turned off. Healthchecks.io expects a ping from each scheduled run and alerts you when one doesn't arrive on time. The same check covers the 7:45 a.m. late-report alert (docs/runbooks/run-events.md). It runs outside both GitHub and Google Cloud, so it still works when they don't. The free Hobbyist plan has 20 checks; M3 uses about five.
+
+- [ ] Sign up at [healthchecks.io](https://healthchecks.io) on the free plan, and turn on two-factor authentication.
+- [ ] Open your project and go to **Integrations → ntfy → Add integration**:
+  - **Server URL:** `https://ntfy.sh`
+  - **Topic:** the prod topic from section 3
+  - **Priority for "down" events:** High
+- [ ] Remove the **email** integration that's on by default, unless you also want these alerts by email.
+- [ ] Go to **Settings** (the project's, not your account's) → **Ping key** → **Create**. Copy it into your password manager, then run:
+
+```bash
+gh secret set FH_HEALTHCHECKS_PING_KEY --env prod
+```
+
+- [ ] Don't create any checks. The scheduled jobs create them on their first ping, and in M3 I'll give you each one's schedule to set (about two minutes).
+
+## 7. Your phone, and the later items (2 min)
 
 - [ ] Check that your iPhone runs **iOS 16.4 or later** (Settings → General → About). Web Push needs it, and the app has to be added to the Home Screen; we'll do that together in M3.
 - [ ] **Later, not now:**
@@ -158,17 +192,19 @@ GitHub Actions will deploy without a key file, using Workload Identity Federatio
 - "Prod Supabase created in us-east-1, sign-ups off"
 - "R2 bucket and token done"
 - "GCP project ID: …, billing and the $5 budget on, gcloud signed in"
+- "Healthchecks ntfy integration and ping key done"
 
-I'll check with `gh secret list --env prod`, which shows names only, never values. The list should have these 7 names:
+I'll check with `gh secret list --env prod`, which shows names only, never values. The list should have these 8 names:
 
 | Secret (`prod` environment) | From |
 |---|---|
 | `DATABASE_URL` | Supabase prod, session pooler |
 | `FH_ENCRYPTION_KEY` | `uv run fh keygen` (new, prod only) |
-| `FH_NTFY_TOPIC` | Your existing `.env` |
+| `FH_NTFY_TOPIC` | `uv run fh keygen --topic` (new, prod only) |
 | `LANGSMITH_API_KEY` | LangSmith (also set as a repository secret, for CI) |
 | `FH_R2_ACCESS_KEY_ID` | Cloudflare R2 API token |
 | `FH_R2_SECRET_ACCESS_KEY` | Cloudflare R2 API token |
 | `FH_R2_ENDPOINT` | Cloudflare R2 API token |
+| `FH_HEALTHCHECKS_PING_KEY` | Healthchecks.io project settings |
 
 **I add these myself in M3:** the Web Push (VAPID) keys, generated straight into secrets, and the Cloud Run deploy identity.

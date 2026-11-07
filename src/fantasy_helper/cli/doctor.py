@@ -12,6 +12,11 @@ from fantasy_helper.observability.alerts import notifier_from_settings
 from fantasy_helper.observability.tracing import send_smoke_trace
 from fantasy_helper.storage import crypto, migrate
 from fantasy_helper.storage.db import make_engine
+from fantasy_helper.storage.raw_store import (
+    RawStoreError,
+    RawStoreUnavailableError,
+    r2_missing_settings,
+)
 
 
 class Check(StrEnum):
@@ -20,6 +25,7 @@ class Check(StrEnum):
     DATABASE = "database"
     TRACING = "tracing"
     ALERTS = "alerts"
+    RAW = "raw"
 
 
 class Status(StrEnum):
@@ -98,6 +104,10 @@ def check_tracing(settings: Settings) -> Result:
 
 
 def check_alerts(settings: Settings, *, send: bool) -> Result:
+    if settings.ntfy_topic is None and settings.env == "prod":
+        return Result(
+            Check.ALERTS, Status.FAIL, "FH_NTFY_TOPIC not set: prod runs can't reach the phone"
+        )
     if settings.ntfy_topic is None:
         return Result(
             Check.ALERTS, Status.SKIP, "FH_NTFY_TOPIC not set (generate: uv run fh keygen --topic)"
@@ -117,6 +127,40 @@ def check_alerts(settings: Settings, *, send: bool) -> Result:
     return Result(Check.ALERTS, Status.OK, "test alert sent; check your phone")
 
 
+def check_raw(settings: Settings) -> Result:
+    """R2, whenever it's configured: the bucket answers and refuses to overwrite an object."""
+    missing = r2_missing_settings(settings)
+    if missing and settings.raw_store == "local":
+        return Result(
+            Check.RAW, Status.SKIP, f"local store at {settings.data_dir / 'raw'}; R2 not configured"
+        )
+    if missing:
+        return Result(Check.RAW, Status.FAIL, f"FH_RAW_STORE=r2 but {', '.join(missing)} not set")
+    from fantasy_helper.storage.r2_store import r2_store_from_settings
+
+    try:
+        store = r2_store_from_settings(settings)
+        store.check_access()
+        refused = store.probe_never_overwrites()
+    except RawStoreUnavailableError as exc:
+        return Result(Check.RAW, Status.FAIL, f"can't reach R2: {exc}")
+    except RawStoreError as exc:
+        return Result(Check.RAW, Status.FAIL, str(exc))
+    if not refused:
+        return Result(
+            Check.RAW,
+            Status.FAIL,
+            "R2 accepted an overwrite despite If-None-Match: writes still check first, but "
+            "aren't atomic (ADR 0023)",
+        )
+    using = "in use" if settings.raw_store == "r2" else "configured (FH_RAW_STORE=local)"
+    return Result(
+        Check.RAW,
+        Status.OK,
+        f"R2 bucket {settings.r2_bucket!r} {using}; it refuses to overwrite objects",
+    )
+
+
 def run_checks(settings: Settings, *, only: set[Check], send_alert: bool) -> list[Result]:
     checks: dict[Check, Callable[[], Result]] = {
         Check.CONFIG: lambda: check_config(settings),
@@ -124,5 +168,6 @@ def run_checks(settings: Settings, *, only: set[Check], send_alert: bool) -> lis
         Check.DATABASE: lambda: check_database(settings),
         Check.TRACING: lambda: check_tracing(settings),
         Check.ALERTS: lambda: check_alerts(settings, send=send_alert),
+        Check.RAW: lambda: check_raw(settings),
     }
     return [run() for check, run in checks.items() if check in only]

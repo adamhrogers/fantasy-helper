@@ -68,9 +68,15 @@ def validate_projections(data: Any) -> str | None:
     if not isinstance(data, list) or len(data) < MIN_PROJECTIONS:
         size = len(data) if isinstance(data, list) else 0
         return f"only {size} projection rows (expected at least {MIN_PROJECTIONS})"
-    with_stats = sum(1 for row in data if isinstance(row, dict) and row.get("stats"))
-    if with_stats < len(data) // 2:
-        return f"only {with_stats} of {len(data)} projection rows have stats"
+    # A projected core, not a fraction: Sleeper lists every player, and the share with a real
+    # projection moves (on 2026-11-07, 1,334 rows that held only ADP fields went empty).
+    projected = sum(
+        1
+        for row in data
+        if isinstance(row, dict) and (row.get("stats") or {}).get("pts") is not None
+    )
+    if projected < MIN_PROJECTIONS:
+        return f"only {projected} players have a points projection (expected {MIN_PROJECTIONS}+)"
     return None
 
 

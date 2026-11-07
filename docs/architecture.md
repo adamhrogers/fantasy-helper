@@ -117,7 +117,7 @@ All of these live in one Python package, `src/fantasy_helper/`, with strict inte
 
 | Zone | What it holds | Where it lives | Rule |
 |---|---|---|---|
-| **raw** | Every source response as received (gzipped JSON), keyed by source, endpoint, league and `pulled_at` | Local disk now; **Cloudflare R2** (10 GB free) from M3, **kept forever** | Immutable. Kept **out of Postgres**, because ESPN payloads would use up a 500 MB free tier in weeks. |
+| **raw** | Every source response as received (gzipped JSON), keyed by source, endpoint, league and `pulled_at` | **Cloudflare R2** (10 GB free) from M3, one bucket for every environment, **kept forever**; local disk for development (ADR 0023) | Immutable. Kept **out of Postgres**, because ESPN payloads would use up a 500 MB free tier in weeks. |
 | **core** | Normalized domain data | Supabase Postgres from M0 (separate dev and prod projects), **current season only** | Versioned where grading depends on it. Past seasons live in the archive (§5.5). |
 | **derived** | FactSheets, reports, recommendations, grades, report cards, run log, **read models** (§5.4) | Same database | Recommendations are insert-only. Grades go in a separate table. Read models are rebuilt each run. |
 | **archive** | Each finished season's tables as Parquet, plus nightly backups of the tables that can't be rebuilt from raw | Cloudflare R2 | Written once per season (archive) or nightly (backups). Read with DuckDB, no database needed. |
