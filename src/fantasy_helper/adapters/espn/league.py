@@ -124,6 +124,23 @@ def fetch_teams_rosters(
     )  # fmt: skip
 
 
+def fetch_lineups(
+    client: httpx.Client,
+    season: int,
+    league_id: str,
+    credentials: EspnCredentials,
+    scoring_period: int,
+) -> RawResponse:
+    """Every team's lineup on one scoring day, past days included (view mRoster with a
+    scoringPeriodId). Used for who was in a starting slot that day; the points in it are never
+    used (ADR 0022)."""
+    return _league_get(
+        client, season, league_id, credentials,
+        dataset=f"lineups/{scoring_period}",
+        params={"view": "mRoster", "scoringPeriodId": str(scoring_period)},
+    )  # fmt: skip
+
+
 def fetch_matchups(
     client: httpx.Client, season: int, league_id: str, credentials: EspnCredentials
 ) -> RawResponse:

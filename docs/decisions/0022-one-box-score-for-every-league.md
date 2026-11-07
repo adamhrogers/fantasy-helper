@@ -27,3 +27,5 @@ Calls, grades and trajectories compare across leagues and platforms. The same pl
 - Ingest already warns when a rostered player doesn't resolve to an ESPN player. The game-log pull is flagged if it fills its size limit.
 - A daily reconciliation (ESPN season totals and Sleeper weekly points against our scores) arrives with lock-in, which uses the same matching to read lock state.
 - New stats a league might score go into `domain.stats.Stat` and a box score column together.
+
+**Update, 2026-11-06:** the daily reconciliation is built (`pipeline/reconcile.py`, a step in `fh run daily`): ESPN points leagues' season totals and Sleeper lock-in leagues' completed weeks, against our scores. The run warns when agreement drops below 98% (ESPN) or 90% (Sleeper). Mid-week points banked in daily-lineup leagues follow the same rule: our box scores times each finished day's lineup (ESPN's record of who started). ESPN's daily totals are read only to check that figure (live: an exact match).

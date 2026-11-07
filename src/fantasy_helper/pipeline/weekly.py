@@ -72,6 +72,9 @@ from fantasy_helper.storage.repositories import leagues, read_models
 
 log = get_logger(__name__)
 FREE_AGENTS_IN_SHEET = 12
+# Our banked points should match ESPN's daily totals exactly (same box scores, same lineups);
+# a gap past this means a lineup or box score is off.
+BANKED_TOLERANCE = 1.0
 
 
 @dataclass
@@ -82,6 +85,7 @@ class LeagueWeekly:
     calls: int = 0
     new_calls: int = 0
     failure: FailureKind | None = None
+    banked_gap: float | None = None  # our banked points minus the platform's (a check only)
 
 
 @dataclass
@@ -208,16 +212,26 @@ def _league_week(session: Session, league: League, user: User, now: datetime) ->
 
     matchup = None
     if points and theirs is not None and ws.opponent is not None:
+        whole_week = ws.from_day == ws.week_start
+        banked = (0.0, 0.0) if whole_week else (ws.my_banked, ws.their_banked)
+        my_banked, their_banked = banked
+        known = my_banked is not None and their_banked is not None
+        # Final totals: points banked (our box scores x each day's lineup) plus the rest of
+        # the week. The spread is the rest of the week's alone: banked points are settled.
+        my_total = (my_banked or 0.0) + mine.points
+        their_total = (their_banked or 0.0) + theirs.points
         matchup = FactMatchup(
             opponent=ws.opponent.name,
-            my_points=round(mine.points, 1),
+            my_points=round(my_total, 1),
             my_sd=round(math.sqrt(mine.variance), 1),
-            their_points=round(theirs.points, 1),
+            their_points=round(their_total, 1),
             their_sd=round(math.sqrt(theirs.variance), 1),
+            my_banked=None if whole_week or my_banked is None else round(my_banked, 1),
+            their_banked=None if whole_week or their_banked is None else round(their_banked, 1),
             win_probability=round(
-                win_probability(mine.points, mine.variance, theirs.points, theirs.variance), 3
+                win_probability(my_total, mine.variance, their_total, theirs.variance), 3
             )
-            if ws.from_day == ws.week_start
+            if known
             else None,
         )
     names = {p.player_id: p.name for p in (*ws.mine.players, *ws.free_agents)}
@@ -261,7 +275,12 @@ def _league_week(session: Session, league: League, user: User, now: datetime) ->
             logged.append((key, stored))
             new += int(created)
     report = weekly_report(fact_sheet, logged, user_id=user.id, generated_at=now, lock_in=lock_in)
-    return LeagueWeekly(league, sheet=fact_sheet, report=report, calls=len(logged), new_calls=new)
+    gap = None
+    if fact_sheet.matchup and fact_sheet.matchup.my_banked is not None and ws.my_banked_reported:
+        gap = round(fact_sheet.matchup.my_banked - ws.my_banked_reported, 1)
+    return LeagueWeekly(
+        league, sheet=fact_sheet, report=report, calls=len(logged), new_calls=new, banked_gap=gap
+    )
 
 
 def _player_values(
@@ -367,4 +386,15 @@ def weekly_summary(result: WeeklyResult, attempts: int) -> tuple[str, list[str]]
             f"overview failed for {n} {platform} league{'s' if n > 1 else ''}: "
             f"{outcome(kind, attempts)}"
         )
+    off = [lg for lg in done if lg.banked_gap is not None and abs(lg.banked_gap) > BANKED_TOLERANCE]
+    if off:
+        problems.append(
+            f"points banked this week differ from the platform's in {len(off)} league"
+            f"{'s' if len(off) > 1 else ''} (largest {_largest_gap(off):.1f}):"
+            " check the stored lineups and box scores (ADR 0022)"
+        )
     return detail, problems
+
+
+def _largest_gap(leagues: list[LeagueWeekly]) -> float:
+    return max(abs(lg.banked_gap or 0.0) for lg in leagues)

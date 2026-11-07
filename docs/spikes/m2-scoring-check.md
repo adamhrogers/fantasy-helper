@@ -62,5 +62,9 @@ Completed weeks fit that, and so did week 3 at the time: 115 player-weeks showin
 ## Consequences
 
 - **Near-ties:** because our box score is the one truth, a Sleeper score can differ from Sleeper's display by a point or two in about 1% of player-games. Lock-or-pass cards show the margin and flag near-ties; they never switch to a second stat source.
-- **Daily reconciliation:** the comparisons above become a daily check, on completed weeks only (mid-week Sleeper numbers move during the day).
+- **Daily reconciliation, built (`pipeline/reconcile.py`):** the comparisons above run every morning in `fh run daily`.
+  - ESPN season totals, leaving out players whose game today has tipped.
+  - Sleeper completed weeks only.
+  - The run warns below 98% (ESPN) or 90% (Sleeper).
+  - First live run: ESPN 75/75 (on a game night), Sleeper 271/275.
 - **Gotcha:** stored league rules (`league_settings_versions.rules`) include the computed `content_hash`. Drop it before `LeagueRules.model_validate`.

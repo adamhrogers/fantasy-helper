@@ -245,6 +245,16 @@ def map_rosters(data: Any) -> tuple[list[TeamRecord], list[RosterEntryRecord]]:
     return teams, entries
 
 
+def map_lineup(data: Any) -> list[RosterEntryRecord]:
+    """One scoring day's lineups (view mRoster with a scoringPeriodId): who was in which slot."""
+    return map_rosters(data)[1]
+
+
+def scoring_period_of(day: date, opening_night: date) -> int:
+    """ESPN numbers scoring days from opening night (1), in Eastern dates."""
+    return (day - opening_night).days + 1
+
+
 def map_matchups(data: Any) -> list[MatchupRecord]:
     """Every matchup of the season (views mMatchupScore + mScoreboard)."""
 
@@ -394,6 +404,25 @@ def map_roster_players(data: Any, birth_dates: dict[str, date] | None = None) ->
         for entry in team.get("roster", {}).get("entries", [])
         if entry.get("playerPoolEntry", {}).get("player")
     ]
+
+
+def map_season_points(data: Any, season: int) -> dict[str, float]:
+    """Each rostered player's season-to-date fantasy points as ESPN computes them in league
+    context (`appliedTotal` of the season's actual stats). Only for checking our own scoring
+    (ADR 0022), never as an input."""
+    totals: dict[str, float] = {}
+    for team in data.get("teams", []):
+        for entry in team.get("roster", {}).get("entries", []):
+            player = entry.get("playerPoolEntry", {}).get("player") or {}
+            for s in player.get("stats", []):
+                if (
+                    s.get("statSourceId") == 0
+                    and s.get("statSplitTypeId") == 0
+                    and s.get("seasonId") == season
+                    and s.get("appliedTotal") is not None
+                ):
+                    totals[str(player["id"])] = float(s["appliedTotal"])
+    return totals
 
 
 def map_injuries(data: Any) -> list[InjuryRecord]:

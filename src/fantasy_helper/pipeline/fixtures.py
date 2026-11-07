@@ -111,6 +111,8 @@ def record_fixtures(
             }
         matchups = _slim(_json(espn_league.fetch_matchups(*args)))
         latest = int(settings["status"]["latestScoringPeriod"])
+        lineup_period = max(latest - 2, 1)  # a finished day
+        lineups = _slim(_json(espn_league.fetch_lineups(*args, lineup_period)))
         by_period = {
             str(p): redact_espn(
                 _json(espn_league.fetch_transactions(*args, p)), r, league_id=lg.external_id
@@ -126,6 +128,8 @@ def record_fixtures(
             Fixture(f"{alias}/matchups.json", redact_espn(matchups, r, league_id=lid),
                     "views mMatchupScore + mScoreboard; player stats emptied, "
                     "delayed roster copies dropped"),
+            Fixture(f"{alias}/lineups.json", redact_espn(lineups, r, league_id=lid),
+                    f"view mRoster for scoring period {lineup_period}; player stats emptied"),
             Fixture(
                 f"{alias}/transactions.json",
                 {"by_scoring_period": by_period},

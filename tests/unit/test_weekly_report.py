@@ -37,6 +37,18 @@ def test_a_whole_week_overview() -> None:
     assert "Hurt Star" not in below.body  # IR players aren't judged
 
 
+def test_mid_week_with_points_banked() -> None:
+    s = sheet(date(2026, 11, 5), 0.21)
+    m = s.matchup
+    assert m is not None
+    so_far = m.model_copy(update={"my_banked": 512.0, "their_banked": 560.0})
+    banked = s.model_copy(update={"matchup": so_far})
+    card = weekly_report(banked, [], user_id=uuid4(), generated_at=NOW).cards[0]
+    assert card.title == "Week 3 vs Rival: 21% to win"
+    assert card.body.startswith("So far this week: you 512, Rival 560.")
+    assert "with Thu Nov 5 to Sunday still to play" in card.body
+
+
 def test_mid_week_says_so_instead_of_guessing() -> None:
     report = weekly_report(sheet(date(2026, 11, 5), None), [], user_id=uuid4(), generated_at=NOW)
     assert report.cards[0].title == "Week 3 vs Rival: rest of the week"

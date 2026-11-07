@@ -293,3 +293,47 @@ def adds_since(session: Session, league_id: UUID, team_external_id: str, since: 
         )
     )
     return sum(1 for t in rows if any(i.get("action") == "add" for i in t.items))
+
+
+def reported_points_by_period(
+    session: Session, league_id: UUID, period: int
+) -> list[tuple[str, float]]:
+    """(platform player ID, reported points) for every player on both sides of every matchup in
+    one period. Checks only, never scoring (ADR 0022)."""
+    out: list[tuple[str, float]] = []
+    for row in session.scalars(
+        select(MatchupRow).where(MatchupRow.league_id == league_id, MatchupRow.period == period)
+    ):
+        for side in row.detail.values():
+            for pid, points in ((side or {}).get("player_points") or {}).items():
+                out.append((str(pid), float(points)))
+    return out
+
+
+def roster_on(session: Session, league_id: UUID, as_of: date) -> list[tuple[str, UUID, str]]:
+    """(team, player ID, slot) for every team on one day, if that day's snapshot exists."""
+    rows = session.execute(
+        select(
+            RosterEntryRow.team_external_id, RosterEntryRow.player_id, RosterEntryRow.slot
+        ).where(RosterEntryRow.league_id == league_id, RosterEntryRow.as_of == as_of)
+    )
+    return [(team, pid, slot) for team, pid, slot in rows]
+
+
+def reported_team_points(
+    session: Session, league_id: UUID, period: int, team_external_id: str
+) -> dict[int, float]:
+    """A team's points per scoring day in one matchup, as the platform reports them (ESPN).
+    Checks only, never scoring (ADR 0022)."""
+    row = session.scalars(
+        select(MatchupRow).where(
+            MatchupRow.league_id == league_id,
+            MatchupRow.period == period,
+            (MatchupRow.home_team == team_external_id) | (MatchupRow.away_team == team_external_id),
+        )
+    ).first()
+    if row is None:
+        return {}
+    side = "home" if row.home_team == team_external_id else "away"
+    by_day = (row.detail.get(side) or {}).get("points_by_period") or {}
+    return {int(k): float(v) for k, v in by_day.items()}

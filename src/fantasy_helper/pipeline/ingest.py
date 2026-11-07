@@ -12,7 +12,7 @@ import re
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -25,7 +25,7 @@ from fantasy_helper.adapters.espn import mapper as espn
 from fantasy_helper.adapters.espn.league import EspnAccessError
 from fantasy_helper.adapters.sleeper import league as sleeper_league
 from fantasy_helper.adapters.sleeper import mapper as sleeper
-from fantasy_helper.domain.calendar import season_end_year
+from fantasy_helper.domain.calendar import matchup_week_bounds, matchup_week_of, season_end_year
 from fantasy_helper.domain.league import League, Platform
 from fantasy_helper.domain.player import IdSource
 from fantasy_helper.domain.ports import Clock, SystemClock
@@ -87,6 +87,9 @@ class LeagueResult:
     rostered_sleeper_linked: int = 0  # linked to an ESPN player
     free_agents: int = 0  # Sleeper only: every active player not on a roster in the league
     free_agents_linked: int = 0
+    # ESPN points leagues: each rostered player's season points as ESPN reports them, by ESPN
+    # player ID. For the daily check of our box scores and scoring only (ADR 0022).
+    reported_season_points: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -133,12 +136,18 @@ def run_ingest(
     sleeper_players_raw = json.loads(store.get(latest["sleeper_players"]))
     sleeper_week = int(json.loads(store.get(latest["sleeper_state"]))["week"])
 
+    # The schedule first: fetching league data needs it (this matchup week's finished days).
+    schedule_raw = json.loads(store.get(latest["espn_schedule"]))
+    report.games = nba.upsert_games(
+        session, season_end_year(today), espn.map_schedule(schedule_raw)
+    )
+
     fetched: list[_Fetched] = []
     user_leagues = leagues.list_for_user(session, user.id)
     for league in user_leagues:
         try:
             if league.platform is Platform.ESPN:
-                fetched.append(_fetch_espn(session, client, store, league, user, key))
+                fetched.append(_fetch_espn(session, client, store, league, user, key, today))
             elif league.platform is Platform.SLEEPER:
                 fetched.append(_fetch_sleeper(client, store, league, sleeper_week))
         except Exception as exc:  # one league failing never stops the others
@@ -164,10 +173,6 @@ def run_ingest(
     report.crosswalk = sync_players(session, espn_players, sleeper_players)
     resolver = Resolver(session)
 
-    schedule_raw = json.loads(store.get(latest["espn_schedule"]))
-    report.games = nba.upsert_games(
-        session, season_end_year(today), espn.map_schedule(schedule_raw)
-    )
     _load_projections(session, store, resolver, report)
     _load_injuries(session, store, resolver, report)
     _load_game_logs(session, store, resolver, report)
@@ -266,7 +271,13 @@ def _keep(store: RawStore, league: League, response: RawResponse) -> Any:
 
 
 def _fetch_espn(
-    session: Session, client: httpx.Client, store: RawStore, league: League, user: User, key: bytes
+    session: Session,
+    client: httpx.Client,
+    store: RawStore,
+    league: League,
+    user: User,
+    key: bytes,
+    today: date,
 ) -> _Fetched:
     creds = credentials.load_espn(session, user.id, key)
     if creds is None:
@@ -284,8 +295,24 @@ def _fetch_espn(
                 _keep(store, league, espn_league.fetch_transactions(*args, period))
                 for period in range(1, latest_period + 1)
             ],
+            # Each finished day of this matchup week: who was in which slot (for points banked
+            # so far, scored from our box scores; ADR 0022).
+            "lineups": {
+                day: _keep(store, league, espn_league.fetch_lineups(*args, period))
+                for day, period in _finished_days(session, league.season, today)
+            },
         },
     )
+
+
+def _finished_days(session: Session, season: int, today: date) -> list[tuple[date, int]]:
+    """(day, ESPN scoring period) for each day of the current matchup week before today."""
+    opening = nba.season_start(session, season)
+    if opening is None:  # no schedule yet (the very first ingest)
+        return []
+    start, _ = matchup_week_bounds(opening, matchup_week_of(opening, today))
+    days = [start + timedelta(days=i) for i in range((today - start).days)]
+    return [(day, espn.scoring_period_of(day, opening)) for day in days]
 
 
 def _fetch_sleeper(client: httpx.Client, store: RawStore, league: League, week: int) -> _Fetched:
@@ -445,7 +472,16 @@ def _store_espn(
     result.unmapped_scoring = rules.unmapped_scoring
     teams, entries = espn.map_rosters(f.data["teams_rosters"])
     result.teams = store_league.upsert_teams(session, f.league.id, teams)
+    if rules.rules.scoring.weights:
+        result.reported_season_points = espn.map_season_points(
+            f.data["teams_rosters"], f.league.season
+        )
     _store_roster(session, result, resolver, entries, today)
+    for day, lineup in f.data.get("lineups", {}).items():
+        resolved = [
+            (e, pid) for e in espn.map_lineup(lineup) if (pid := resolver.resolve(e.player))
+        ]
+        store_league.replace_roster(session, f.league.id, day, resolved)
     result.matchups = store_league.upsert_matchups(
         session, f.league.id, espn.map_matchups(f.data["matchups"])
     )

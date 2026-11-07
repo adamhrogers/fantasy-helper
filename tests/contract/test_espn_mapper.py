@@ -34,6 +34,18 @@ class TestPointsLeague:
         assert weights[Stat.TECHNICAL_FOULS] == -2.0
         assert record.unmapped_scoring == ("statId 43 (+1)",)
 
+    def test_a_past_days_lineup(self) -> None:
+        """Recorded `--only espn_points/lineups.json`: view mRoster for scoring period 16
+        (Wednesday 2026-11-04), every team's slots that day."""
+        data = recorded("espn_points/lineups.json")
+        assert data["scoringPeriodId"] == 16
+        entries = mapper.map_lineup(data)
+        assert len(entries) == 155
+        starters = Counter(e.team_external_id for e in entries if e.slot not in ("BENCH", "IR"))
+        assert len(starters) == 10
+        assert set(starters.values()) == {10}  # 10 starting slots, all filled that day
+        assert mapper.scoring_period_of(date(2026, 11, 4), date(2026, 10, 20)) == 16
+
     def test_rules_match_the_league_settings(self) -> None:
         record = mapper.map_rules(recorded("espn_points/settings.json"))
         rules = record.rules

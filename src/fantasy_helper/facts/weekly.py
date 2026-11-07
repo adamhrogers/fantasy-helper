@@ -4,6 +4,11 @@ The week is dated: the matchup week's days (Monday to Sunday, week 1 from openin
 only games that haven't tipped yet. The weekly run happens before the day's games, so on a
 Monday morning that's the whole week; run mid-week, it's what's left.
 
+Mid-week, points already banked come from our box scores (one truth, ADR 0022) times who was in
+a starting slot each finished day (ESPN's lineup for that day, stored by ingest). ESPN's own
+daily totals are read only to check that figure. Lock-in leagues have no banked figure: it
+depends on locks the app can't see.
+
 Per game, the projection is the provider's projection for that game when there is one (Sleeper's
 per-game rows, RotoWire's numbers), then a per-game season average (Sleeper, then ESPN); each is
 scored by this league's rules and given a spread from the player's own box scores.
@@ -17,8 +22,9 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from fantasy_helper.adapters.espn.mapper import scoring_period_of
 from fantasy_helper.domain.calendar import NBA_TIMEZONE, matchup_week_bounds, matchup_week_of
-from fantasy_helper.domain.league import League, LeagueRules
+from fantasy_helper.domain.league import League, LeagueRules, LineupMode
 from fantasy_helper.domain.player import Position
 from fantasy_helper.domain.projections import ProjectionScope, Provider
 from fantasy_helper.domain.stats import Stat
@@ -31,6 +37,7 @@ from fantasy_helper.storage.tables import stat_line
 
 FREE_AGENT = "FA"
 IR = "IR"
+BENCHED = frozenset({"BENCH", "IR"})
 
 
 @dataclass(frozen=True)
@@ -80,6 +87,11 @@ class WeeklySheet:
     adds_left: int | None  # None: no limit
     projection_snapshot_ids: tuple[UUID, ...]
     first_tip_utc: datetime | None  # the earliest game left this week, for call deadlines
+    # Points banked this week before today, from our box scores and each day's lineup. None when
+    # unknown (a lock-in league, or a finished game day without a stored lineup).
+    my_banked: float | None = None
+    their_banked: float | None = None
+    my_banked_reported: float | None = None  # ESPN's own daily totals, summed: a check only
 
 
 def load_weekly(session: Session, league: League, *, now: datetime) -> WeeklySheet:
@@ -108,7 +120,7 @@ def load_weekly(session: Session, league: League, *, now: datetime) -> WeeklyShe
     ids = list(rostered) + fa_ids
     profiles = players.profiles(session, ids)
     book = _ProjectionBook(session, snapshots, ids)
-    history, prior_cv = _scored_history(session, league, rules)
+    history, prior_cv, by_day = _scored_history(session, league, rules)
 
     def week_player(pid: UUID, slot: str) -> WeekPlayer | None:
         if pid not in profiles:
@@ -146,6 +158,16 @@ def load_weekly(session: Session, league: League, *, now: datetime) -> WeeklyShe
         if p is not None and p.week.games
     )
     tips = [tip for games in games_by_team.values() for tip, _ in games]
+    my_banked = their_banked = reported = None
+    if rules.lineup_mode is LineupMode.DAILY and rules.scoring.weights:
+        days = _game_days(session, league.season, week_start, today)
+        my_banked = _banked(session, league.id, league.my_team_external_id, days, by_day)
+        if opp_id:
+            their_banked = _banked(session, league.id, opp_id, days, by_day)
+        reported_by_day = league_data.reported_team_points(
+            session, league.id, week, league.my_team_external_id
+        )
+        reported = sum(reported_by_day.get(scoring_period_of(d, opening), 0.0) for d in days)
     return WeeklySheet(
         league=league, rules=rules, settings_version=version, week=week,
         week_start=week_start, week_end=week_end, from_day=from_day, as_of=now,
@@ -155,6 +177,7 @@ def load_weekly(session: Session, league: League, *, now: datetime) -> WeeklyShe
         adds_left=_adds_left(session, league, rules, week_start),
         projection_snapshot_ids=tuple(s for s in snapshots.values() if s),
         first_tip_utc=min(tips) if tips else None,
+        my_banked=my_banked, their_banked=their_banked, my_banked_reported=reported,
     )  # fmt: skip
 
 
@@ -200,15 +223,44 @@ class _ProjectionBook:
 
 def _scored_history(
     session: Session, league: League, rules: LeagueRules
-) -> tuple[dict[UUID, list[float]], float]:
-    """Each player's played games this season in this league's scoring, and the league's
-    spread prior."""
+) -> tuple[dict[UUID, list[float]], float, dict[tuple[UUID, date], float]]:
+    """Each player's played games this season in this league's scoring, the league's spread
+    prior, and each player's points by game day."""
     history: dict[UUID, list[float]] = defaultdict(list)
+    by_day: dict[tuple[UUID, date], float] = {}
     if rules.scoring.weights:
         for row in nba.box_scores(session, league.season):
             if row.played:
-                history[row.player_id].append(game_points(stat_line(row), rules.scoring))
-    return history, league_cv(list(history.values()))
+                points = game_points(stat_line(row), rules.scoring)
+                history[row.player_id].append(points)
+                by_day[(row.player_id, row.game_date)] = points
+    return history, league_cv(list(history.values())), by_day
+
+
+def _game_days(session: Session, season: int, week_start: date, today: date) -> list[date]:
+    """Days of this week before today with at least one NBA game (election day had none)."""
+    if today <= week_start:
+        return []
+    last = date.fromordinal(today.toordinal() - 1)
+    return sorted({day for _, _, day, _, _ in nba.games_between(session, season, week_start, last)})
+
+
+def _banked(
+    session: Session,
+    league_id: UUID,
+    team_id: str,
+    days: Sequence[date],
+    by_day: dict[tuple[UUID, date], float],
+) -> float | None:
+    """A team's points on finished days: each day's starters times their box score points."""
+    total = 0.0
+    for day in days:
+        lineup = [(pid, slot) for team, pid, slot in league_data.roster_on(session, league_id, day)
+                  if team == team_id]  # fmt: skip
+        if not lineup:
+            return None  # no lineup stored for a game day: unknown, not zero
+        total += sum(by_day.get((pid, day), 0.0) for pid, slot in lineup if slot not in BENCHED)
+    return round(total, 2)
 
 
 def _adds_left(

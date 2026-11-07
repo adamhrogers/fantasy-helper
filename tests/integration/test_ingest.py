@@ -114,6 +114,9 @@ def serve_fixtures(request: httpx.Request) -> httpx.Response:
             return httpx.Response(
                 200, json=by_period.get(params["scoringPeriodId"], {"transactions": []})
             )
+        if views == {"mRoster"}:  # one day's lineups (scoringPeriodId): the recorded day
+            name = "lineups" if (RECORDED / folder / "lineups.json").exists() else "teams_rosters"
+            return httpx.Response(200, content=(RECORDED / folder / f"{name}.json").read_bytes())
         datasets = {"mSettings": "settings", "mTeam": "teams_rosters", "mMatchupScore": "matchups"}
         dataset = next(datasets[v] for v in views if v in datasets)
         return httpx.Response(200, content=(RECORDED / folder / f"{dataset}.json").read_bytes())

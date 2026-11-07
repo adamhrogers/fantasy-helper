@@ -116,6 +116,12 @@ def test_the_daily_run_logs_each_call_once(session: Session, tmp_path: Path) -> 
     )  # the recorded week has open decisions, so the rerun check means something
     assert daily.new_calls == daily.calls == count(session, RecommendationRow.id)
 
+    # The box score check ran: the recorded Sleeper weeks compare (the ESPN fixtures' rosters
+    # carry no stats, so there's nothing settled to compare there).
+    (sleeper_check,) = [c for c in result.checks if c.league.platform is Platform.SLEEPER]
+    assert sleeper_check.method == "one game a week"
+    assert sleeper_check.agreement.total > 0
+
     again = run_daily(session, client, store=store, user=owner, key=KEY, clock=FixedClock())
     assert again.leagues[0].new_calls == 0  # a rerun logs nothing new
     assert again.leagues[0].calls == daily.calls
@@ -139,6 +145,13 @@ def test_the_weekly_run_builds_every_league_and_stores_its_facts(
         assert built.sheet is not None
         assert built.sheet.approx_tokens() < TOKEN_BUDGET
         assert built.report is not None
+    # Mid-week (the clock says Friday): the points league banks Monday to Thursday from the
+    # stored lineups and our box scores, so it can give a win probability.
+    points = next(lg for lg in result.leagues if lg.league.name == "Points")
+    assert points.sheet is not None
+    assert points.sheet.matchup is not None
+    assert points.sheet.matchup.my_banked is not None
+    assert points.sheet.matchup.win_probability is not None
     sheets = count(session, FactSheetRow.id)
     values = count(session, LeaguePlayerValueRow.player_id)
     calls = count(session, RecommendationRow.id)

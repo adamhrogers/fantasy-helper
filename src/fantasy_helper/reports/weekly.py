@@ -47,12 +47,19 @@ def _matchup(sheet: FactSheet, rec: Recommendation | None, lock_in: bool) -> Car
     m = sheet.matchup
     if m is None:
         return None
-    body = (
-        f"Projected for {_span(sheet)}: you {m.my_points:.0f} (± {m.my_sd:.0f}), "
-        f"{m.opponent} {m.their_points:.0f} (± {m.their_sd:.0f})."
-    )
+    if m.my_banked is not None and m.their_banked is not None:
+        body = (
+            f"So far this week: you {m.my_banked:.0f}, {m.opponent} {m.their_banked:.0f}. "
+            f"Projected final, with {_span(sheet)} still to play: you {m.my_points:.0f} "
+            f"(± {m.my_sd:.0f}), {m.opponent} {m.their_points:.0f} (± {m.their_sd:.0f})."
+        )
+    else:
+        body = (
+            f"Projected for {_span(sheet)}: you {m.my_points:.0f} (± {m.my_sd:.0f}), "
+            f"{m.opponent} {m.their_points:.0f} (± {m.their_sd:.0f})."
+        )
     if m.win_probability is None:
-        body += " Mid-week, so the score so far isn't included: no win probability."
+        body += " The score so far isn't known here (locks aren't visible), so no win probability."
         title = f"Week {sheet.week} vs {m.opponent}: rest of the week"
     else:
         title = f"Week {sheet.week} vs {m.opponent}: {m.win_probability:.0%} to win"

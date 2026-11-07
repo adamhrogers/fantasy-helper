@@ -97,9 +97,11 @@ Apr–Sep 2027 ─ P12 Offseason: Yahoo, sign-up, pricing ─ fall 2027 launch
   - schedule (startable games), distributions (projection blended with game logs), valuation, win probability, streaming and baselines
   - FactSheet v1 with the read-model tables (migration 0005)
   - the weekly overview (`fh run weekly`) and the daily report (`fh run daily`), as local pages
+- **Also built:**
+  - the daily reconciliation check (ESPN season totals, Sleeper completed weeks)
+  - mid-week win probability for daily-lineup leagues: points banked from our box scores and ESPN's lineup for each finished day, checked against ESPN's daily totals (exact on 2026-11-06)
 - **Left:**
-  - the daily reconciliation check (completed weeks)
-  - realized points mid-week, so a mid-week overview can give a win probability
+  - a mid-week win probability for lock-in leagues (needs lock data, parked)
   - categories-league valuation (P9)
 
 These steps depend on each other, so they're ordered. B and C run in parallel at the end.

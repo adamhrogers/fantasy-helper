@@ -42,7 +42,15 @@ A fantasy basketball assistant for Adam (customer one), then a friends beta, the
 - **Mid-week runs project the rest of the week only,** with no win probability, because realized points so far aren't counted yet.
 - **Projections are blended with game logs:** the projection counts as 10 games of evidence, because RotoWire sometimes projects a bench player far above what he does.
 
-Next: the reconciliation check, realized points mid-week, then M2's PR. |
+- **Daily reconciliation built:** `pipeline/reconcile.py` checks box scores against each platform's own numbers every morning. First live run: ESPN 75/75, Sleeper 271/275.
+
+- **Mid-week win probability built** for daily-lineup leagues:
+  - ingest stores ESPN's lineup for each finished day of the week (`view=mRoster&scoringPeriodId`, recorded fixture `espn_points/lineups.json`);
+  - banked points = each day's starters times our box scores (ADR 0022);
+  - checked against ESPN's own daily totals (live: 773 vs 773).
+  - Lock-in leagues still show "rest of the week" (locks invisible).
+
+Next: M2's PR. |
 | M3 Phone app + delivery | **Next, in parallel with M2** (Nov 7–12). Adam is creating the accounts ([runbooks/m3-account-setup.md](runbooks/m3-account-setup.md)). |
 | M4–M8, P9–P12 | See `docs/roadmap.md` v0.5. Friends beta **Nov 29**, hard stop **Dec 15**. |
 

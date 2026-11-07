@@ -54,8 +54,12 @@ class FactMatchup(DomainModel):
     my_sd: float
     their_points: float
     their_sd: float
-    # Only for a whole-week projection: mid-week, the score so far isn't counted yet, so a win
-    # probability from the rest of the week alone would mislead.
+    # Mid-week: points already banked this week (in my_points / their_points too), from our
+    # box scores and each finished day's lineup. None for a whole-week projection.
+    my_banked: float | None = None
+    their_banked: float | None = None
+    # None when the score so far is unknown (a lock-in league mid-week, or a missing lineup):
+    # a win probability from the rest of the week alone would mislead.
     win_probability: float | None = Field(default=None, ge=0, le=1)
 
 

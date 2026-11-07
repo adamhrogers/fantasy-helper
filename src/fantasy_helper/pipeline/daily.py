@@ -33,6 +33,7 @@ from fantasy_helper.pipeline.ingest import (
     run_ingest,
 )
 from fantasy_helper.pipeline.lock_calls import dedupe_key, lock_or_pass_call
+from fantasy_helper.pipeline.reconcile import LeagueCheck, reconcile
 from fantasy_helper.pipeline.retry import classify_exception, outcome
 from fantasy_helper.registry.calls import log_call
 from fantasy_helper.reports.daily import lock_in_report
@@ -55,6 +56,7 @@ class LeagueDaily:
 class DailyResult:
     ingest: IngestReport
     leagues: list[LeagueDaily] = field(default_factory=list)
+    checks: list[LeagueCheck] = field(default_factory=list)  # box scores vs the platforms
 
     @property
     def reports(self) -> list[ReportDocument]:
@@ -81,6 +83,13 @@ def run_daily(
     )
     result = DailyResult(ingest=ingest)
     now = clock.now()
+    try:  # a check that breaks must never stop the run (its savepoint rolls back alone)
+        with session.begin_nested():
+            result.checks = reconcile(session, ingest, now=now)
+    except Exception as exc:
+        log.error("reconcile_failed", error=type(exc).__name__)
+    if events is not None:
+        events.step("Box scores checked", check_summary(result.checks))
     failed_in_ingest = {lg.league.id: lg.failure for lg in ingest.leagues if lg.failure}
     for league in leagues.list_for_user(session, user.id):
         rules = league_data.latest_rules(session, league.id)
@@ -142,6 +151,16 @@ def _lock_in_league(session: Session, league: League, user: User, now: datetime)
     )
 
 
+def check_summary(checks: list[LeagueCheck]) -> str:
+    """Counts only, by platform: "ESPN season totals 155/155; Sleeper one game a week 405/417"."""
+    parts = [
+        f"{PLATFORM_NAMES[c.league.platform]} {c.method} {c.agreement.matched}/{c.agreement.total}"
+        for c in checks
+        if c.agreement.total
+    ]
+    return "; ".join(parts) + "." if parts else "Nothing settled to compare yet."
+
+
 def daily_summary(result: DailyResult, attempts: int) -> tuple[str, list[str]]:
     """What the phone hears: counts and kinds only, never names (ADR 0011)."""
     ingest_detail, problems = phone_summary(result.ingest, attempts)
@@ -161,4 +180,12 @@ def daily_summary(result: DailyResult, attempts: int) -> tuple[str, list[str]]:
             f"lock-in calls failed for {n} {platform} league{'s' if n > 1 else ''}: "
             f"{outcome(kind, attempts)}"
         )
+    for check in result.checks:
+        if not check.ok:
+            a = check.agreement
+            problems.append(
+                f"box scores agree with {PLATFORM_NAMES[check.league.platform]} {check.method} "
+                f"for only {a.matched}/{a.total} (expected {check.minimum:.0%}+): check the "
+                "box scores and scoring (ADR 0022)"
+            )
     return detail, problems
