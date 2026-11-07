@@ -90,7 +90,7 @@ Apr–Sep 2027 ─ P12 Offseason: Yahoo, sign-up, pricing ─ fall 2027 launch
 
 **Goal:** the first useful outputs, built entirely by code with no AI. That means the weekly overview, plus an **engine-only daily report** whose first cards are Sleeper **lock-or-pass** calls (moved from M5 in v0.5). Adam uses lock-in in his live league from about Nov 11.
 
-**Status (2026-11-06):**
+**Status (2026-11-06): done.** PR #3, reviewed (15 findings, all fixed), ready to merge.
 - **Built:**
   - box scores (one truth for every league, ADR 0022) and scoring, verified against both platforms
   - lock-in v1 with the registry
@@ -102,6 +102,7 @@ Apr–Sep 2027 ─ P12 Offseason: Yahoo, sign-up, pricing ─ fall 2027 launch
   - mid-week win probability for daily-lineup leagues: points banked from our box scores and ESPN's lineup for each finished day, checked against ESPN's daily totals (exact on 2026-11-06)
 - **Left:**
   - a mid-week win probability for lock-in leagues (needs lock data, parked)
+  - ESPN matchup periods mapped to scoring days, before the All-Star break (until then a period that started in an earlier week is flagged, with no win probability)
   - categories-league valuation (P9)
 
 These steps depend on each other, so they're ordered. B and C run in parallel at the end.
