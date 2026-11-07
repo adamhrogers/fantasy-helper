@@ -44,6 +44,7 @@ class FailureKind(StrEnum):
     NOT_FOUND = "not_found"
     FORMAT_CHANGED = "format_changed"
     STORAGE = "storage"
+    STORAGE_DOWN = "storage_down"  # the raw store (R2) couldn't be reached
     BUG = "bug"
 
     @property
@@ -59,6 +60,7 @@ class FailureKind(StrEnum):
 _RETRYABLE = frozenset({
     FailureKind.NETWORK, FailureKind.SERVER_ERROR, FailureKind.RATE_LIMITED,
     FailureKind.BAD_RESPONSE, FailureKind.MISSING_INPUT, FailureKind.DATABASE,
+    FailureKind.STORAGE_DOWN,
 })  # fmt: skip
 _DESCRIPTIONS = {
     FailureKind.NETWORK: "couldn't connect",
@@ -71,6 +73,7 @@ _DESCRIPTIONS = {
     FailureKind.NOT_FOUND: "not found (league or endpoint gone)",
     FailureKind.FORMAT_CHANGED: "the platform changed its data format (needs a code fix)",
     FailureKind.STORAGE: "couldn't save the file",
+    FailureKind.STORAGE_DOWN: "the raw store (R2) was unreachable",
     FailureKind.BUG: "a bug in our code",
 }
 

@@ -1,6 +1,6 @@
 # Session handoff: everything a new session needs
 
-**Last updated:** 2026-11-06, at the end of the M2 session. M2 is PR #3, reviewed, with all 15 findings fixed, CI green and every review thread resolved: ready for Adam to merge. M1 was merged as PR #2. **Next: M3** (phone app and delivery).
+**Last updated:** 2026-11-06, during M3 (branch `m3-phone-app`): part 1, cloud snapshots, is built. M2 was merged as PR #3. **Now: M3** (phone app and delivery), in five parts (§7).
 **Read this first**, then `CLAUDE.md` (rules), `docs/roadmap.md` (milestones), `docs/architecture.md` (design) and `docs/decisions/` (ADRs). This file is the narrative glue: what exists, how we work, what we learned the hard way, and exactly what comes next.
 
 The repo is **public**, so this file holds no secrets or personal data. League names and IDs, the owner's email, the Supabase project ID and the ntfy topic live in `.env` and the database. `uv run fh league list` shows the leagues.
@@ -23,7 +23,7 @@ A fantasy basketball assistant for Adam (customer one), then a friends beta, the
 | M0 Foundation | **Done, merged** (PR #1) |
 | M1 Data spike | **Done, merged** (PR #2) |
 | Pre-M2 review | **Done**: latency (ADR 0020), storage budget and season archive (ADR 0021), lock-in moved to M2 |
-| M2 Scoring, weekly overview, **Sleeper lock-in** | **Done: PR #3, ready for Adam to merge** (branch `m2-scoring`). Built:
+| M2 Scoring, weekly overview, **Sleeper lock-in** | **Done, merged** (PR #3). Built:
 - box scores: `espn.game_logs`, migration 0003, backfilled from opening night (6,935 rows)
 - typed projection columns and read-path indexes (dev database at 0003)
 - **one box score for every league** (ADR 0022, CLAUDE.md rule 9): complete for every game played, internally consistent, and every league's settings mapped onto it, missed shots and fouls included
@@ -60,16 +60,16 @@ A fantasy basketball assistant for Adam (customer one), then a friends beta, the
   - A matchup period that started before this week (the All-Star break) is flagged, with no banked points or win probability, until periods are mapped properly.
 
 Left for later: see §7. |
-| M3 Phone app + delivery | **Next** (Nov 7–12), in its own session and worktree. Adam is creating the accounts ([runbooks/m3-account-setup.md](runbooks/m3-account-setup.md)). |
+| M3 Phone app + delivery | **In progress** (Nov 7–12), branch `m3-phone-app`. Part 1 (cloud snapshots on R2, ADR 0023) is built and tested; it goes live after Adam's accounts and a two-day overlap ([runbooks/cloud-snapshots.md](runbooks/cloud-snapshots.md)). Adam's account checklist: [runbooks/m3-account-setup.md](runbooks/m3-account-setup.md). |
 | M4–M8, P9–P12 | See `docs/roadmap.md` v0.5. Friends beta **Nov 29**, hard stop **Dec 15**. |
 
 ### What runs today
-- **`fh snapshot`** runs on Adam's Mac through launchd: the morning set at **06:30** and the pre-tip evening set at **17:30** local time (America/New_York). It saves raw ESPN and Sleeper public data to `data/raw/` (git-ignored). History has accumulated since **2026-11-06**. Check it with `scripts/snapshot-schedule.sh status`; logs are in `~/Library/Logs/fantasy-helper/` (JSON lines). A sleeping Mac runs missed jobs on wake; a Mac that's shut down skips them, until M3 moves this to the cloud.
+- **`fh snapshot`** runs on Adam's Mac through launchd: the morning set at **06:30** and the pre-tip evening set at **17:30** local time (America/New_York). It saves raw ESPN and Sleeper public data to `data/raw/` (git-ignored). History has accumulated since **2026-11-06**. Check it with `scripts/snapshot-schedule.sh status`; logs are in `~/Library/Logs/fantasy-helper/` (JSON lines). A sleeping Mac runs missed jobs on wake; a Mac that's shut down skips them. **M3 part 1 built the cloud job** (`.github/workflows/snapshot.yml`, 06:17 and 17:17 Eastern, writing to R2); it goes live once merged, and launchd is removed after two clean days of overlap.
 - **`fh ingest`** is run by hand for now. It loads every not-yet-loaded snapshot plus fresh league data into Supabase, takes about 30 seconds, and is idempotent. First live run: 1,100 ESPN players; **all 1,852 active Sleeper players** (the Sleeper league has 142 rostered, all linked to ESPN, and **1,710 free agents**, 889 linked to ESPN and 410 with Sleeper projections); 1,200 games; 9 projection snapshots (8,490 rows); 226 injury changes; full rosters, matchups and transactions for all three leagues.
 - **`fh run daily` and `fh run weekly`** are run by hand (M3 schedules them). Each runs ingest first, which now also loads box scores and ESPN's lineup for each finished day. They write local HTML pages (`--open` opens them) and log every call in the registry. `fh run daily --dry-run` saves nothing.
 - **Supabase dev project**, migrated to **0005**. There's no prod project yet (M3).
 - **LangSmith tracing** works (`fh doctor` sends a smoke trace). **ntfy run events** reach Adam's phone: every run sends started, steps and success quietly and failures loudly, and it's ops only; product notifications come from the PWA ([runbooks/run-events.md](runbooks/run-events.md), added 2026-11-06). iPhone notifications needed a settings fix, which is done.
-- **GitHub:** `adamhrogers/fantasy-helper`, public. CI runs lint, mypy, contracts, tests on Postgres 17, `alembic check`, and a gitleaks full-history scan. Adam was asked to run `gh secret set LANGSMITH_API_KEY` so CI sends a smoke trace; **unconfirmed**, and the step is skipped (not failed) without it.
+- **GitHub:** `adamhrogers/fantasy-helper`, public. CI runs lint, mypy, contracts, tests on Postgres 17, `alembic check`, and a gitleaks full-history scan. The repository secret `LANGSMITH_API_KEY` is set, and CI's smoke trace passes on `main` (checked 2026-11-06).
 
 ### Adam's three leagues (all 10 teams, season 2026-27 = `season 2027`)
 | Fixture alias | Platform / format | Adam's team | Key rules |
@@ -212,34 +212,36 @@ TCP only, because long scratch paths exceed the 103-byte Unix socket limit. `LC_
 
 ## 7. Exactly what's next
 
-### After Adam merges PR #3
-- The dev database is already at 0005; nothing to migrate. Prod gets 0001–0005 from scratch in M3.
-- Delete the local branch `m2-scoring` once merged.
-
 ### Left from M2 (none blocks M3)
 - **ESPN matchup periods:** map `scheduleSettings.matchupPeriods` to scoring days **before the All-Star break** (February). Until then a period that started before this calendar week is flagged (`period_mismatch`), with no banked points or win probability.
 - **Mid-week win probability for lock-in leagues:** needs lock data. Lock detection is parked (Adam, 2026-11-06); the plan is the one-tap "I locked / I passed" button in the PWA (lock-in v2, M5).
 - **Categories-league valuation:** P9. The 9-cat league gets games and roster facts only.
 - **Snapshot days are permanent:** keep launchd running until M3's cloud schedule is live.
 
-### M3: Phone app and delivery (Nov 7–12, parallel), best as its own session and worktree
-- **Build:**
-  - FastAPI on Google Cloud Run in **`us-east4`**, with one pooled engine per process.
-  - Supabase **prod** project in **`us-east-1`**, with Supabase Auth (magic link, invite-only, Adam is user one).
-  - PWA (Vite + React + TS + vite-plugin-pwa) on Cloudflare Pages, with Web Push (VAPID).
-- **Move the schedule:** snapshot, ingest and the daily run go from launchd to **GitHub Actions** cron, with the raw store on **Cloudflare R2**. Upload the local `data/raw` backlog to R2 first, then uninstall the launchd jobs.
-- **Ops:**
-  - a **nightly backup** of the tables that can't be rebuilt, to R2 (ADR 0021)
-  - ntfy alerts for failed, missing or late runs and for database size
-- **Adam's account setup** is a checklist he works through during M2: [runbooks/m3-account-setup.md](runbooks/m3-account-setup.md). Production secrets live in the GitHub environment `prod`: `DATABASE_URL`, `FH_ENCRYPTION_KEY` (**a different key from dev**), `FH_NTFY_TOPIC`, `LANGSMITH_API_KEY` and `FH_R2_*`. VAPID keys are generated in M3.
-- **Done when:** a scheduled run, with the laptop closed, pushes the daily report (lock-or-pass cards) and the weekly overview to his phone.
+### M3: Phone app and delivery (Nov 7–12), branch `m3-phone-app`
+Approved by Adam on 2026-11-06, in five parts, each a checkpoint he approves:
+
+| Part | Builds | Needs from Adam | Status |
+|---|---|---|---|
+| **1. Snapshots to the cloud** | `R2RawStore` (`storage/r2_store.py`), `fh raw upload`, `fh doctor --only raw`, `.github/workflows/snapshot.yml` with the DST gate (`pipeline/cron.py`), once-a-day guard for Sleeper's player list, crash alerts. ADR 0023 | Setup sections 1 and 4; then [runbooks/cloud-snapshots.md](runbooks/cloud-snapshots.md) | **Built**, 311 tests green. Live after merge + cutover |
+| **2. Prod database and scheduled runs** | Prod migrated, Adam's user and leagues in prod (local git-ignored prod env file), full history ingested from R2, migration 0006 (`reports`, `push_subscriptions`), `daily.yml` and `weekly.yml`, run log in the snapshot job | Sections 2 and 3; ESPN cookies typed once at the hidden prompt | Next |
+| **3. API on Cloud Run** | FastAPI (reports, push subscriptions), Supabase JWT checked against its public keys (JWKS), every query scoped to the user, Docker image, keyless deploy (Workload Identity Federation), Secret Manager, max 2 instances | Section 5, plus the WIF commands | |
+| **4. The phone app** | `web/` PWA: sign-in, Today and This Week tabs, Home Screen install, Enable notifications, types from OpenAPI, Cloudflare Pages | Connect Pages to GitHub; the iPhone | |
+| **5. Push, ops, exit test** | VAPID keys straight into secrets, "report ready" push, Healthchecks pings (missed run, 7:45 late report), size alert, nightly backup and restore drill, broken-run test, laptop-closed test | Section 6; check schedules | |
+
+**Decided with Adam (2026-11-06):**
+- **Sign-in by 6-digit email code, not a magic link.** A Home Screen app on iOS doesn't share Safari's session, so a tapped link would sign in Safari, not the app. Same Supabase Auth; the email template shows `{{ .Token }}`.
+- **The prod registry starts empty at go-live.** Dev's calls since 2026-11-06 stay in dev as test data. All snapshot history loads into prod from R2.
+
+**How M3 merges:** GitHub runs scheduled workflows only from `main`, and `prod` is limited to `main`, so each part that needs the cloud merges as its own PR (part 1 first), rather than one PR at the end.
+
+**Done when:** a scheduled run, with the laptop closed, pushes the daily report (lock-or-pass cards) and the weekly overview to his phone, and they open after sign-in; a deliberately broken run produces an ops alert; a backup restores into a scratch database.
 
 ### Open items
 - **Q6:** how fast projections react to injuries. Analyze `projection_rows` against `injury_observations` once a week or so of snapshots exists.
 - Beta friends and leagues (needed by M7). The RatBall note goes out only if RatBall data is used.
 - The 821 unmatched Sleeper players are all non-rostered and **aren't in ESPN Fantasy's player pool**, so there's nothing to link them to. Overrides stay empty until ingest warns about a rostered one. Ingest reports linked pairs with conflicting birth dates (2 known data errors: Gortman, Edey); that's informational.
 - ESPN activity-feed trades: P9. Categories-league logic: P9.
-- Confirm Adam set the `LANGSMITH_API_KEY` GitHub secret (now step 1 of the M3 setup runbook).
 - **Storage levers (ADR 0021),** if the 60% size alert fires: store only changed projection rows, and store only roster changes. Season rollover to the R2 archive: P11.
 - **Before M7:** friend invites need a custom email sender for Supabase Auth (the built-in one only reaches organization members, 2 emails an hour), which needs a domain Adam owns.
 

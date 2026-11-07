@@ -7,7 +7,7 @@ from typing import Annotated
 import typer
 
 from fantasy_helper.adapters._http import make_client
-from fantasy_helper.cli._common import fail, require_db_and_key, transaction
+from fantasy_helper.cli._common import fail, open_raw_store, require_db_and_key, transaction
 from fantasy_helper.config import get_settings
 from fantasy_helper.domain.ports import SystemClock
 from fantasy_helper.domain.reports import ReportDocument
@@ -18,7 +18,7 @@ from fantasy_helper.pipeline.ingest import MissingSnapshotError
 from fantasy_helper.pipeline.retry import RunStoppedError, outcome, run_with_retries
 from fantasy_helper.pipeline.weekly import WeeklyResult, run_weekly, weekly_summary
 from fantasy_helper.reports.html import render
-from fantasy_helper.storage.raw_store import LocalRawStore
+from fantasy_helper.storage.raw_store import RawStore
 from fantasy_helper.storage.repositories import users
 from fantasy_helper.storage.repositories.runs import record_run
 
@@ -40,13 +40,14 @@ def daily(
     """Ingest, decide lock or pass for every open starter, log each call, build the report."""
     settings = get_settings()
     url, key = require_db_and_key(settings)
+    store = open_raw_store(settings)
     clock = SystemClock()
     started = clock.now()
     events = events_from_settings(settings, RunKind.DAILY, label="Daily run")
     events.started()
 
     def once() -> DailyResult:
-        return _run_once(url, key, settings.data_dir, events, dry_run=dry_run)
+        return _run_once(url, key, store, events, dry_run=dry_run)
 
     try:
         result, attempts = run_with_retries(
@@ -105,7 +106,7 @@ class _RolledBack(Exception):  # noqa: N818 (control flow for --dry-run, not an 
 
 
 def _run_once(
-    url: str, key: bytes, data_dir: Path, events: RunEvents, *, dry_run: bool
+    url: str, key: bytes, store: RawStore, events: RunEvents, *, dry_run: bool
 ) -> DailyResult:
     try:
         with transaction(url) as session, make_client() as client:
@@ -113,8 +114,7 @@ def _run_once(
             if owner is None:
                 raise fail("no user yet: run `fh league add` first")
             result = run_daily(
-                session, client, store=LocalRawStore(data_dir / "raw"), user=owner, key=key,
-                events=events,
+                session, client, store=store, user=owner, key=key, events=events,
             )  # fmt: skip
             if dry_run:
                 raise _RolledBack(result)  # leaving the transaction by exception rolls it back
@@ -168,6 +168,7 @@ def weekly(
     """Ingest, then the weekly overview for every league: matchup, games, streaming moves."""
     settings = get_settings()
     url, key = require_db_and_key(settings)
+    store = open_raw_store(settings)
     clock = SystemClock()
     started = clock.now()
     events = events_from_settings(settings, RunKind.WEEKLY, label="Weekly run")
@@ -179,8 +180,7 @@ def weekly(
             if owner is None:
                 raise fail("no user yet: run `fh league add` first")
             return run_weekly(
-                session, client, store=LocalRawStore(settings.data_dir / "raw"), user=owner,
-                key=key, events=events,
+                session, client, store=store, user=owner, key=key, events=events,
             )  # fmt: skip
 
     try:

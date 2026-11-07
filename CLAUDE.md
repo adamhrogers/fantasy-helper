@@ -14,8 +14,9 @@ uv run mypy                               # strict
 uv run lint-imports                       # architecture contracts
 uv run alembic upgrade head               # migrate DATABASE_URL
 uv run alembic revision --autogenerate --rev-id 0002 -m "..."   # new migration
-uv run fh doctor                          # check config, encryption, DB, tracing, alerts
-uv run fh snapshot                        # save today's raw public data (launchd runs it twice a day)
+uv run fh doctor                          # check config, encryption, DB, tracing, alerts, R2
+uv run fh snapshot                        # save today's raw public data (GitHub Actions, twice a day)
+uv run fh raw upload [--dry-run]          # copy local raw snapshots to R2 (never overwrites)
 uv run fh ingest                          # load leagues + snapshots into the database (idempotent)
 uv run fh run daily [--dry-run] [--open]  # ingest, lock-or-pass calls (logged), daily report page
 uv run fh run weekly [--open]             # ingest, weekly overview per league (FactSheets, calls)

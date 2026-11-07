@@ -44,8 +44,17 @@ class Settings(BaseSettings):
     # Quiet run events (started, steps, succeeded). Failures and warnings are always sent.
     notify_progress: bool = Field(default=True, alias="FH_NOTIFY_PROGRESS")
 
-    # Local raw payload store (daily snapshots) until it moves to R2 in M3. Git-ignored.
+    # Local working folder (git-ignored): the raw store when FH_RAW_STORE=local, and HTML reports.
     data_dir: Path = Field(default=Path("data"), alias="FH_DATA_DIR")
+
+    # Where raw snapshots live (ADR 0023): `local` is data_dir/raw, `r2` is the Cloudflare R2
+    # bucket that the scheduled jobs and the laptop share. `fh raw upload` needs the R2 values
+    # even while this is `local`.
+    raw_store: Literal["local", "r2"] = Field(default="local", alias="FH_RAW_STORE")
+    r2_endpoint: SecretStr | None = Field(default=None, alias="FH_R2_ENDPOINT")
+    r2_access_key_id: SecretStr | None = Field(default=None, alias="FH_R2_ACCESS_KEY_ID")
+    r2_secret_access_key: SecretStr | None = Field(default=None, alias="FH_R2_SECRET_ACCESS_KEY")
+    r2_bucket: str = Field(default="fantasy-helper-raw", alias="FH_R2_BUCKET")
 
     # Used from M4. Deliberately not ANTHROPIC_API_KEY (spec: Cost and tokens).
     anthropic_api_key: SecretStr | None = Field(default=None, alias="FH_ANTHROPIC_API_KEY")
