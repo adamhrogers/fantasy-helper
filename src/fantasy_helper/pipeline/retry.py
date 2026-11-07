@@ -16,6 +16,8 @@ gone, a changed data format or a bug fail at once, because rerunning can't chang
 """
 
 import json
+import time
+from collections.abc import Callable
 
 import httpx
 from pydantic import ValidationError
@@ -24,6 +26,7 @@ from sqlalchemy.exc import OperationalError
 from fantasy_helper.adapters.espn.mapper import EspnMappingError
 from fantasy_helper.adapters.sleeper.mapper import SleeperMappingError
 from fantasy_helper.domain.runs import FailureKind
+from fantasy_helper.observability.events import RunEvents
 from fantasy_helper.storage.raw_store import RawStoreError
 
 MAX_ATTEMPTS = 3
@@ -72,3 +75,58 @@ def outcome(kind: FailureKind, attempts: int) -> str:
     if kind.retryable:
         return f"{kind.describe}, after {attempts} attempt{'s' if attempts != 1 else ''}"
     return f"{kind.describe}; not retried (retrying can't fix it)"
+
+
+class RunStoppedError(Exception):
+    """A run gave up: a cause retrying can't fix, or attempts ran out. The original exception
+    is the __cause__; `kind` and `attempts` are what the phone hears."""
+
+    def __init__(self, kind: FailureKind, attempts: int) -> None:
+        super().__init__(f"{kind.value} after {attempts} attempt(s)")
+        self.kind = kind
+        self.attempts = attempts
+
+
+def run_with_retries[T](
+    once: Callable[[], T],
+    events: RunEvents,
+    *,
+    retryable_parts: Callable[[T], int] = lambda _result: 0,
+    describe_parts: Callable[[T, int], tuple[str, list[str]]] | None = None,
+    passthrough: tuple[type[BaseException], ...] = (),
+    sleep: Callable[[float], None] = time.sleep,
+    waits: tuple[float, ...] = RETRY_WAITS_SECONDS,
+) -> tuple[T, int]:
+    """Run an idempotent job, retrying when that can help. Returns (result, attempts).
+
+    - A crash is classified: retried if its cause can clear up, else `RunStoppedError` at once.
+    - A result with retryable failed parts (`retryable_parts` > 0) runs again; the job must be
+      safe to rerun (what worked stays as it is).
+    - Exceptions in `passthrough` (the caller's own) are raised untouched.
+    """
+    attempt = 1
+    while True:
+        try:
+            result = once()
+        except passthrough:
+            raise
+        except Exception as exc:
+            kind = classify_exception(exc)
+            if not kind.retryable or attempt >= MAX_ATTEMPTS:
+                raise RunStoppedError(kind, attempt) from exc
+            attempt += 1
+            wait = wait_before(attempt, waits)
+            events.retrying(
+                attempt, MAX_ATTEMPTS, wait, f"Stopped: {kind.describe}. Nothing was saved."
+            )
+            sleep(wait)
+            continue
+        if not retryable_parts(result) or attempt >= MAX_ATTEMPTS:
+            return result, attempt
+        attempt += 1
+        wait = wait_before(attempt, waits)
+        detail, problems = (
+            describe_parts(result, attempt - 1) if describe_parts else ("Some parts failed.", [])
+        )
+        events.retrying(attempt, MAX_ATTEMPTS, wait, detail, problems)
+        sleep(wait)

@@ -71,3 +71,25 @@ def merge(session: Session, from_id: UUID, into_id: UUID, *, key: PlayerKey, met
     )
     session.flush()
     session.execute(delete(PlayerRow).where(PlayerRow.id == from_id))
+
+
+def names_and_teams(session: Session, player_ids: list[UUID]) -> dict[UUID, tuple[str, str | None]]:
+    rows = session.execute(
+        select(PlayerRow.id, PlayerRow.full_name, PlayerRow.nba_team).where(
+            PlayerRow.id.in_(player_ids)
+        )
+    )
+    return {pid: (name, team) for pid, name, team in rows}
+
+
+def external_ids(session: Session, player_ids: list[UUID], source: str) -> dict[UUID, str]:
+    """Canonical player -> that platform's ID (the first, if several link to one player)."""
+    rows = session.execute(
+        select(PlayerExternalIdRow.player_id, PlayerExternalIdRow.external_id).where(
+            PlayerExternalIdRow.player_id.in_(player_ids), PlayerExternalIdRow.source == source
+        )
+    )
+    out: dict[UUID, str] = {}
+    for pid, ext in rows:
+        out.setdefault(pid, ext)
+    return out

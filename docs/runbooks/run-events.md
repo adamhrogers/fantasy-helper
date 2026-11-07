@@ -100,6 +100,19 @@ There are three layers, from fastest to slowest:
   - `Ingest finished with warnings` (normal): every league loaded, plus counts that need a look. For example "2 rostered players unresolved in 1 leagues", "1 leagues score a setting with no box score stat yet", or the database over 60%.
   - `Ingest failed` (loud; urgent if no league loaded): leagues failed, grouped by platform and cause, with attempts. For example "2 Sleeper leagues failed: the source's servers erred, after 3 attempts".
 
+**Daily run (`fh run daily`, by hand until M3; `--dry-run` saves nothing, `--open` opens the report):**
+- `Daily run started`
+- The three ingest steps: `Daily run: League data fetched`, `Daily run: Public data loaded`, `Daily run: Leagues stored`
+- `Daily run: Lock-or-pass calls built` ("8 calls in 1 of 1 lock-in leagues (8 newly logged).")
+- `Daily run: Report built` ("10 cards in 1 reports.")
+- `Daily run: retrying (attempt 2 of 3)` (normal), only when a league or the run failed in a retryable way. The run reruns in full: ingest is idempotent, and a call already logged is never logged again.
+- Then one of:
+  - `Daily run succeeded` (quiet): calls, leagues, box scores, database size.
+  - `Daily run finished with warnings` (normal).
+  - `Daily run failed` (loud; urgent if no report was built): leagues or lock-in calls that failed, by platform and cause.
+
+The report itself, with the lock-or-pass calls, is a local page (`data/reports/<date>/daily.html`) until the phone app (M3) shows it. It never goes through ntfy.
+
 **Test:** `uv run fh doctor --alert` sends one test event.
 
 The 06:30 and 17:30 jobs run the code in your main checkout, so the snapshot events start once the M2 branch is merged.
@@ -175,7 +188,6 @@ From M3 the same variables live in the GitHub `prod` environment, and the schedu
 
 | When | Event | Why |
 |---|---|---|
-| M2 (lock-in) | Daily run: started, data loaded, lock-or-pass calls built, report built, retries, ending | The first daily run |
 | M2 (lock-in) | `warned` when box scores disagree with ESPN's or Sleeper's own numbers more than usual (the daily reconciliation, ADR 0022) | Watches the one box score truth |
 | M3 | The same events from GitHub Actions, plus a workflow-level failure step for crashes before Python starts | The cloud runs |
 | M3 | `failed(urgent)` if the report isn't published by 7:45 a.m. | The 8 a.m. promise |

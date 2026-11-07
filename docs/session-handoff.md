@@ -29,7 +29,10 @@ A fantasy basketball assistant for Adam (customer one), then a friends beta, the
 - **one box score for every league** (ADR 0022, CLAUDE.md rule 9): complete for every game played, internally consistent, and every league's settings mapped onto it, missed shots and fouls included
 - `engine/scoring.py` with golden and property tests, verified against ESPN (155/155) and Sleeper (417/417 on Sleeper's own stats; 405/417 on ESPN's, the 12 from one-stat feed differences): [spikes/m2-scoring-check.md](spikes/m2-scoring-check.md)
 
-Next: steps 5 and 7 (distributions, lock-in). |
+- **lock-in v1 built (uncommitted at first):** `engine/distributions.py`, `engine/lock_in.py`, `facts/lock_in.py`, the append-only `recommendations` table (migration 0004, a trigger refuses UPDATE and DELETE; dev is at 0004), `fh run daily [--dry-run] [--open]`, and the engine-only daily report as a local page. The first 8 calls were logged in dev on 2026-11-06 at 7:54 pm ET.
+- **Locks:** Adam gave his real week-3 locks. Sleeper's weekly numbers fit no rule against them (they flip between pulls minutes apart), so cards show every open decision and the next lock-in step is a **user-set lock flag on the roster** (one tap in the PWA, or a CLI command until then).
+
+Next: the reconciliation check, then the rest of the engine (schedule, valuation, streaming, win probability), FactSheet v1 and the weekly report. |
 | M3 Phone app + delivery | **Next, in parallel with M2** (Nov 7–12). Adam is creating the accounts ([runbooks/m3-account-setup.md](runbooks/m3-account-setup.md)). |
 | M4–M8, P9–P12 | See `docs/roadmap.md` v0.5. Friends beta **Nov 29**, hard stop **Dec 15**. |
 
@@ -173,7 +176,7 @@ The order matters: 1 → 2 → the distributions in 5 → 7 (lock-in), then the 
    - In the same migration: convert `projection_rows.per_game` JSONB to one `REAL` column per stat; add composite indexes (`projection_rows (snapshot_id, player_id)`, `projection_snapshots (provider, scope, pulled_at)`, `injury_observations (player_id, provider, observed_at)`, `transactions (league_id, proposed_at)`); add the read-model tables `fact_sheets` and `league_player_values`.
    - Show the database size in `fh doctor` and the ingest summary.
    - Backfill box scores from opening night, then pull them daily.
-2. **`engine/scoring.py`:** per-game fantasy points = Σ stat × weight + bonuses (threshold per game). Golden tests: **five players hand-calculated in each points league** (the M2 exit criterion), kept forever in `tests/golden/`. **Cross-check** our scores of real box scores against the per-player points Sleeper and ESPN report in matchups. While doing it, check whether Sleeper's weekly player points reveal which game was locked: a locked player's points freeze at that game. If they do, locks can be read from the API and no button is needed.
+2. **`engine/scoring.py`:** per-game fantasy points = Σ stat × weight + bonuses (threshold per game). Golden tests: **five players hand-calculated in each points league** (the M2 exit criterion), kept forever in `tests/golden/`. **Cross-check** our scores of real box scores against the per-player points Sleeper and ESPN report in matchups. Done 2026-11-06: scoring matches. Sleeper's weekly points don't reliably reveal locks mid-week (the number changes during the day), so the one-tap button is still needed (see the spike doc).
 3. **`engine/schedule.py`:** games per week from `nba_games`; **startable** games under roster slots and daily locks. Sleeper lock-in counts one game per player per week.
    - Open item: map ESPN matchup periods to scoring days. `scheduleSettings.matchupPeriods` and the matchups' `pointsByScoringPeriod` keys both carry this; weeks run Monday to Sunday, and the All-Star break makes a long week.
 4. **`engine/valuation.py`:** replacement level = the best free agent at the slot in *this* league. Free agents = players with projections minus today's `roster_entries`.

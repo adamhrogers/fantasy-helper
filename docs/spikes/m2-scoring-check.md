@@ -38,15 +38,29 @@
 - **A setting with no box score stat behind it** (Sleeper `plus_minus`, ESPN team wins) is reported as unmapped, and ingest fails loudly rather than scoring it as 0.
 - Contract tests cover all of this with settings Adam's leagues don't use.
 
-## Lock state can be read from Sleeper's weekly points
+## Lock state: Sleeper's weekly points don't show locks (corrected 2026-11-06, evening)
 
-- If a player's weekly points equal an **earlier** game, he was locked on that game.
-- If they equal his **latest** game, he isn't locked: mid-week, Sleeper shows an unlocked player's latest game, as if the week ended now.
+**First reading (afternoon):**
+- If a player's weekly points equal an **earlier** game, he looked locked on that game.
+- If they equal his **latest** game, he looked open.
 
-Weeks 1–2: 75 player-weeks locked on an earlier game, and 195 counting the last game (bench players included). Week 3 so far: 115 showing their latest game, and 20 already locked. Ties are ambiguous but harmless. **Lock-in v1 needs no "I locked" button.** Recheck once with a lock Adam makes mid-week.
+Completed weeks fit that, and so did week 3 at the time: 115 player-weeks showing their latest game, and 20 an earlier one.
+
+**Then the numbers moved.** Between 7:32 and 7:52 pm ET on Friday, three of Adam's starters changed from their Monday game's score to their Wednesday game's score (56.5 → 29.5, 45.5 → 30.0, 36.0 → 37.5). A locked score can't change. A fourth stayed on Monday's 59.5. Sleeper's matchup payload has no lock field at all (`players`, `starters`, `players_points`, `starters_points`, `points`, `custom_points`). So its displayed number seems to roll at some point in the day, perhaps at the first tip, and before that it can show an older game.
+
+**Tested against Adam's actual locks (2026-11-06, evening).** Adam listed his week-3 locks: 7 locked starters, 3 open starters, 3 bench and 2 IR. Each player's games were scored from Sleeper's own stats (so feed differences can't blur it) and lined up against 13 pulls of the matchup that day. **No rule fits:**
+- **Numbers flip with nothing happening.** Values flipped back and forth between pulls minutes apart, for locked starters, open starters and bench players alike. One locked starter went 56.5 → 29.5 → 56.5 within three minutes. Another switched four times with no new game. Two bench players flipped between their last game and 0.
+- **The lineup isn't the cause.** It changed once that day, and most flips happened with no lineup change.
+- **The latest pull contradicts the locks.** It showed a game in progress for a locked starter, and an earlier game for an open one.
+
+**What this changes:**
+- **Sleeper's weekly number is not a lock signal, not even a hint.** It's kept in each call's detail for later analysis, never shown and never used as a filter.
+- **Every open decision gets a card.** The report says plainly: "The app can't see your locks yet: skip any player you've already locked."
+- **Locks come from the user:** a per-week lock flag on the roster, set with one tap in the phone app (M3/M5), or a quick command until then. That flag also gives grading its follow detection.
+- **Completed weeks are still reliable** for reconciliation: the final number is the locked game or the last game.
 
 ## Consequences
 
 - **Near-ties:** because our box score is the one truth, a Sleeper score can differ from Sleeper's display by a point or two in about 1% of player-games. Lock-or-pass cards show the margin and flag near-ties; they never switch to a second stat source.
-- **Daily reconciliation:** the comparisons above become a daily check in ingest, built with lock-in, which uses the same matching.
+- **Daily reconciliation:** the comparisons above become a daily check, on completed weeks only (mid-week Sleeper numbers move during the day).
 - **Gotcha:** stored league rules (`league_settings_versions.rules`) include the computed `content_hash`. Drop it before `LeagueRules.model_validate`.

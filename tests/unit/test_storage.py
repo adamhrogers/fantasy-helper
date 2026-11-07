@@ -17,4 +17,4 @@ def test_normalize_url_uses_psycopg(given: str, expected: str) -> None:
 
 
 def test_migrations_have_a_single_head() -> None:
-    assert migrate.head_revision() == "0003"
+    assert migrate.head_revision() == "0004"

@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from fantasy_helper import __version__
 from fantasy_helper.adapters._http import make_client
 from fantasy_helper.adapters.espn.public import GAME_LOG_DEPTH
-from fantasy_helper.cli import fixtures, leagues
+from fantasy_helper.cli import fixtures, leagues, run
 from fantasy_helper.cli.doctor import Check, Status, run_checks
 from fantasy_helper.cli.ingest import ingest as ingest_command
 from fantasy_helper.config import Settings, get_settings
@@ -34,6 +34,7 @@ app = typer.Typer(
 
 app.add_typer(leagues.app, name="league")
 app.add_typer(fixtures.app, name="fixtures")
+app.add_typer(run.app, name="run")
 app.command("ingest")(ingest_command)
 
 _SYMBOLS = {Status.OK: "✓", Status.SKIP: "-", Status.FAIL: "✗"}

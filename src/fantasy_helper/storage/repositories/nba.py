@@ -2,6 +2,7 @@
 status changes."""
 
 import uuid
+from collections.abc import Sequence
 from datetime import date, datetime
 from uuid import UUID
 
@@ -194,3 +195,73 @@ def record_injury_changes(
     if changes:
         session.execute(insert(InjuryObservationRow), changes)
     return len(changes)
+
+
+# ------------------------------------------------------------------------------- reading
+
+
+def season_start(session: Session, season: int) -> date | None:
+    """Opening night: the first game's date in Eastern time."""
+    tip = session.scalar(select(func.min(NbaGameRow.tip_utc)).where(NbaGameRow.season == season))
+    return nba_game_date(tip) if tip is not None else None
+
+
+def team_games(
+    session: Session, season: int, team: str, first: date, last: date
+) -> list[tuple[UUID, datetime, date]]:
+    """(game ID, tip UTC, game date) for one team's games between two dates, in order."""
+    rows = session.execute(
+        select(NbaGameRow.id, NbaGameRow.tip_utc)
+        .where(
+            NbaGameRow.season == season,
+            (NbaGameRow.home_team == team) | (NbaGameRow.away_team == team),
+        )
+        .order_by(NbaGameRow.tip_utc)
+    )
+    out = []
+    for game_id, tip in rows:
+        day = nba_game_date(tip)
+        if first <= day <= last:
+            out.append((game_id, tip, day))
+    return out
+
+
+def box_scores(
+    session: Session, season: int, player_ids: Sequence[UUID] | None = None
+) -> list[PlayerGameStatRow]:
+    """Box score rows for a season, for some players or (None) everyone. One truth for every
+    league (ADR 0022)."""
+    query = select(PlayerGameStatRow).where(PlayerGameStatRow.season == season)
+    if player_ids is not None:
+        query = query.where(PlayerGameStatRow.player_id.in_(player_ids))
+    return list(session.scalars(query.order_by(PlayerGameStatRow.game_date)))
+
+
+def latest_projection_snapshot(
+    session: Session,
+    provider: Provider,
+    scope: ProjectionScope,
+    period: str | None,
+    as_of: datetime,
+) -> UUID | None:
+    query = select(ProjectionSnapshotRow.id).where(
+        ProjectionSnapshotRow.provider == provider.value,
+        ProjectionSnapshotRow.scope == scope.value,
+        ProjectionSnapshotRow.pulled_at <= as_of,
+    )
+    if period is not None:
+        query = query.where(ProjectionSnapshotRow.period == period)
+    return session.scalar(query.order_by(ProjectionSnapshotRow.pulled_at.desc()).limit(1))
+
+
+def projection_rows(
+    session: Session, snapshot_id: UUID, player_ids: Sequence[UUID]
+) -> list[ProjectionValueRow]:
+    return list(
+        session.scalars(
+            select(ProjectionValueRow).where(
+                ProjectionValueRow.snapshot_id == snapshot_id,
+                ProjectionValueRow.player_id.in_(player_ids),
+            )
+        )
+    )

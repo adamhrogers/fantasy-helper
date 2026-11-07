@@ -18,7 +18,7 @@ from fantasy_helper.pipeline.ingest import (
     phone_summary,
     run_ingest,
 )
-from fantasy_helper.pipeline.retry import MAX_ATTEMPTS, classify_exception, outcome, wait_before
+from fantasy_helper.pipeline.retry import RunStoppedError, outcome, run_with_retries
 from fantasy_helper.storage.raw_store import LocalRawStore
 from fantasy_helper.storage.repositories import users
 from fantasy_helper.storage.repositories.runs import record_run
@@ -37,50 +37,35 @@ def ingest() -> None:
     started = clock.now()
     events = events_from_settings(settings, RunKind.INGEST, label="Ingest")
     events.started()
-    report: IngestReport | None = None
-    attempt = 1
     # Ingest is idempotent, so a retry is simply another full run: whatever loaded stays loaded,
     # and the leagues (or the whole run) that failed in a retryable way get another go.
-    while True:
-        try:
-            report = _run_once(url, key, settings.data_dir, events)
-        except MissingSnapshotError as exc:
-            events.failed("No snapshot to load yet: run `fh snapshot` first.")
-            raise fail(str(exc)) from exc
-        except typer.Exit:
-            raise
-        except Exception as exc:
-            kind = classify_exception(exc)
-            if kind.retryable and attempt < MAX_ATTEMPTS:
-                attempt += 1
-                wait = wait_before(attempt)
-                events.retrying(
-                    attempt, MAX_ATTEMPTS, wait, f"Stopped: {kind.describe}. Nothing was saved."
-                )
-                _sleep(wait)
-                continue
-            _log_run(url, RunRecord(
-                kind=RunKind.INGEST, status=RunStatus.FAILED, started_at=started,
-                ended_at=clock.now(), errors=(f"{type(exc).__name__}: {exc}"[:500],),
-            ))  # fmt: skip
-            # The exception's text can hold league data; the phone gets only its kind.
-            events.failed(
-                f"Stopped: {outcome(kind, attempt)}. Nothing was saved (one transaction)."
-            )
-            raise
-        retry = [lg for lg in report.leagues if lg.failure is not None and lg.failure.retryable]
-        if not retry or attempt >= MAX_ATTEMPTS:
-            break
-        attempt += 1
-        wait = wait_before(attempt)
-        _, problems = phone_summary(report, attempt - 1)
-        events.retrying(
-            attempt, MAX_ATTEMPTS, wait,
-            f"{len(retry)} of {len(report.leagues)} leagues failed in a way a retry can fix; "
-            "everything else is saved.",
-            [p for p in problems if "failed" in p],
-        )  # fmt: skip
-        _sleep(wait)
+    try:
+        report, attempt = run_with_retries(
+            lambda: _run_once(url, key, settings.data_dir, events),
+            events,
+            retryable_parts=_retryable_leagues,
+            describe_parts=lambda r, n: (
+                f"{_retryable_leagues(r)} of {len(r.leagues)} leagues failed in a way a retry "
+                "can fix; everything else is saved.",
+                [p for p in phone_summary(r, n)[1] if "failed" in p],
+            ),
+            passthrough=(MissingSnapshotError, typer.Exit),
+            sleep=_sleep,
+        )
+    except MissingSnapshotError as exc:
+        events.failed("No snapshot to load yet: run `fh snapshot` first.")
+        raise fail(str(exc)) from exc
+    except RunStoppedError as stop:
+        cause = stop.__cause__
+        _log_run(url, RunRecord(
+            kind=RunKind.INGEST, status=RunStatus.FAILED, started_at=started,
+            ended_at=clock.now(), errors=(f"{type(cause).__name__}: {cause}"[:500],),
+        ))  # fmt: skip
+        # The exception's text can hold league data; the phone gets only its kind.
+        events.failed(
+            f"Stopped: {outcome(stop.kind, stop.attempts)}. Nothing was saved (one transaction)."
+        )
+        raise typer.Exit(code=1) from cause
 
     _print(report)
     status = (
@@ -107,6 +92,10 @@ def ingest() -> None:
     typer.echo(f"ingest {status.value} after {attempt} attempt(s), run logged")
     if report.errors:
         raise typer.Exit(code=1)
+
+
+def _retryable_leagues(report: IngestReport) -> int:
+    return sum(1 for lg in report.leagues if lg.failure is not None and lg.failure.retryable)
 
 
 def _run_once(url: str, key: bytes, data_dir: Path, events: RunEvents) -> IngestReport:

@@ -424,3 +424,38 @@ class RawLoadRow(Base):
     dataset: Mapped[str] = mapped_column(Text)
     rows: Mapped[int] = mapped_column(Integer)
     loaded_at: Mapped[datetime] = _created_at()
+
+
+# ------------------------------------------------------------------------- M2: the registry
+
+
+class RecommendationRow(Base):
+    """Every call the app makes, logged before tip-off and never edited (ADR 0005). A database
+    trigger rejects UPDATE and DELETE; grades go in their own table (M6). `dedupe_key` makes
+    logging the same call twice (a rerun) a no-op, never an edit."""
+
+    __tablename__ = "recommendations"
+    __table_args__ = (
+        UniqueConstraint("league_id", "dedupe_key"),
+        Index("ix_recommendations_league_id_created_at", "league_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    league_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("leagues.id"))
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
+    platform: Mapped[str] = mapped_column(Text)
+    format: Mapped[str] = mapped_column(Text)
+    call_type: Mapped[str] = mapped_column(Text)
+    dedupe_key: Mapped[str] = mapped_column(Text)
+    claim: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    baseline_call: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    inputs: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    producer: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    detail: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    expected_value: Mapped[float] = mapped_column(Float)
+    confidence: Mapped[float] = mapped_column(Float)
+    outcome_window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    outcome_window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    first_tip_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    is_shadow: Mapped[bool] = mapped_column(Boolean)

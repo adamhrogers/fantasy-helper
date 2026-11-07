@@ -17,6 +17,7 @@ uv run alembic revision --autogenerate --rev-id 0002 -m "..."   # new migration
 uv run fh doctor                          # check config, encryption, DB, tracing, alerts
 uv run fh snapshot                        # save today's raw public data (launchd runs it twice a day)
 uv run fh ingest                          # load leagues + snapshots into the database (idempotent)
+uv run fh run daily [--dry-run] [--open]  # ingest, lock-or-pass calls (logged), daily report page
 uv run fh fixtures record                 # re-record redacted fixtures (then update contract test counts)
 scripts/snapshot-schedule.sh status       # snapshot schedule state and logs
 ```
