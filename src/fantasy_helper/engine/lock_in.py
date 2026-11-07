@@ -117,11 +117,16 @@ def decide(
     )
 
 
-def week_value(games: Sequence[GameDistribution], *, seed: int = 0) -> tuple[float, float]:
+def week_value(
+    games: Sequence[GameDistribution], *, latest: float | None = None, seed: int = 0
+) -> tuple[float, float]:
     """A lock-in player's week: the expected score of the game that counts under optimal
-    locking, and its variance (from the same seeded simulation)."""
+    locking, and its variance (from the same seeded simulation). `latest` is a finished game
+    he can still lock: then it's E[max(latest, the rest played optimally)]."""
     if not games:
-        return 0.0, 0.0
+        return (latest, 0.0) if latest is not None else (0.0, 0.0)
     outcomes = simulate_waiting(games, seed=seed)
+    if latest is not None:
+        outcomes = [max(latest, o) for o in outcomes]
     mean = sum(outcomes) / len(outcomes)
     return mean, sum((o - mean) ** 2 for o in outcomes) / len(outcomes)

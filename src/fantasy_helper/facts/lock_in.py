@@ -11,6 +11,7 @@ Everything here is loaded from the database and handed to the engine as plain va
 """
 
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from enum import StrEnum
@@ -33,6 +34,7 @@ from fantasy_helper.engine.distributions import (
     shrunk_sd,
 )
 from fantasy_helper.engine.scoring import game_points
+from fantasy_helper.facts.availability import season_fallback, sitting
 from fantasy_helper.storage.repositories import league_data, nba, players
 from fantasy_helper.storage.tables import PlayerGameStatRow, stat_line
 
@@ -106,7 +108,14 @@ class MissingFactsError(Exception):
     """Something the sheet needs isn't loaded yet (run `fh ingest`)."""
 
 
-def load_lock_in(session: Session, league: League, *, now: datetime) -> LockInSheet:
+def load_lock_in(
+    session: Session,
+    league: League,
+    *,
+    now: datetime,
+    box_scores: Sequence[PlayerGameStatRow] | None = None,
+) -> LockInSheet:
+    """`box_scores` lets a run load the season's box scores once for every league."""
     rules_row = league_data.latest_rules(session, league.id)
     if rules_row is None:
         raise MissingFactsError("no settings for this league yet")
@@ -127,13 +136,14 @@ def load_lock_in(session: Session, league: League, *, now: datetime) -> LockInSh
     ]
     ids = [pid for pid, _ in lineup]
     names = players.names_and_teams(session, ids)
+    out = sitting(session, ids)
     sleeper_ids = players.external_ids(session, ids, "sleeper")
     reported = league_data.reported_player_points(
         session, league.id, week, league.my_team_external_id
     )
 
     # Everyone's played games, scored by this league: the prior spread comes from all of them.
-    all_rows = nba.box_scores(session, league.season)
+    all_rows = box_scores if box_scores is not None else nba.box_scores(session, league.season)
     scored: dict[UUID, list[tuple[PlayerGameStatRow, float]]] = defaultdict(list)
     for row in all_rows:
         scored[row.player_id].append((row, game_points(stat_line(row), rules.scoring)))
@@ -164,7 +174,7 @@ def load_lock_in(session: Session, league: League, *, now: datetime) -> LockInSh
         upcoming, window_closed = _upcoming(
             session, league, team, after, week_end, now,
             projections_by_date=per_game.get(pid, {}),
-            season_projection=season_avg.get(pid, {}).get(None),
+            season_projection=season_fallback(season_avg.get(pid, {}).get(None), pid, out),
             rules=rules, history=history, prior_cv=prior_cv,
             stat_history={  # the stats the league's bonuses are on, game by game
                 stat: [stat_line(row).get(stat, 0.0) for row, _ in games if row.played]

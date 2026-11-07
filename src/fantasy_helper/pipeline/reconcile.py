@@ -1,8 +1,9 @@
 """The daily check of our box scores and scoring against the platforms' own numbers (ADR 0022).
 
 Settled data only:
-- ESPN points leagues: every rostered player's season total, leaving out anyone whose team has a
-  game today that's already tipped (its points would be partial on one side).
+- ESPN points leagues: every rostered player's season total, leaving out anyone whose team
+  played after the latest box score we've loaded (a snapshot not run yet, or missed) or has a
+  game today that's tipped: ESPN would count games we don't have yet.
 - Sleeper lock-in leagues: completed weeks only. Mid-week, Sleeper's numbers move during the day.
 
 The thresholds come from the first check (2026-11-06): ESPN matched exactly (155 of 155);
@@ -11,7 +12,7 @@ Sleeper 405 of 417, the rest from the two stat feeds crediting one stat differen
 
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -41,11 +42,18 @@ class LeagueCheck:
         return rate is None or rate >= self.minimum
 
 
-def reconcile(session: Session, ingest: IngestReport, *, now: datetime) -> list[LeagueCheck]:
+def reconcile(
+    session: Session,
+    ingest: IngestReport,
+    *,
+    now: datetime,
+    box_scores: dict[int, list[PlayerGameStatRow]] | None = None,
+) -> list[LeagueCheck]:
+    """`box_scores` (season -> rows) is the run's shared load; missing seasons are loaded."""
     today = now.astimezone(NBA_TIMEZONE).date()
     links = players.load_links(session)
     checks: list[LeagueCheck] = []
-    rows_by_season: dict[int, list[PlayerGameStatRow]] = {}
+    rows_by_season = box_scores if box_scores is not None else {}
     for result in ingest.leagues:
         league = result.league
         if result.failure is not None:
@@ -54,7 +62,9 @@ def reconcile(session: Session, ingest: IngestReport, *, now: datetime) -> list[
         if found is None or not found[1].scoring.weights:
             continue  # categories leagues have no fantasy points to compare
         rules = found[1]
-        rows = rows_by_season.setdefault(league.season, nba.box_scores(session, league.season))
+        if league.season not in rows_by_season:  # (setdefault would load on every call)
+            rows_by_season[league.season] = nba.box_scores(session, league.season)
+        rows = rows_by_season[league.season]
         scored = [(r, game_points(stat_line(r), rules.scoring)) for r in rows]
         if league.platform is Platform.ESPN and result.reported_season_points:
             ours = _espn_totals(session, scored, links, league.season, today, now)
@@ -78,13 +88,15 @@ def _espn_totals(
     today: date,
     now: datetime,
 ) -> dict[str, float]:
-    """Our season totals by ESPN player ID, for players with no game today that has tipped."""
-    tipped = {
-        team
-        for _, tip, _, home, away in nba.games_between(session, season, today, today)
-        if tip <= now
-        for team in (home, away)
-    }
+    """Our season totals by ESPN player ID, for players whose games are all in our box scores."""
+    loaded_through = max((row.game_date for row, _ in scored), default=None)
+    if loaded_through is None:
+        return {}
+    tipped = unsettled_teams(
+        nba.games_between(session, season, loaded_through + timedelta(days=1), today),
+        today,
+        now,
+    )
     by_player: dict[UUID, float] = defaultdict(float)
     for row, points in scored:
         if row.played and row.game_date < today:
@@ -98,6 +110,19 @@ def _espn_totals(
             continue
         out[external_id] = by_player[link.player_id]
     return out
+
+
+def unsettled_teams(
+    games: list[tuple[UUID, datetime, date, str, str]], today: date, now: datetime
+) -> set[str]:
+    """Teams with a game after our latest box score: any day before today, or today if it has
+    tipped. Their players' platform totals may include games we don't have."""
+    return {
+        team
+        for _, tip, day, home, away in games
+        if day < today or tip <= now
+        for team in (home, away)
+    }
 
 
 def _sleeper_weeks(

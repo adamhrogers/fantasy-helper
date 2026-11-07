@@ -178,8 +178,9 @@ def run_snapshot(
     state is always fetched, for context); use it to backfill, never to skip a scheduled run.
 
     Datasets that fail in a way a retry can fix run again, alone, up to MAX_ATTEMPTS in all
-    (pipeline.retry). Datasets that succeeded are never fetched twice: Sleeper asks for its
-    player list at most once a day."""
+    (pipeline.retry). Datasets that succeeded are never fetched twice, and neither is a
+    once-a-day dataset that was saved but flagged: Sleeper asks for its player list at most once
+    a day."""
     clock = clock or SystemClock()
     started = clock.now()
     events = RunEvents(
@@ -255,9 +256,14 @@ def run_snapshot(
     return SnapshotResult(run_set=run_set, run=run, results=tuple(results), recorded=recorded)
 
 
+# Sources that ask for at most one request a day: once saved, never fetched again that run,
+# even if the response looked suspicious (it's kept, and flagged, as evidence).
+ONCE_A_DAY = frozenset({"sleeper.players"})
+
+
 def _retryable(by_label: dict[str, DatasetResult]) -> list[str]:
     """Labels worth another try. A dataset that only lacked Sleeper's state is retried only if
-    the state itself is being retried."""
+    the state itself is being retried; a once-a-day dataset that was saved never is."""
     state = by_label[STATE.label]
     state_retrying = state.failure is not None and state.failure.retryable
     return [
@@ -266,6 +272,7 @@ def _retryable(by_label: dict[str, DatasetResult]) -> list[str]:
         if r.failure is not None
         and r.failure.retryable
         and (r.failure is not FailureKind.MISSING_INPUT or state_retrying)
+        and not (label in ONCE_A_DAY and r.key is not None)
     ]
 
 

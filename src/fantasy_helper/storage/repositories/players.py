@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from fantasy_helper.domain.records import PlayerKey, SourcePlayer
 from fantasy_helper.storage.tables import (
     InjuryObservationRow,
+    LeaguePlayerValueRow,
     PlayerExternalIdRow,
     PlayerGameStatRow,
     PlayerRow,
@@ -64,6 +65,9 @@ def merge(session: Session, from_id: UUID, into_id: UUID, *, key: PlayerKey, met
     """Fold a provisional canonical player into the one it turned out to be."""
     for table in (RosterEntryRow, ProjectionValueRow, InjuryObservationRow, PlayerGameStatRow):
         session.execute(update(table).where(table.player_id == from_id).values(player_id=into_id))
+    # league_player_values is a cache (rebuilt every weekly run): drop his rows rather than move
+    # them, which could collide with the real player's rows (same league, same player key).
+    session.execute(delete(LeaguePlayerValueRow).where(LeaguePlayerValueRow.player_id == from_id))
     session.execute(
         update(PlayerExternalIdRow)
         .where(PlayerExternalIdRow.player_id == from_id)

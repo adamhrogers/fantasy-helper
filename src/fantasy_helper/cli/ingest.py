@@ -65,6 +65,7 @@ def ingest() -> None:
         events.failed(
             f"Stopped: {outcome(stop.kind, stop.attempts)}. Nothing was saved (one transaction)."
         )
+        typer.echo(f"✗ stopped: {type(cause).__name__}: {cause}", err=True)
         raise typer.Exit(code=1) from cause
 
     _print(report)

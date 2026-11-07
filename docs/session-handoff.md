@@ -50,7 +50,16 @@ A fantasy basketball assistant for Adam (customer one), then a friends beta, the
   - checked against ESPN's own daily totals (live: 773 vs 773).
   - Lock-in leagues still show "rest of the week" (locks invisible).
 
-Next: M2's PR. |
+- **PR #3 open; review fixed (2026-11-06).** A `/code-review` posted 15 findings as inline comments on the PR; all are fixed, each reply names its commit. The ones that change behaviour:
+  - players ruled out or suspended no longer fall back to their season projection;
+  - games that tipped today count once they're over (banked in daily-lineup leagues, lockable in lock-in leagues);
+  - streaming never drops a player without a season average yet;
+  - one failed day of ESPN lineups no longer fails the league;
+  - the daily check skips teams whose games we haven't loaded box scores for;
+  - categories leagues store no value over replacement.
+  - A matchup period that started before this week (the All-Star break) is flagged, with no banked points or win probability, until periods are mapped properly.
+
+Next: Adam merges PR #3. |
 | M3 Phone app + delivery | **Next, in parallel with M2** (Nov 7–12). Adam is creating the accounts ([runbooks/m3-account-setup.md](runbooks/m3-account-setup.md)). |
 | M4–M8, P9–P12 | See `docs/roadmap.md` v0.5. Friends beta **Nov 29**, hard stop **Dec 15**. |
 
@@ -196,7 +205,7 @@ The order matters: 1 → 2 → the distributions in 5 → 7 (lock-in), then the 
    - Backfill box scores from opening night, then pull them daily.
 2. **`engine/scoring.py`:** per-game fantasy points = Σ stat × weight + bonuses (threshold per game). Golden tests: **five players hand-calculated in each points league** (the M2 exit criterion), kept forever in `tests/golden/`. **Cross-check** our scores of real box scores against the per-player points Sleeper and ESPN report in matchups. Done 2026-11-06: scoring matches. Sleeper's weekly points don't reliably reveal locks mid-week (the number changes during the day), so the one-tap button is still needed (see the spike doc).
 3. **`engine/schedule.py`:** games per week from `nba_games`; **startable** games under roster slots and daily locks. Sleeper lock-in counts one game per player per week.
-   - Open item: map ESPN matchup periods to scoring days. `scheduleSettings.matchupPeriods` and the matchups' `pointsByScoringPeriod` keys both carry this; weeks run Monday to Sunday, and the All-Star break makes a long week.
+   - Open item (guarded since 2026-11-06: a period that started in an earlier week is flagged and gets no win probability): map ESPN matchup periods to scoring days. `scheduleSettings.matchupPeriods` and the matchups' `pointsByScoringPeriod` keys both carry this; weeks run Monday to Sunday, and the All-Star break makes a long week.
 4. **`engine/valuation.py`:** replacement level = the best free agent at the slot in *this* league. Free agents = players with projections minus today's `roster_entries`.
 5. **`engine/distributions.py`** (from game logs, shrunk toward the projection), `streaming.py` (greedy plan within the per-day add rate), `win_probability.py` (normal approximation), `baselines.py`.
 6. **`facts/`:** FactSheet v1, held to a token budget by a test, so the nightly report needs zero tool calls (ADR 0020), plus `league_player_values`. **`reports/`:** the weekly `ReportDocument` and the engine-only daily one, rendered locally (CLI to HTML) until M3 delivers them. Categories-league valuation is P8, so the 9-cat league gets games and roster facts only in M2.

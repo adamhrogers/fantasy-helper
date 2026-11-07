@@ -71,6 +71,7 @@ def daily(
         ))  # fmt: skip
         # The phone gets the kind of failure, never the exception's text.
         events.failed(f"Stopped: {outcome(stop.kind, stop.attempts)}. Nothing new was saved.")
+        typer.echo(f"✗ stopped: {type(cause).__name__}: {cause}", err=True)
         raise typer.Exit(code=1) from cause
 
     names = {str(lg.league.id): lg.league.name for lg in result.leagues}
@@ -203,6 +204,7 @@ def weekly(
             ended_at=clock.now(), errors=(f"{type(cause).__name__}: {cause}"[:500],),
         ))  # fmt: skip
         events.failed(f"Stopped: {outcome(stop.kind, stop.attempts)}. Nothing new was saved.")
+        typer.echo(f"✗ stopped: {type(cause).__name__}: {cause}", err=True)
         raise typer.Exit(code=1) from cause
 
     names = {str(lg.league.id): lg.league.name for lg in result.leagues}

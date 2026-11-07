@@ -14,7 +14,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any
-from zoneinfo import ZoneInfo
 
 import httpx
 from sqlalchemy.orm import Session
@@ -25,7 +24,12 @@ from fantasy_helper.adapters.espn import mapper as espn
 from fantasy_helper.adapters.espn.league import EspnAccessError
 from fantasy_helper.adapters.sleeper import league as sleeper_league
 from fantasy_helper.adapters.sleeper import mapper as sleeper
-from fantasy_helper.domain.calendar import matchup_week_bounds, matchup_week_of, season_end_year
+from fantasy_helper.domain.calendar import (
+    NBA_TIMEZONE,
+    matchup_week_bounds,
+    matchup_week_of,
+    season_end_year,
+)
 from fantasy_helper.domain.league import League, Platform
 from fantasy_helper.domain.player import IdSource
 from fantasy_helper.domain.ports import Clock, SystemClock
@@ -37,7 +41,7 @@ from fantasy_helper.domain.records import (
     SourcePlayer,
 )
 from fantasy_helper.domain.runs import FailureKind
-from fantasy_helper.domain.users import User
+from fantasy_helper.domain.users import EspnCredentials, User
 from fantasy_helper.identity.crosswalk import CrosswalkReport, Resolver, sync_players
 from fantasy_helper.observability.events import RunEvents
 from fantasy_helper.observability.logs import get_logger
@@ -128,7 +132,9 @@ def run_ingest(
     """Load everything. `events` gets one quiet step event per stage (counts only)."""
     clock = clock or SystemClock()
     now = clock.now()
-    today = now.astimezone(ZoneInfo(user.timezone)).date()
+    # The NBA's calendar (Eastern), like every loader that reads these snapshots: a Pacific
+    # user's late evening is already tomorrow's NBA day.
+    today = now.astimezone(NBA_TIMEZONE).date()
     report = IngestReport()
 
     latest = {name: _latest(store, *src) for name, src in PUBLIC.items()}
@@ -297,12 +303,28 @@ def _fetch_espn(
             ],
             # Each finished day of this matchup week: who was in which slot (for points banked
             # so far, scored from our box scores; ADR 0022).
-            "lineups": {
-                day: _keep(store, league, espn_league.fetch_lineups(*args, period))
-                for day, period in _finished_days(session, league.season, today)
-            },
+            "lineups": _fetch_lineups(
+                store, league, args, _finished_days(session, league.season, today)
+            ),
         },
     )
+
+
+def _fetch_lineups(
+    store: RawStore,
+    league: League,
+    args: tuple[httpx.Client, int, str, EspnCredentials],
+    days: list[tuple[date, int]],
+) -> dict[date, Any]:
+    """Each finished day's lineup on its own: a day that fails is skipped (its banked points
+    then read as unknown), never the whole league."""
+    out: dict[date, Any] = {}
+    for day, period in days:
+        try:
+            out[day] = _keep(store, league, espn_league.fetch_lineups(*args, period))
+        except (EspnAccessError, httpx.HTTPError) as exc:
+            log.warning("lineup_fetch_failed", period=period, error=type(exc).__name__)
+    return out
 
 
 def _finished_days(session: Session, season: int, today: date) -> list[tuple[date, int]]:

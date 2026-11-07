@@ -24,16 +24,23 @@ from sqlalchemy.orm import Session
 
 from fantasy_helper.adapters.espn.mapper import scoring_period_of
 from fantasy_helper.domain.calendar import NBA_TIMEZONE, matchup_week_bounds, matchup_week_of
-from fantasy_helper.domain.league import League, LeagueRules, LineupMode
+from fantasy_helper.domain.league import (
+    AcquisitionLimits,
+    League,
+    LeagueRules,
+    LineupMode,
+    Platform,
+)
 from fantasy_helper.domain.player import Position
 from fantasy_helper.domain.projections import ProjectionScope, Provider
 from fantasy_helper.domain.stats import Stat
 from fantasy_helper.engine.distributions import GameDistribution, game_distribution, league_cv
 from fantasy_helper.engine.schedule import PlayerWeek
 from fantasy_helper.engine.scoring import game_points
+from fantasy_helper.facts.availability import season_fallback, sitting
 from fantasy_helper.facts.lock_in import MissingFactsError
 from fantasy_helper.storage.repositories import league_data, nba, players
-from fantasy_helper.storage.tables import stat_line
+from fantasy_helper.storage.tables import PlayerGameStatRow, stat_line
 
 FREE_AGENT = "FA"
 IR = "IR"
@@ -49,6 +56,9 @@ class WeekPlayer:
     slot: str  # roster slot, or "FA" for a free agent
     week: PlayerWeek  # his games left this week, with distributions
     season_per_game: float | None = None  # his average this season (3+ games), league scoring
+    # Lock-in leagues: his latest game's score while it can still be locked (his next game
+    # hasn't tipped). None otherwise.
+    lockable_points: float | None = None
 
     @property
     def expected(self) -> float:
@@ -92,9 +102,20 @@ class WeeklySheet:
     my_banked: float | None = None
     their_banked: float | None = None
     my_banked_reported: float | None = None  # ESPN's own daily totals, summed: a check only
+    # ESPN's matchup for this week began in an earlier calendar week (a multi-week period, like
+    # the All-Star break): the opponent and banked points can't be read by calendar week, so
+    # the matchup forecast is skipped rather than guessed.
+    period_mismatch: bool = False
 
 
-def load_weekly(session: Session, league: League, *, now: datetime) -> WeeklySheet:
+def load_weekly(
+    session: Session,
+    league: League,
+    *,
+    now: datetime,
+    box_scores: Sequence[PlayerGameStatRow] | None = None,
+) -> WeeklySheet:
+    """`box_scores` lets a run load the season's box scores once for every league."""
     rules_row = league_data.latest_rules(session, league.id)
     opening = nba.season_start(session, league.season)
     if rules_row is None or opening is None or league.my_team_external_id is None:
@@ -105,11 +126,19 @@ def load_weekly(session: Session, league: League, *, now: datetime) -> WeeklyShe
     week_start, week_end = matchup_week_bounds(opening, week)
     from_day = max(week_start, today)
 
+    # Games still counting: today's (even if they've tipped: their box scores aren't in yet, so
+    # they're projected) and every later one this week. Banked points cover the days before.
     games_by_team: dict[str, list[tuple[datetime, date]]] = defaultdict(list)
-    for _, tip, day, home, away in nba.games_between(session, league.season, from_day, week_end):
-        if tip > now:  # a game that's started can't be planned for
-            games_by_team[home].append((tip, day))
-            games_by_team[away].append((tip, day))
+    team_week: dict[str, list[tuple[datetime, date]]] = defaultdict(list)
+    future_tips: list[datetime] = []
+    for _, tip, day, home, away in nba.games_between(session, league.season, week_start, week_end):
+        for team_code in (home, away):
+            team_week[team_code].append((tip, day))
+            if day >= from_day:
+                games_by_team[team_code].append((tip, day))
+        if day >= from_day and tip > now:
+            future_tips.append(tip)
+    lock_in = rules.lineup_mode is LineupMode.LOCK_IN
 
     rosters = league_data.latest_rosters(session, league.id)
     rostered = {pid for _, pid, _ in rosters}
@@ -119,15 +148,17 @@ def load_weekly(session: Session, league: League, *, now: datetime) -> WeeklyShe
     fa_ids = [pid for pid in candidates if pid in pool and pid not in rostered]
     ids = list(rostered) + fa_ids
     profiles = players.profiles(session, ids)
-    book = _ProjectionBook(session, snapshots, ids)
-    history, prior_cv, by_day = _scored_history(session, league, rules)
+    book = _ProjectionBook(session, snapshots, ids, sitting(session, ids))
+    history, prior_cv, by_day = _scored_history(session, league, rules, box_scores)
 
     def week_player(pid: UUID, slot: str) -> WeekPlayer | None:
         if pid not in profiles:
             return None
         name, team, positions = profiles[pid]
         games = []
-        for _, day in sorted(games_by_team.get(team or "", [])):
+        for tip, day in sorted(games_by_team.get(team or "", [])):
+            if slot == FREE_AGENT and tip <= now:
+                continue  # a free agent can't be added in time for a game that's started
             projection = book.for_game(pid, day)
             if projection is None:
                 continue
@@ -142,7 +173,14 @@ def load_weekly(session: Session, league: League, *, now: datetime) -> WeeklyShe
         pos = tuple(Position(p) for p in positions)
         played = history.get(pid, [])
         season = sum(played) / len(played) if len(played) >= 3 else None
-        return WeekPlayer(pid, name, team, pos, slot, PlayerWeek(pid, pos, tuple(games)), season)
+        lockable = (
+            _lockable(pid, team_week.get(team or "", []), by_day, week_start, today, now)
+            if lock_in
+            else None
+        )
+        return WeekPlayer(
+            pid, name, team, pos, slot, PlayerWeek(pid, pos, tuple(games)), season, lockable
+        )
 
     names = league_data.team_names(session, league.id)
 
@@ -157,27 +195,33 @@ def load_weekly(session: Session, league: League, *, now: datetime) -> WeeklyShe
         for p in (week_player(pid, FREE_AGENT) for pid in fa_ids)
         if p is not None and p.week.games
     )
-    tips = [tip for games in games_by_team.values() for tip, _ in games]
     my_banked = their_banked = reported = None
-    if rules.lineup_mode is LineupMode.DAILY and rules.scoring.weights:
+    mismatch = False
+    if league.platform is Platform.ESPN:
+        reported_by_day = league_data.reported_team_points(
+            session, league.id, week, league.my_team_external_id
+        )
+        mismatch = period_started_before(reported_by_day, scoring_period_of(week_start, opening))
+        if mismatch:
+            opp_id = None
+    if not mismatch and rules.lineup_mode is LineupMode.DAILY and rules.scoring.weights:
         days = _game_days(session, league.season, week_start, today)
         my_banked = _banked(session, league.id, league.my_team_external_id, days, by_day)
         if opp_id:
             their_banked = _banked(session, league.id, opp_id, days, by_day)
-        reported_by_day = league_data.reported_team_points(
-            session, league.id, week, league.my_team_external_id
-        )
-        reported = sum(reported_by_day.get(scoring_period_of(d, opening), 0.0) for d in days)
+        if league.platform is Platform.ESPN:
+            reported = sum(reported_by_day.get(scoring_period_of(d, opening), 0.0) for d in days)
     return WeeklySheet(
         league=league, rules=rules, settings_version=version, week=week,
         week_start=week_start, week_end=week_end, from_day=from_day, as_of=now,
         mine=team(league.my_team_external_id),
         opponent=team(opp_id) if opp_id else None,
         free_agents=free_agents,
-        adds_left=_adds_left(session, league, rules, week_start),
+        adds_left=_adds_left(session, league, rules, week_start, week_end),
         projection_snapshot_ids=tuple(s for s in snapshots.values() if s),
-        first_tip_utc=min(tips) if tips else None,
+        first_tip_utc=min(future_tips) if future_tips else None,
         my_banked=my_banked, their_banked=their_banked, my_banked_reported=reported,
+        period_mismatch=mismatch,
     )  # fmt: skip
 
 
@@ -199,8 +243,13 @@ class _ProjectionBook:
     """Per-game stat lines, best source first."""
 
     def __init__(
-        self, session: Session, snapshots: dict[str, UUID | None], ids: Sequence[UUID]
+        self,
+        session: Session,
+        snapshots: dict[str, UUID | None],
+        ids: Sequence[UUID],
+        out: set[UUID],
     ) -> None:
+        self.out = out
         self.by_game: dict[UUID, dict[date, dict[Stat, float]]] = defaultdict(dict)
         self.season: dict[UUID, dict[Stat, float]] = {}
         if snapshots["sleeper_game"]:
@@ -218,18 +267,21 @@ class _ProjectionBook:
     def for_game(self, player_id: UUID, day: date) -> dict[Stat, float] | None:
         if day in self.by_game.get(player_id, {}):
             return self.by_game[player_id][day]
-        return self.season.get(player_id)
+        return season_fallback(self.season.get(player_id), player_id, self.out)
 
 
 def _scored_history(
-    session: Session, league: League, rules: LeagueRules
+    session: Session,
+    league: League,
+    rules: LeagueRules,
+    rows: Sequence[PlayerGameStatRow] | None = None,
 ) -> tuple[dict[UUID, list[float]], float, dict[tuple[UUID, date], float]]:
     """Each player's played games this season in this league's scoring, the league's spread
     prior, and each player's points by game day."""
     history: dict[UUID, list[float]] = defaultdict(list)
     by_day: dict[tuple[UUID, date], float] = {}
     if rules.scoring.weights:
-        for row in nba.box_scores(session, league.season):
+        for row in rows if rows is not None else nba.box_scores(session, league.season):
             if row.played:
                 points = game_points(stat_line(row), rules.scoring)
                 history[row.player_id].append(points)
@@ -263,15 +315,44 @@ def _banked(
     return round(total, 2)
 
 
-def _adds_left(
-    session: Session, league: League, rules: LeagueRules, week_start: date
-) -> int | None:
-    limits = rules.acquisition_limits
+def matchup_add_limit(limits: AcquisitionLimits, days: int) -> int | None:
+    """Adds allowed in a matchup of `days` days: a per-day rate scales with its length (week 1
+    runs Tuesday to Sunday; some weeks are longer). None: no limit."""
     if limits.per_matchup_per_day is not None:
-        allowed = round(limits.per_matchup_per_day * 7)
-    elif limits.per_matchup is not None:
-        allowed = limits.per_matchup
-    else:
+        return round(limits.per_matchup_per_day * days)
+    return limits.per_matchup
+
+
+def period_started_before(reported_by_period: dict[int, float], first_period: int) -> bool:
+    """ESPN's matchup has points from before this calendar week: it spans several weeks."""
+    return any(period < first_period for period in reported_by_period)
+
+
+def _lockable(
+    player_id: UUID,
+    team_games: Sequence[tuple[datetime, date]],
+    by_day: dict[tuple[UUID, date], float],
+    week_start: date,
+    today: date,
+    now: datetime,
+) -> float | None:
+    """His latest game this week before today, if it can still be locked: his team's next game
+    hasn't tipped. (A game he sat out tipped in between closes the window too.)"""
+    played = sorted(day for (pid, day) in by_day if pid == player_id and week_start <= day < today)
+    if not played:
+        return None
+    latest = played[-1]
+    later = sorted(tip for tip, day in team_games if day > latest)
+    if later and later[0] <= now:
+        return None
+    return by_day[(player_id, latest)]
+
+
+def _adds_left(
+    session: Session, league: League, rules: LeagueRules, week_start: date, week_end: date
+) -> int | None:
+    allowed = matchup_add_limit(rules.acquisition_limits, (week_end - week_start).days + 1)
+    if allowed is None:
         return None
     since = datetime.combine(week_start, time(0), NBA_TIMEZONE)
     used = league_data.adds_since(session, league.id, league.my_team_external_id or "", since)

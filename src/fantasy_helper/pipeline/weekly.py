@@ -68,7 +68,8 @@ from fantasy_helper.pipeline.retry import classify_exception, outcome
 from fantasy_helper.registry.calls import log_call
 from fantasy_helper.reports.weekly import weekly_report
 from fantasy_helper.storage.raw_store import RawStore
-from fantasy_helper.storage.repositories import leagues, read_models
+from fantasy_helper.storage.repositories import leagues, nba, read_models
+from fantasy_helper.storage.tables import PlayerGameStatRow
 
 log = get_logger(__name__)
 FREE_AGENTS_IN_SHEET = 12
@@ -86,6 +87,7 @@ class LeagueWeekly:
     new_calls: int = 0
     failure: FailureKind | None = None
     banked_gap: float | None = None  # our banked points minus the platform's (a check only)
+    period_mismatch: bool = False  # ESPN's matchup spans several calendar weeks: no forecast
 
 
 @dataclass
@@ -119,13 +121,18 @@ def run_weekly(
     result = WeeklyResult(ingest=ingest)
     now = clock.now()
     failed = {lg.league.id: lg.failure for lg in ingest.leagues if lg.failure}
+    box_scores: dict[int, list[PlayerGameStatRow]] = {}  # one load per season, shared by leagues
     for league in leagues.list_for_user(session, user.id):
         if league.id in failed:
             result.leagues.append(LeagueWeekly(league, failure=failed[league.id]))
             continue
+        if league.season not in box_scores:
+            box_scores[league.season] = nba.box_scores(session, league.season)
         try:
             with session.begin_nested():
-                result.leagues.append(_league_week(session, league, user, now))
+                result.leagues.append(
+                    _league_week(session, league, user, now, box_scores[league.season])
+                )
         except Exception as exc:
             kind = classify_exception(exc)
             log.error("weekly_league_failed", platform=league.platform.value, kind=kind.value)
@@ -141,6 +148,15 @@ def run_weekly(
     return result
 
 
+def protected_from_drops(players: Sequence[WeekPlayer], vor: dict[UUID, float]) -> frozenset[UUID]:
+    """Players never suggested as drops: anyone above replacement on his season average, and
+    anyone without one yet (fewer than 3 games: back from injury, a rookie), whose value can't
+    be judged from a week with no games."""
+    return frozenset(
+        p.player_id for p in players if p.season_per_game is None or vor.get(p.player_id, 0) > 0
+    )
+
+
 def _weeks(players: Sequence[WeekPlayer], points: bool) -> list[PlayerWeek]:
     return [p.week if points else distribution_for_count(p.week) for p in players]
 
@@ -151,16 +167,21 @@ def _project(sheet: WeeklySheet, team: TeamWeek, points: bool) -> WeekProjection
         return project_week(_weeks(team.active, points), slots)
     # Lock-in: each starter counts one game, the one optimal locking would keep.
     values = {
-        p.player_id: week_value([d for _, d in p.week.games], seed=p.player_id.int % 2**31)
+        p.player_id: week_value(
+            [d for _, d in p.week.games], latest=p.lockable_points, seed=p.player_id.int % 2**31
+        )
         for p in team.active
     }
     chosen = fill_day(
-        [(p.player_id, p.positions, values[p.player_id][0]) for p in team.active if p.week.games],
+        [(p.player_id, p.positions, values[p.player_id][0]) for p in team.active
+         if p.week.games or p.lockable_points is not None],
         expand_slots(slots),
-    )
+    )  # fmt: skip
     by_id = {p.player_id: p for p in team.active}
     return WeekProjection(
-        started={pid: (by_id[pid].week.games[0][0],) for pid in chosen},
+        started={
+            pid: by_id[pid].week.games[0][:1] if by_id[pid].week.games else () for pid in chosen
+        },
         points=sum(values[pid][0] for pid in chosen),
         variance=sum(values[pid][1] for pid in chosen),
         games=sum(len(p.week.games) for p in team.active),
@@ -182,8 +203,14 @@ def _days(sheet: WeeklySheet, projection: WeekProjection, points: bool) -> tuple
     )
 
 
-def _league_week(session: Session, league: League, user: User, now: datetime) -> LeagueWeekly:
-    ws = load_weekly(session, league, now=now)
+def _league_week(
+    session: Session,
+    league: League,
+    user: User,
+    now: datetime,
+    box_scores: Sequence[PlayerGameStatRow],
+) -> LeagueWeekly:
+    ws = load_weekly(session, league, now=now, box_scores=box_scores)
     points = bool(ws.rules.scoring.weights)
     lock_in = ws.rules.lineup_mode is LineupMode.LOCK_IN
     slots = ws.rules.roster_slots
@@ -195,13 +222,18 @@ def _league_week(session: Session, league: League, user: User, now: datetime) ->
     def season(p: WeekPlayer) -> float:
         return p.season_per_game if p.season_per_game is not None else p.per_game
 
-    vor = {
-        p.player_id: value_over_replacement(season(p), p.positions, slots, levels)
-        for p in ws.mine.players
-    }
+    # Value over replacement means points: categories leagues get none (P9).
+    vor = (
+        {
+            p.player_id: value_over_replacement(season(p), p.positions, slots, levels)
+            for p in ws.mine.players
+        }
+        if points
+        else {}
+    )
     moves: list[StreamMove] = []
     if points and not lock_in and ws.adds_left:
-        keep = frozenset(pid for pid, v in vor.items() if v > 0)  # only drop replaceable players
+        keep = protected_from_drops(ws.mine.players, vor)
         moves = plan_streams(
             [p.week for p in ws.mine.active],
             [fa.week for fa in ws.free_agents],
@@ -246,7 +278,7 @@ def _league_week(session: Session, league: League, user: User, now: datetime) ->
                 player_id=p.player_id, name=p.name, nba_team=p.nba_team, slot=p.slot,
                 games=len(p.week.games), started=mine.started_games(p.player_id),
                 per_game=round(p.per_game, 1),
-                value_over_replacement=round(vor[p.player_id], 1) if points else None,
+                value_over_replacement=round(vor[p.player_id], 1) if p.player_id in vor else None,
             )
             for p in sorted(ws.mine.players, key=lambda p: -p.expected)
         ),
@@ -279,8 +311,9 @@ def _league_week(session: Session, league: League, user: User, now: datetime) ->
     if fact_sheet.matchup and fact_sheet.matchup.my_banked is not None and ws.my_banked_reported:
         gap = round(fact_sheet.matchup.my_banked - ws.my_banked_reported, 1)
     return LeagueWeekly(
-        league, sheet=fact_sheet, report=report, calls=len(logged), new_calls=new, banked_gap=gap
-    )
+        league, sheet=fact_sheet, report=report, calls=len(logged), new_calls=new,
+        banked_gap=gap, period_mismatch=ws.period_mismatch,
+    )  # fmt: skip
 
 
 def _player_values(
@@ -292,7 +325,9 @@ def _player_values(
             "player_id": p.player_id, "as_of": now, "team_external_id": ws.mine.team_external_id,
             "slot": p.slot, "games_left": len(p.week.games),
             "startable_left": mine.started_games(p.player_id), "per_game": round(p.per_game, 2),
-            "value_over_replacement": round(vor[p.player_id], 2),
+            "value_over_replacement": (
+                round(vor[p.player_id], 2) if p.player_id in vor else None
+            ),
         })  # fmt: skip
     for fa in ws.free_agents:
         rows.append({
@@ -385,6 +420,12 @@ def weekly_summary(result: WeeklyResult, attempts: int) -> tuple[str, list[str]]
         problems.append(
             f"overview failed for {n} {platform} league{'s' if n > 1 else ''}: "
             f"{outcome(kind, attempts)}"
+        )
+    spanning = [lg for lg in done if lg.period_mismatch]
+    if spanning:
+        problems.append(
+            f"{len(spanning)} league{'s' if len(spanning) > 1 else ''}' matchup spans more than "
+            "this calendar week (the All-Star break?): matchup forecast skipped"
         )
     off = [lg for lg in done if lg.banked_gap is not None and abs(lg.banked_gap) > BANKED_TOLERANCE]
     if off:

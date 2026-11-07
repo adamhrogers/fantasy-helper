@@ -2,15 +2,16 @@
 status changes."""
 
 import uuid
-from collections.abc import Sequence
-from datetime import date, datetime
+from collections.abc import Iterable, Sequence
+from datetime import date, datetime, time, timedelta
 from uuid import UUID
 
 from sqlalchemy import func, insert, select
+from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from fantasy_helper.domain.calendar import nba_game_date
+from fantasy_helper.domain.calendar import NBA_TIMEZONE, nba_game_date
 from fantasy_helper.domain.projections import InjuryStatus, ProjectionScope, Provider
 from fantasy_helper.domain.records import (
     GameLogRecord,
@@ -206,24 +207,29 @@ def season_start(session: Session, season: int) -> date | None:
     return nba_game_date(tip) if tip is not None else None
 
 
+def _tip_window(first: date, last: date) -> tuple[datetime, datetime]:
+    """UTC bounds of the Eastern days first..last: games are dated by their Eastern tip."""
+    start = datetime.combine(first, time(0), NBA_TIMEZONE)
+    end = datetime.combine(last + timedelta(days=1), time(0), NBA_TIMEZONE)
+    return start, end
+
+
 def team_games(
     session: Session, season: int, team: str, first: date, last: date
 ) -> list[tuple[UUID, datetime, date]]:
     """(game ID, tip UTC, game date) for one team's games between two dates, in order."""
+    start, end = _tip_window(first, last)
     rows = session.execute(
         select(NbaGameRow.id, NbaGameRow.tip_utc)
         .where(
             NbaGameRow.season == season,
             (NbaGameRow.home_team == team) | (NbaGameRow.away_team == team),
+            NbaGameRow.tip_utc >= start,
+            NbaGameRow.tip_utc < end,
         )
         .order_by(NbaGameRow.tip_utc)
     )
-    out = []
-    for game_id, tip in rows:
-        day = nba_game_date(tip)
-        if first <= day <= last:
-            out.append((game_id, tip, day))
-    return out
+    return [(game_id, tip, nba_game_date(tip)) for game_id, tip in rows]
 
 
 def box_scores(
@@ -271,16 +277,13 @@ def games_between(
     session: Session, season: int, first: date, last: date
 ) -> list[tuple[UUID, datetime, date, str, str]]:
     """(game ID, tip UTC, game date ET, home, away) for every game between two dates."""
-    out = []
-    for gid, tip, home, away in session.execute(
+    start, end = _tip_window(first, last)
+    rows = session.execute(
         select(NbaGameRow.id, NbaGameRow.tip_utc, NbaGameRow.home_team, NbaGameRow.away_team)
-        .where(NbaGameRow.season == season)
+        .where(NbaGameRow.season == season, NbaGameRow.tip_utc >= start, NbaGameRow.tip_utc < end)
         .order_by(NbaGameRow.tip_utc)
-    ):
-        day = nba_game_date(tip)
-        if first <= day <= last:
-            out.append((gid, tip, day, home, away))
-    return out
+    )
+    return [(gid, tip, nba_game_date(tip), home, away) for gid, tip, home, away in rows]
 
 
 def projected_players(session: Session, snapshot_ids: Sequence[UUID]) -> set[UUID]:
@@ -294,3 +297,17 @@ def projected_players(session: Session, snapshot_ids: Sequence[UUID]) -> set[UUI
             .distinct()
         )
     )
+
+
+def latest_injury_status(session: Session, player_ids: Iterable[UUID]) -> dict[UUID, str]:
+    """Each player's most recent injury status, from whichever provider reported last."""
+    ids = list(player_ids)
+    if not ids:
+        return {}
+    rows = session.execute(
+        select(InjuryObservationRow.player_id, InjuryObservationRow.status)
+        .where(InjuryObservationRow.player_id.in_(ids))
+        .order_by(InjuryObservationRow.player_id, InjuryObservationRow.observed_at.desc())
+        .ext(distinct_on(InjuryObservationRow.player_id))
+    )
+    return {pid: status for pid, status in rows}

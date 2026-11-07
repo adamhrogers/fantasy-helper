@@ -38,7 +38,8 @@ from fantasy_helper.pipeline.retry import classify_exception, outcome
 from fantasy_helper.registry.calls import log_call
 from fantasy_helper.reports.daily import lock_in_report
 from fantasy_helper.storage.raw_store import RawStore
-from fantasy_helper.storage.repositories import league_data, leagues
+from fantasy_helper.storage.repositories import league_data, leagues, nba
+from fantasy_helper.storage.tables import PlayerGameStatRow
 
 log = get_logger(__name__)
 
@@ -83,9 +84,10 @@ def run_daily(
     )
     result = DailyResult(ingest=ingest)
     now = clock.now()
+    box_scores: dict[int, list[PlayerGameStatRow]] = {}  # one load per season for the whole run
     try:  # a check that breaks must never stop the run (its savepoint rolls back alone)
         with session.begin_nested():
-            result.checks = reconcile(session, ingest, now=now)
+            result.checks = reconcile(session, ingest, now=now, box_scores=box_scores)
     except Exception as exc:
         log.error("reconcile_failed", error=type(exc).__name__)
     if events is not None:
@@ -100,7 +102,11 @@ def run_daily(
             continue
         try:
             with session.begin_nested():
-                result.leagues.append(_lock_in_league(session, league, user, now))
+                if league.season not in box_scores:
+                    box_scores[league.season] = nba.box_scores(session, league.season)
+                result.leagues.append(
+                    _lock_in_league(session, league, user, now, box_scores[league.season])
+                )
         except Exception as exc:
             kind = classify_exception(exc)
             log.error("lock_in_league_failed", platform=league.platform.value, kind=kind.value)
@@ -126,8 +132,14 @@ def open_decisions(starters: Sequence[StarterWeek]) -> list[StarterWeek]:
     ]  # fmt: skip
 
 
-def _lock_in_league(session: Session, league: League, user: User, now: datetime) -> LeagueDaily:
-    sheet = load_lock_in(session, league, now=now)
+def _lock_in_league(
+    session: Session,
+    league: League,
+    user: User,
+    now: datetime,
+    box_scores: Sequence[PlayerGameStatRow],
+) -> LeagueDaily:
+    sheet = load_lock_in(session, league, now=now, box_scores=box_scores)
     calls: list[tuple[StarterWeek, Recommendation]] = []
     new = 0
     for starter in open_decisions(sheet.starters):

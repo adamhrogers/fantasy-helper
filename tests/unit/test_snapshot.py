@@ -292,3 +292,18 @@ def test_failures_a_retry_cant_fix_fail_at_once(tmp_path: Path) -> None:
     assert WAITS == []  # no waiting on something that can't change
     assert not any("retrying" in a.title for a in notifier.alerts)
     assert "not retried (retrying can't fix it)" in notifier.alerts[-1].message
+
+
+def test_a_flagged_once_a_day_dataset_is_never_fetched_again(tmp_path: Path) -> None:
+    calls = {"n": 0}
+
+    def small_player_list() -> object:
+        calls["n"] += 1
+        return {"1": {"player_id": "1"}}  # suspiciously small: saved, but flagged
+
+    WAITS.clear()
+    result, _, _, _ = run(tmp_path, overrides={"sleeper.players": small_player_list})
+    players = next(r for r in result.results if r.label == "sleeper.players")
+    assert players.key is not None  # kept as evidence
+    assert players.error is not None  # flagged
+    assert calls["n"] == 1  # Sleeper asks for at most one request a day

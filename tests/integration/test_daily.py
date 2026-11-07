@@ -7,7 +7,7 @@ from uuid import uuid4
 import httpx
 import pytest
 from pydantic import ValidationError
-from sqlalchemy import delete, update
+from sqlalchemy import delete, insert, update
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
@@ -162,4 +162,44 @@ def test_the_weekly_run_builds_every_league_and_stores_its_facts(
     assert all(lg.new_calls == 0 for lg in again.leagues)  # calls are logged once
     assert count(session, FactSheetRow.id) == sheets  # the same facts aren't stored twice
     assert count(session, LeaguePlayerValueRow.player_id) == values  # replaced, not appended
+    categories = next(lg for lg in again.leagues if lg.league.name == "Categories")
+    assert categories.sheet is not None
+    assert all(p.value_over_replacement is None for p in categories.sheet.my_players)
     assert count(session, RecommendationRow.id) == calls
+
+
+def test_merging_a_player_clears_his_cached_values(session: Session) -> None:
+    from fantasy_helper.domain.player import IdSource
+    from fantasy_helper.domain.records import PlayerKey
+    from fantasy_helper.storage.repositories import players
+    from fantasy_helper.storage.tables import PlayerRow
+
+    owner = setup_owner(session)
+    league = leagues.list_for_user(session, owner.id)[0]
+    provisional, real = uuid4(), uuid4()
+    session.add_all([PlayerRow(id=provisional, full_name="P"), PlayerRow(id=real, full_name="P")])
+    session.flush()
+    session.execute(insert(LeaguePlayerValueRow).values(
+        league_id=league.id, player_id=provisional, as_of=NOW, slot="FA", games_left=2,
+        startable_left=0, per_game=20.0,
+    ))  # fmt: skip
+    key = PlayerKey(source=IdSource.SLEEPER, external_id="1")
+    players.merge(session, provisional, real, key=key, method="override")
+    assert count(session, LeaguePlayerValueRow.player_id) == 0  # no FK error, cache cleared
+
+
+def test_a_failed_lineup_fetch_never_fails_the_league(session: Session, tmp_path: Path) -> None:
+    owner = setup_owner(session)
+    store = seed_snapshots(tmp_path / "raw")
+
+    def lineups_down(request: httpx.Request) -> httpx.Response:
+        if set(request.url.params.get_list("view")) == {"mRoster"}:
+            return httpx.Response(503)
+        return serve_fixtures(request)
+
+    from fantasy_helper.pipeline.ingest import run_ingest
+
+    client = _http.make_client(transport=httpx.MockTransport(lineups_down))
+    run_ingest(session, client, store=store, user=owner, key=KEY, clock=FixedClock())  # schedule
+    report = run_ingest(session, client, store=store, user=owner, key=KEY, clock=FixedClock())
+    assert all(lg.failure is None for lg in report.leagues)
