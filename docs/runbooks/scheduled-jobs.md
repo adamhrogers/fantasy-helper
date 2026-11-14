@@ -11,20 +11,20 @@ Part 2 adds the daily and weekly reports here.
 
 ## First-time setup (after the PR merges)
 
-- [ ] **1. Claude:** create the cloud side. This makes the image repository, three service accounts, five empty secrets, keyless GitHub deploys, the two jobs (with a placeholder image), and the `prod` environment's variables:
+- [x] **1. Claude:** create the cloud side (done 2026-11-14). This makes the image repository, three service accounts, five empty secrets, keyless GitHub deploys, the two jobs (with a placeholder image), and the `prod` environment's variables:
 
 ```bash
 scripts/gcp-setup.sh infra
 ```
 
-- [ ] **2. Adam: a separate R2 token for Cloud Run** (2 min). Cloudflare → **R2 → Manage API tokens → Create API token**: **Object Read & Write**, scoped to `fantasy-helper-raw`, named `cloud-run-jobs`. Save its access key ID and secret in Bitwarden. The endpoint is the same as before.
-- [ ] **3. Adam: the secret values** (5 min). In your own Terminal app, from `~/projects/fantasy-helper`, paste each value from Bitwarden at the hidden prompt. Nothing is shown or saved on the laptop:
+- [x] **2. Adam: a separate R2 token for Cloud Run** (done 2026-11-14). Cloudflare → **R2 → Manage API tokens → Create API token**: **Object Read & Write**, scoped to `fantasy-helper-raw`, named `cloud-run-jobs`. Save its access key ID and secret in Bitwarden. The endpoint is the same as before.
+- [x] **3. Adam: the secret values** (done 2026-11-14). In your own Terminal app, from `~/projects/fantasy-helper`, paste each value from Bitwarden at the hidden prompt. Nothing is shown or saved on the laptop:
 
 ```bash
 scripts/gcp-secrets.sh
 ```
 
-- [ ] **4. Claude:** deploy (**Actions → Deploy → Run workflow**), then create the schedules. Until step 1 has run, Deploy is skipped, not failed, so merging the PR is quiet.
+- [ ] **4. Claude:** deploy (**Actions → Deploy → Run workflow**), then create the schedules. Until step 1 has run, Deploy does nothing and says so in a notice, rather than failing, so merging the PR is quiet.
 
   If the deploy fails with **PERMISSION_DENIED** on a project-level permission (the deployer's role is granted on the two jobs only), grant `roles/run.developer` on the project to `fh-deployer` instead, note it in ADR 0025, and rerun. If `schedule` says Cloud Scheduler isn't offered in `us-east4`, set `SCHEDULER_LOCATION` in the script to the nearest location it lists, and use that location in the commands below.
 

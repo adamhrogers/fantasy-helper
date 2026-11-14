@@ -76,8 +76,11 @@ def test_deploys_are_keyless_and_only_from_main() -> None:
     assert "id-token: write" in text
     assert "contents: read" in text
     assert "environment: prod" in text
-    # Skipped (not failed) until gcp-setup.sh has set the variables, so merging is quiet.
-    assert "if: github.ref == 'refs/heads/main' && vars.GCP_WIF_PROVIDER != ''" in text
+    assert "if: github.ref == 'refs/heads/main'" in text
+    # Does nothing (rather than fail) until gcp-setup.sh has set the variables. The check is a
+    # step, not the job's `if`, which runs before the prod environment's variables load.
+    assert "vars.GCP_" not in text.split("    steps:\n", 1)[0].split("    env:\n", 1)[0]
+    assert 'if [ -z "$WIF_PROVIDER" ] || [ -z "$PROJECT" ]; then' in text
     assert "secrets." not in text  # no key file, no stored credential: Workload Identity only
     assert "persist-credentials: false" in text
     setup = SETUP.read_text()
