@@ -216,3 +216,68 @@ def test_doctor_fails_when_prod_has_no_alert_topic(monkeypatch: pytest.MonkeyPat
     result = runner.invoke(app, ["doctor", "--only", "alerts"])
     assert result.exit_code == 1
     assert "prod runs can't reach the phone" in result.stdout
+
+
+class _Heartbeat:
+    def __init__(self) -> None:
+        self.pings: list[str] = []
+
+    def start(self) -> None:
+        self.pings.append("start")
+
+    def success(self, detail: str = "") -> None:
+        self.pings.append("success")
+
+    def fail(self, detail: str = "") -> None:
+        self.pings.append("fail")
+
+
+@pytest.fixture
+def heartbeat(monkeypatch: pytest.MonkeyPatch) -> tuple[_Heartbeat, list[str]]:
+    beat, slugs = _Heartbeat(), []
+
+    def make(_settings: object, slug: str) -> _Heartbeat:
+        slugs.append(slug)
+        return beat
+
+    monkeypatch.setattr(cli_main, "heartbeat_from_settings", make)
+    return beat, slugs
+
+
+def test_a_healthy_snapshot_pings_start_then_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, heartbeat: tuple[_Heartbeat, list[str]]
+) -> None:
+    monkeypatch.setattr(cli_main, "raw_store_from_settings", lambda _s: LocalRawStore(tmp_path))
+    monkeypatch.setattr(cli_main, "run_snapshot", _succeeded)
+    result = runner.invoke(app, ["snapshot", "--set", "evening"])
+    assert result.exit_code == 0, result.output
+    assert heartbeat[0].pings == ["start", "success"]
+    assert heartbeat[1] == ["snapshot-evening"]
+
+
+def test_a_reported_failure_still_counts_as_finished_for_the_watchdog(
+    monkeypatch: pytest.MonkeyPatch, heartbeat: tuple[_Heartbeat, list[str]]
+) -> None:
+    """The run already alerted the phone; a second alert from the watchdog would repeat it."""
+
+    def crash(*_args: object, **_kwargs: object) -> SnapshotResult:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(cli_main, "run_snapshot", crash)
+    result = runner.invoke(app, ["snapshot", "--set", "morning"])
+    assert result.exit_code == REPORTED_EXIT
+    assert heartbeat[0].pings == ["start", "success"]
+    assert heartbeat[1] == ["snapshot-morning"]
+
+
+def test_a_failure_the_app_could_not_report_pings_fail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, heartbeat: tuple[_Heartbeat, list[str]]
+) -> None:
+    def interrupted(*_args: object, **_kwargs: object) -> SnapshotResult:
+        raise KeyboardInterrupt  # stands in for anything that escapes the app's own alerting
+
+    monkeypatch.setattr(cli_main, "raw_store_from_settings", lambda _s: LocalRawStore(tmp_path))
+    monkeypatch.setattr(cli_main, "run_snapshot", interrupted)
+    result = runner.invoke(app, ["snapshot", "--set", "evening"])
+    assert result.exit_code != 0
+    assert heartbeat[0].pings == ["start", "fail"]

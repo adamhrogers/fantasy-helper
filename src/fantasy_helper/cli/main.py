@@ -20,6 +20,7 @@ from fantasy_helper.domain.ports import SystemClock
 from fantasy_helper.domain.runs import RunKind, RunRecord, RunStatus
 from fantasy_helper.observability.alerts import notifier_from_settings
 from fantasy_helper.observability.events import events_from_settings
+from fantasy_helper.observability.healthchecks import heartbeat_from_settings
 from fantasy_helper.observability.logs import configure_logging, get_logger
 from fantasy_helper.pipeline.cron import UnknownCronError, job_for
 from fantasy_helper.pipeline.snapshot import DATASETS, SnapshotSet, run_snapshot
@@ -148,6 +149,31 @@ def snapshot(
     # alerts for it. Every failure after this point is sent to the phone and exits REPORTED_EXIT.
     settings = get_settings()
     label = f"{run_set.value.title()} snapshot"
+    heartbeat = heartbeat_from_settings(settings, f"snapshot-{run_set.value}")
+    heartbeat.start()
+    try:
+        _snapshot_and_report(settings, run_set, label, only, game_log_depth)
+    except typer.Exit as exc:
+        # REPORTED_EXIT: the run already told the phone what went wrong, so for the watchdog it
+        # finished (observability/healthchecks.py). Any other exit wasn't reported.
+        if exc.exit_code == REPORTED_EXIT:
+            heartbeat.success("finished with a problem it already reported")
+        else:
+            heartbeat.fail(f"exited with code {exc.exit_code}")
+        raise
+    except BaseException as exc:
+        heartbeat.fail(f"stopped on an unexpected {type(exc).__name__}")
+        raise
+    heartbeat.success()
+
+
+def _snapshot_and_report(
+    settings: Settings,
+    run_set: SnapshotSet,
+    label: str,
+    only: list[str] | None,
+    game_log_depth: int,
+) -> None:
     try:
         store = raw_store_from_settings(settings)
     except RawStoreError as exc:

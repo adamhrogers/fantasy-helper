@@ -1,0 +1,87 @@
+# Builds the image and deploys the scheduled Cloud Run jobs (ADR 0025). Cloud Scheduler starts
+# them on the minute; this workflow only ships new code. No key file exists: GitHub proves who
+# it is to Google with a short-lived token (Workload Identity Federation), accepted only from
+# this repository's main branch (scripts/gcp-setup.sh).
+#
+# The job definitions live here, so a change to a job (its command, timeout, secrets) is
+# reviewed like code. The IDs come from the `prod` environment's variables, not this public file.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - pyproject.toml
+      - uv.lock
+      - "src/**"
+      - .github/workflows/deploy.yml
+  # Dependabot's merges don't start push workflows (ADR 0024), so a weekly deploy picks them up.
+  schedule:
+    - cron: "0 15 * * 1"  # Mondays, after Dependabot's 07:00 Eastern run
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build and deploy the scheduled jobs
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: prod
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write  # the short-lived token Google exchanges for the deployer's access
+    env:
+      PROJECT: ${{ vars.GCP_PROJECT }}
+      REGION: us-east4
+      IMAGE: us-east4-docker.pkg.dev/${{ vars.GCP_PROJECT }}/fantasy-helper/app:${{ github.sha }}
+      JOBS_SA: fh-jobs@${{ vars.GCP_PROJECT }}.iam.gserviceaccount.com
+      # Secret Manager secret -> the setting it fills (config/settings.py). Values never pass
+      # through GitHub: the job reads them from Secret Manager when it starts.
+      SECRETS: >-
+        FH_R2_ENDPOINT=fh-r2-endpoint:latest,FH_R2_ACCESS_KEY_ID=fh-r2-access-key-id:latest,FH_R2_SECRET_ACCESS_KEY=fh-r2-secret-access-key:latest,FH_NTFY_TOPIC=fh-ntfy-topic:latest,FH_HEALTHCHECKS_PING_KEY=fh-healthchecks-ping-key:latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          persist-credentials: false
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093  # v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+
+      # Tags can't be overwritten (immutable), so a commit that's already built (a Monday with no
+      # new merges, a rerun) skips straight to updating the jobs.
+      - name: Build and push the image
+        run: |
+          if gcloud artifacts docker images describe "$IMAGE" >/dev/null 2>&1; then
+            echo "$IMAGE already exists"
+            exit 0
+          fi
+          gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
+          docker build --tag "$IMAGE" .
+          docker run --rm "$IMAGE" version
+          docker push "$IMAGE"
+
+      # One job per scheduled task, each with a fixed command, so the scheduler only needs to
+      # start a job, never to change what it runs. No retries: the snapshot retries inside
+      # itself, and a whole rerun would fetch everything twice.
+      - name: Deploy the jobs
+        run: |
+          deploy() {
+            gcloud run jobs deploy "$1" --project "$PROJECT" --region "$REGION" --quiet \
+              --image "$IMAGE" --service-account "$JOBS_SA" \
+              --tasks 1 --max-retries 0 --task-timeout 30m --cpu 1 --memory 512Mi \
+              --set-env-vars FH_ENV=prod,FH_RAW_STORE=r2,FH_LOG_JSON=true \
+              --set-secrets "$SECRETS" \
+              --args "$2"
+          }
+          deploy snapshot-morning snapshot,--set,morning
+          deploy snapshot-evening snapshot,--set,evening

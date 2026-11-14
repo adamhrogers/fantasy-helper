@@ -47,3 +47,26 @@ updates:
       actions-security:
         applies-to: security-updates
         patterns: ["*"]
+
+  # The image the scheduled jobs run (Dockerfile, ADR 0025): new digests of the same base images,
+  # and new uv releases. Python itself stays on 3.12 until it's moved on purpose, with the
+  # project's requires-python.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: America/New_York
+    cooldown:
+      default-days: 7
+    ignore:
+      - dependency-name: python
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+    groups:
+      docker:
+        applies-to: version-updates
+        patterns: ["*"]
+      docker-security:
+        applies-to: security-updates
+        patterns: ["*"]

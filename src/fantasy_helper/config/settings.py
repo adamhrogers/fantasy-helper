@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     # Quiet run events (started, steps, succeeded). Failures and warnings are always sent.
     notify_progress: bool = Field(default=True, alias="FH_NOTIFY_PROGRESS")
 
+    # The missed-run watchdog (Healthchecks.io, ADR 0025). Only the scheduled cloud jobs have
+    # it, so runs started by hand or by the laptop never ping.
+    healthchecks_ping_key: SecretStr | None = Field(default=None, alias="FH_HEALTHCHECKS_PING_KEY")
+    healthchecks_server: str = Field(default="https://hc-ping.com", alias="FH_HEALTHCHECKS_SERVER")
+
     # Local working folder (git-ignored): the raw store when FH_RAW_STORE=local, and HTML reports.
     data_dir: Path = Field(default=Path("data"), alias="FH_DATA_DIR")
 
