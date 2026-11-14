@@ -32,8 +32,7 @@ concurrency:
 jobs:
   deploy:
     name: Build and deploy the scheduled jobs
-    # Skipped, not failed, until scripts/gcp-setup.sh infra has set the prod variables.
-    if: github.ref == 'refs/heads/main' && vars.GCP_WIF_PROVIDER != ''
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: prod
     timeout-minutes: 20
@@ -54,11 +53,21 @@ jobs:
         with:
           persist-credentials: false
 
-      # Only main's newest commit deploys. Re-running an old run, or a run that waited behind a
-      # newer push, would otherwise put older code back on the jobs.
-      - name: Check this is main's newest commit
+      # Deploys only once Google Cloud is set up, and only main's newest commit. Before
+      # scripts/gcp-setup.sh infra has set the prod variables, the run does nothing instead of
+      # failing. (This can't be the job's `if`: the prod environment's variables aren't loaded
+      # until the job starts.) Re-running an old run, or a run that waited behind a newer push,
+      # would otherwise put older code back on the jobs.
+      - name: Check there's something to deploy
         id: fresh
+        env:
+          WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
         run: |
+          if [ -z "$WIF_PROVIDER" ] || [ -z "$PROJECT" ]; then
+            echo "::notice::Google Cloud isn't set up yet (scripts/gcp-setup.sh infra): nothing to deploy"
+            echo "newest=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           head="$(git ls-remote origin refs/heads/main | cut -f1)"
           [ -n "$head" ] || { echo "::error::couldn't read main's head"; exit 1; }
           if [ "$head" = "$GITHUB_SHA" ]; then
