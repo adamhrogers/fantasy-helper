@@ -2,6 +2,8 @@
 # Puts the scheduled jobs' secrets into Secret Manager (ADR 0025). Run it yourself, in your own
 # Terminal: each value is typed or pasted at a hidden prompt and goes straight to Google. Nothing
 # is printed, logged or saved on the laptop. Press Enter at a prompt to leave that secret as is.
+# A new value disables the versions before it, so a rotated value stops working in Google too;
+# `gcloud secrets versions enable <n> --secret <name>` brings one back.
 #
 #   scripts/gcp-secrets.sh            # all five
 #   scripts/gcp-secrets.sh fh-ntfy-topic   # just one (to rotate it)
@@ -37,8 +39,12 @@ for name in "${NAMES[@]}"; do
     unset value
     exit 1
   fi
+  previous="$(gcloud secrets versions list "$name" --filter 'state=ENABLED' --format 'value(name.basename())')"
   printf '%s' "$value" | gcloud secrets versions add "$name" --data-file=- >/dev/null
   unset value
-  echo "  ✓ $name: new version saved"
+  for version in $previous; do
+    gcloud secrets versions disable "$version" --secret "$name" --quiet >/dev/null
+  done
+  echo "  ✓ $name: new version saved${previous:+, older version(s) disabled}"
 done
 echo "Done. Check (versions only, never values): scripts/gcp-setup.sh show"

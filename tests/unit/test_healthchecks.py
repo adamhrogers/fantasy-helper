@@ -67,3 +67,30 @@ def test_a_ping_key_turns_the_watchdog_on(monkeypatch: pytest.MonkeyPatch) -> No
     settings = Settings()
     assert isinstance(heartbeat_from_settings(settings, "snapshot-evening"), HealthchecksHeartbeat)
     assert KEY not in repr(settings)
+
+
+def test_a_key_pasted_with_a_newline_still_pings(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FH_HEALTHCHECKS_PING_KEY", f"{KEY}\n")
+    beat = heartbeat_from_settings(Settings(), "snapshot-morning")
+    assert isinstance(beat, HealthchecksHeartbeat)
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200)
+
+    beat._client = httpx.Client(transport=httpx.MockTransport(handler))
+    beat.start()
+    assert seen[0].url.path == f"/{KEY}/snapshot-morning/start"
+
+
+def test_a_key_that_cant_form_a_url_is_logged_not_raised() -> None:
+    client = httpx.Client(transport=httpx.MockTransport(lambda _r: httpx.Response(200)))
+    beat = HealthchecksHeartbeat(
+        server="https://hc.example", ping_key="bad\x00key", slug="snapshot-morning", client=client
+    )
+    with capture_logs() as logs:
+        beat.start()
+        beat.fail("x")
+    assert [e["error"] for e in logs] == ["InvalidURL", "InvalidURL"]
+    assert "bad" not in repr(logs)

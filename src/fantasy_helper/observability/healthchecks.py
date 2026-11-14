@@ -1,16 +1,16 @@
 """The missed-run watchdog: pings to Healthchecks.io from each scheduled run (ADR 0025).
 
 A run that never starts, or dies without a word, can't alert anyone itself. Each scheduled run
-pings `start` when it begins and `success` once it has finished **and reported its own outcome**
-(a clean run, or a failure it already sent to the phone). Anything else, such as a crash the app
-couldn't report, pings `fail`. Healthchecks alerts the prod ntfy topic when a run is late,
-missing, stuck between start and success, or failed.
+pings `start` when it begins, `success` when it exits cleanly, and `fail` for any other exit
+(`cli._common.watched`). Healthchecks alerts the prod ntfy topic when a run is late, missing,
+stuck between start and success, or failed.
 
-So a degraded snapshot counts as `success` here: the run's own events already alerted, and a
-second, louder alert from the watchdog would only repeat it.
+A degraded run therefore pings `fail` even though its own events already alerted. That second
+alert is deliberate: run events never let a failed send break a run, so "the app reported it"
+can mean nobody was told (ntfy down), and the watchdog is the one alert that doesn't depend on it.
 
 The ping URL holds the project's ping key, so it is never logged, and a failed ping is logged
-by its error type only. A ping never fails a run.
+by its error type only. **A ping never raises**: a broken watchdog must not cost a snapshot.
 """
 
 import uuid
@@ -68,7 +68,7 @@ class HealthchecksHeartbeat:
                 content=body[:MAX_BODY].encode(),
             )
             response.raise_for_status()
-        except httpx.HTTPError as exc:
+        except Exception as exc:  # not just httpx.HTTPError: a bad key raises InvalidURL
             # The exception's text would include the URL, and with it the ping key.
             log.warning(
                 "healthchecks_ping_failed",
@@ -96,6 +96,7 @@ def heartbeat_from_settings(settings: Settings, slug: str) -> Heartbeat:
         return NoHeartbeat()
     return HealthchecksHeartbeat(
         server=settings.healthchecks_server,
-        ping_key=settings.healthchecks_ping_key.get_secret_value(),
+        # A value pasted with a trailing newline would otherwise land in the URL path.
+        ping_key=settings.healthchecks_ping_key.get_secret_value().strip(),
         slug=slug,
     )

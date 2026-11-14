@@ -76,12 +76,28 @@ def test_deploys_are_keyless_and_only_from_main() -> None:
     assert "id-token: write" in text
     assert "contents: read" in text
     assert "environment: prod" in text
-    assert "if: github.ref == 'refs/heads/main'" in text
+    # Skipped (not failed) until gcp-setup.sh has set the variables, so merging is quiet.
+    assert "if: github.ref == 'refs/heads/main' && vars.GCP_WIF_PROVIDER != ''" in text
     assert "secrets." not in text  # no key file, no stored credential: Workload Identity only
     assert "persist-credentials: false" in text
     setup = SETUP.read_text()
     assert "assertion.ref == 'refs/heads/main'" in setup
     assert "assertion.repository_id == '$repo_id'" in setup
+    # Only this workflow file can deploy, not any workflow on main that asks for an id-token.
+    assert "assertion.workflow_ref == '$workflow'" in setup
+    assert 'workflow="$GITHUB_REPO/.github/workflows/deploy.yml@refs/heads/main"' in setup
+
+
+def test_only_mains_newest_commit_deploys_and_daily() -> None:
+    """Re-running an old run must not put older code back on the jobs, and Dependabot's merges
+    (which start no push workflows) must ship within a day."""
+    text = DEPLOY.read_text()
+    steps = text.split("    steps:\n", 1)[1]
+    after_check = steps.split("id: fresh", 1)[1]
+    gated = re.findall(r"^      - (?:name|if|uses): ", after_check, re.MULTILINE)
+    assert len(gated) == 3  # auth, build, deploy
+    assert after_check.count("if: steps.fresh.outputs.newest == 'true'") == 3
+    assert 'cron: "0 15 * * *"' in text
 
 
 def test_deployed_secrets_match_the_setup_script_and_the_settings() -> None:

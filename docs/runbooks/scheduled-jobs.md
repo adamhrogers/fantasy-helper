@@ -24,7 +24,9 @@ scripts/gcp-setup.sh infra
 scripts/gcp-secrets.sh
 ```
 
-- [ ] **4. Claude:** deploy (**Actions → Deploy → Run workflow**), then create the schedules:
+- [ ] **4. Claude:** deploy (**Actions → Deploy → Run workflow**), then create the schedules. Until step 1 has run, Deploy is skipped, not failed, so merging the PR is quiet.
+
+  If the deploy fails with **PERMISSION_DENIED** on a project-level permission (the deployer's role is granted on the two jobs only), grant `roles/run.developer` on the project to `fh-deployer` instead, note it in ADR 0025, and rerun. If `schedule` says Cloud Scheduler isn't offered in `us-east4`, set `SCHEDULER_LOCATION` in the script to the nearest location it lists, and use that location in the commands below.
 
 ```bash
 scripts/gcp-setup.sh schedule
@@ -45,8 +47,8 @@ Then the overlap in [cloud-snapshots.md](cloud-snapshots.md) continues, with Clo
 ## Day to day
 
 Nothing to do. When something goes wrong:
-- **The run's own alerts** (degraded, failed, crashed) come from the app on the prod topic, as before.
-- **Healthchecks** alerts on the prod topic when a run is **late, missing or crashed without a word**.
+- **The run's own alerts** (degraded, failed, crashed) come from the app on the prod topic, as before, and say what went wrong.
+- **Healthchecks** alerts on the prod topic when a run is **late, missing, stuck, or exits with any failure**. A degraded run therefore alerts twice, on purpose: if the app's own alert couldn't be sent, this one still arrives. The check goes back up on the next clean run.
 
 ## Checking
 
@@ -98,13 +100,13 @@ gcloud run jobs update snapshot-morning --region us-east4 --image <image>:<commi
 
 ## Rotating a secret
 
-Create the new value where it comes from (Cloudflare, ntfy, Healthchecks). Then add it as a new version; the next run uses it:
+Create the new value where it comes from (Cloudflare, ntfy, Healthchecks). Then add it as a new version; the next run uses it, and the script disables the older versions so the old value stops working in Google too:
 
 ```bash
 scripts/gcp-secrets.sh fh-r2-secret-access-key
 ```
 
-Then revoke the old one at its source.
+Then revoke the old one at its source. To undo a bad value: `gcloud secrets versions enable <number> --secret <name>`, and disable the new one.
 
 ## Adding a scheduled job
 

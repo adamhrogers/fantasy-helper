@@ -97,7 +97,7 @@ scripts/snapshot-schedule.sh status
 uv run fh raw upload
 ```
 
-3. **Give the laptop its own R2 key**, so either machine's key can be revoked without breaking the other. In Cloudflare, go to **R2 → Manage API tokens → Create API token**, choose **Object Read & Write**, scope it to `fantasy-helper-raw`, and save the values in Bitwarden. Put its access key ID and secret into `.env` in place of the current ones. Cloud Run has its own token already, and GitHub's token is revoked once its schedule is gone (step 6). The laptop's key has to be able to write, because `fh ingest` saves each league response it fetches.
+3. **Give the laptop its own R2 key**, so either machine's key can be revoked without breaking the other. In Cloudflare, go to **R2 → Manage API tokens → Create API token**, choose **Object Read & Write**, scope it to `fantasy-helper-raw`, and save the values in Bitwarden. Put its access key ID and secret into `.env` in place of the current ones. Cloud Run has its own token already, and GitHub keeps the current one for its manual fallback (step 6). The laptop's key has to be able to write, because `fh ingest` saves each league response it fetches.
 4. Add `FH_RAW_STORE=r2` to `.env`, so the ingest and report runs you start by hand use the same history as the cloud:
 
 ```bash
@@ -108,7 +108,7 @@ Expect `✓ raw  R2 bucket 'fantasy-helper-raw' configured (FH_RAW_STORE=r2); it
 
 5. `data/raw` stays as an old backup and stops growing.
 
-6. **Drop the GitHub schedule** (Claude, in a PR): `snapshot.yml` keeps only **Run workflow**, as a manual fallback, and `pipeline/cron.py` goes. Then revoke GitHub's R2 token in Cloudflare and remove the three `FH_R2_*` secrets from the `prod` environment.
+6. **Drop the GitHub schedule** (Claude, in a PR): `snapshot.yml` keeps only **Run workflow**, as a manual fallback for a day Cloud Run is down, and `pipeline/cron.py` goes. **Keep** the three `FH_R2_*` secrets in the `prod` environment: they're that fallback's own R2 token, now used by GitHub alone, since the laptop and Cloud Run have their own.
 
 ## Later: protecting the history from deletion (part 5)
 

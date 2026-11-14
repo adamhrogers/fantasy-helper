@@ -3,15 +3,18 @@ import shutil
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import httpx
 import pytest
+import typer
 from typer.testing import CliRunner
 
 from fantasy_helper import __version__
 from fantasy_helper.cli import main as cli_main
-from fantasy_helper.cli._common import REPORTED_EXIT
+from fantasy_helper.cli._common import REPORTED_EXIT, watched
 from fantasy_helper.cli.main import app
 from fantasy_helper.domain.calendar import NBA_TIMEZONE
 from fantasy_helper.domain.runs import RunKind, RunRecord, RunStatus
+from fantasy_helper.observability.healthchecks import HealthchecksHeartbeat
 from fantasy_helper.pipeline.cron import CRON_ENTRIES
 from fantasy_helper.pipeline.snapshot import SnapshotResult, SnapshotSet
 from fantasy_helper.storage import crypto, r2_store
@@ -255,10 +258,11 @@ def test_a_healthy_snapshot_pings_start_then_success(
     assert heartbeat[1] == ["snapshot-evening"]
 
 
-def test_a_reported_failure_still_counts_as_finished_for_the_watchdog(
+def test_a_reported_failure_still_pings_fail(
     monkeypatch: pytest.MonkeyPatch, heartbeat: tuple[_Heartbeat, list[str]]
 ) -> None:
-    """The run already alerted the phone; a second alert from the watchdog would repeat it."""
+    """The phone alert may never have been delivered (run events swallow send errors), so the
+    watchdog raises its own alert for any exit but a clean one."""
 
     def crash(*_args: object, **_kwargs: object) -> SnapshotResult:
         raise RuntimeError("boom")
@@ -266,7 +270,7 @@ def test_a_reported_failure_still_counts_as_finished_for_the_watchdog(
     monkeypatch.setattr(cli_main, "run_snapshot", crash)
     result = runner.invoke(app, ["snapshot", "--set", "morning"])
     assert result.exit_code == REPORTED_EXIT
-    assert heartbeat[0].pings == ["start", "success"]
+    assert heartbeat[0].pings == ["start", "fail"]
     assert heartbeat[1] == ["snapshot-morning"]
 
 
@@ -281,3 +285,38 @@ def test_a_failure_the_app_could_not_report_pings_fail(
     result = runner.invoke(app, ["snapshot", "--set", "evening"])
     assert result.exit_code != 0
     assert heartbeat[0].pings == ["start", "fail"]
+
+
+@pytest.mark.parametrize(
+    ("exit_code", "pings"),
+    [(0, ["start", "success"]), (1, ["start", "fail"]), (REPORTED_EXIT, ["start", "fail"])],
+)
+def test_watched_maps_every_exit(exit_code: int, pings: list[str]) -> None:
+    beat = _Heartbeat()
+    with pytest.raises(typer.Exit), watched(beat):
+        raise typer.Exit(code=exit_code)
+    assert beat.pings == pings
+
+
+def test_a_broken_ping_key_never_stops_the_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A key httpx can't put in a URL raises InvalidURL, not an HTTPError: the run goes on."""
+    ran: list[bool] = []
+
+    def snapshot(*args: object, **kwargs: object) -> SnapshotResult:
+        ran.append(True)
+        return _succeeded()
+
+    def broken(_settings: object, slug: str) -> HealthchecksHeartbeat:
+        client = httpx.Client(transport=httpx.MockTransport(lambda _r: httpx.Response(200)))
+        return HealthchecksHeartbeat(
+            server="https://hc.example", ping_key="bad\x00key", slug=slug, client=client
+        )
+
+    monkeypatch.setattr(cli_main, "heartbeat_from_settings", broken)
+    monkeypatch.setattr(cli_main, "raw_store_from_settings", lambda _s: LocalRawStore(tmp_path))
+    monkeypatch.setattr(cli_main, "run_snapshot", snapshot)
+    result = runner.invoke(app, ["snapshot", "--set", "evening"])
+    assert ran == [True]
+    assert result.exit_code == 0, result.output
