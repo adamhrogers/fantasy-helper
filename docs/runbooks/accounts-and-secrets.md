@@ -30,7 +30,7 @@ Values live in **Bitwarden** and in the places listed below, never in this repo 
 | `FH_ANTHROPIC_API_KEY` | ✓ | | before M4 | Revoke it in the Anthropic Console |
 | `FH_HEALTHCHECKS_PING_KEY` | | | 2026-11-14 | Regenerate it in the project's settings |
 
-**Google Secret Manager** (the Cloud Run jobs, ADR 0025; filled during [scheduled-jobs.md](scheduled-jobs.md) setup, step 3). The jobs' account `fh-jobs` can read these and nothing else, and values are added only with `scripts/gcp-secrets.sh` at a hidden prompt:
+**Google Secret Manager** (the Cloud Run jobs, ADR 0025; filled 2026-11-14, [scheduled-jobs.md](scheduled-jobs.md) setup, step 3). The jobs' account `fh-jobs` can read these and nothing else, and values are added only with `scripts/gcp-secrets.sh` at a hidden prompt:
 
 | Secret | Holds | If it leaks |
 |---|---|---|
