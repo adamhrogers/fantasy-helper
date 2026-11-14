@@ -1,0 +1,9 @@
+# Only what the image build needs: pyproject.toml, uv.lock, README.md and src/.
+# Everything else stays out, above all secrets and local data.
+*
+!pyproject.toml
+!uv.lock
+!README.md
+!src/
+**/__pycache__
+**/*.py[cod]

@@ -322,7 +322,7 @@ Until M4 adds the brain, the daily run is **engine-only**: code writes every car
 
 - **Preflight checks (fail closed):** every rostered player has a projection; today's games are loaded; scoring settings match the league; the identity crosswalk covers 100% of rostered players; sources are fresher than the threshold.
 - **Idempotent** per (job, league, date), and stages can be resumed.
-- **Early schedule.** West Coast games end around 1:30 a.m. ET, and GitHub Actions cron can run late. Starting at about 4:30 ET leaves headroom before 8 a.m. The late-report alert covers the rest. Cloud Run Jobs is the fallback (spec, Hosting step 3).
+- **Early schedule.** West Coast games end around 1:30 a.m. ET, and starting at about 4:30 ET leaves headroom before 8 a.m. The jobs run on Cloud Run Jobs, started on the minute by Cloud Scheduler (ADR 0025), after GitHub Actions cron proved hours late. The late-report alert and the Healthchecks watchdog cover the rest.
 
 ---
 
@@ -333,8 +333,7 @@ The path follows the spec, with one change of timing.
 | Stage | Pipeline | Database | Raw store | PWA | API |
 |---|---|---|---|---|---|
 | **M0–M2** | Laptop: launchd runs `fh snapshot` twice a day; `fh ingest` by hand (ADR 0017) | **Supabase** Postgres (dev project) | Local disk | — | — |
-| **M3 → beta** | GitHub Actions cron | **Supabase** Postgres (prod project, `us-east-1`) + Supabase Auth | Cloudflare R2 (raw, archive, backups) | Cloudflare Pages | Cloud Run (`us-east4`) |
-| **If Actions is late** | Cloud Run Jobs + Cloud Scheduler | (same) | (same) | (same) | (same) |
+| **M3 → beta** | Cloud Run Jobs + Cloud Scheduler (ADR 0025); GitHub Actions for CI and deploys | **Supabase** Postgres (prod project, `us-east-1`) + Supabase Auth | Cloudflare R2 (raw, archive, backups) | Cloudflare Pages | Cloud Run (`us-east4`) |
 | **Paid launch** | Revisit everything | | | | |
 
 **No SQLite stage (a change from the spec).** The spec starts on SQLite and moves to hosted infrastructure before the beta. Two things favor starting on Postgres instead. Leagues and encrypted credentials live in the database from M1 (§12.1), and GitHub Actions runners don't keep files between runs, so scheduled jobs need a hosted database anyway. Starting on Supabase removes a migration from the busiest stretch of the build. **Supabase over Neon**, because it bundles Auth. The free tier allows two projects (dev and prod), and its 7-day idle pause can't trigger while a job runs every night.
@@ -388,7 +387,7 @@ Nothing sensitive is ever in the code or in git. There are three kinds of config
 | No game-log source for lock-in variance or watchlist actuals | Medium / High | M1 spike tests espn-api box scores and player stats. Fallback: a free NBA stats API (spec lists BallDontLie and API-NBA). |
 | Original M3 was overloaded (LLM report, registry, PWA, push, API and hosting move in 7 days) | Resolved in v0.2 | Split in two. The phone app and hosting (M3) are built alongside the engine (M2) and ship the weekly overview first. The LLM daily report and registry follow as M4. The database starts hosted on day one. |
 | Point-in-time history can't be recovered once a day passes | Certain / High | Daily projection and injury snapshots are the **first thing M1 ships**, so every graph and grade has the history it needs |
-| Actions cron runs late or is skipped | Medium / Medium | Early schedule, late-report alert, Cloud Run Jobs fallback |
+| Actions cron runs late or is skipped | **Happened** (2026-11-07 to 11-14: every run hours late) | Moved to Cloud Run Jobs + Cloud Scheduler (ADR 0025), with the Healthchecks watchdog and the late-report alert |
 | LangChain structured output uses forced tool calls (400 on current models) | Medium / Medium | M0 check, with native structured outputs pinned |
 | Small samples leave cells "Incomplete" for weeks | Certain / Low | Expected and shown honestly in the report card |
 | Leaguemates' data in a public repo | Medium / Medium | Redacting recorder, a review checklist, gitleaks |

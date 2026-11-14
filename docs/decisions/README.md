@@ -37,6 +37,7 @@ Git keeps every version of every ADR (`git log -p docs/decisions/0011-*.md`), an
 | [0022](0022-one-box-score-for-every-league.md) | One box score for every league; leagues differ only in their rules | Accepted · 2026-11-06 |
 | [0023](0023-cloud-snapshots-on-r2.md) | Cloud snapshots: GitHub Actions on Eastern time, raw store on R2, overlap before cutover | Accepted · 2026-11-06 |
 | [0024](0024-dependencies-update-themselves.md) | Dependencies update themselves: Dependabot PRs that merge once CI passes | Accepted · 2026-11-07 |
+| [0025](0025-timed-jobs-on-cloud-run.md) | Timed jobs run on Cloud Run Jobs, started by Cloud Scheduler | Accepted · 2026-11-14 |
 
 ## Template
 

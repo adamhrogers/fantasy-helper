@@ -30,6 +30,16 @@ Values live in **Bitwarden** and in the places listed below, never in this repo 
 | `FH_ANTHROPIC_API_KEY` | ✓ | | before M4 | Revoke it in the Anthropic Console |
 | `FH_HEALTHCHECKS_PING_KEY` | | | 2026-11-14 | Regenerate it in the project's settings |
 
+**Google Secret Manager** (the Cloud Run jobs, ADR 0025; filled during [scheduled-jobs.md](scheduled-jobs.md) setup, step 3). The jobs' account `fh-jobs` can read these and nothing else, and values are added only with `scripts/gcp-secrets.sh` at a hidden prompt:
+
+| Secret | Holds | If it leaks |
+|---|---|---|
+| `fh-r2-endpoint`, `fh-r2-access-key-id`, `fh-r2-secret-access-key` | **Cloud Run's own R2 token** (`cloud-run-jobs`), not the laptop's or GitHub's | Create a new token, add it with `scripts/gcp-secrets.sh`, delete the old token |
+| `fh-ntfy-topic` | The prod topic (the same as GitHub's) | As `FH_NTFY_TOPIC` above, then update it in both places |
+| `fh-healthchecks-ping-key` | The same key as GitHub `prod` | Regenerate it, then update it in both places |
+
+**The `prod` environment's variables** (identifiers, not secrets; set by `scripts/gcp-setup.sh infra`): `GCP_PROJECT`, `GCP_DEPLOYER_SA` and `GCP_WIF_PROVIDER`. They're kept out of this public repo. Deploys hold no key: GitHub signs in to Google with a short-lived token, accepted only from `main`.
+
 **Only in Bitwarden** (not in GitHub yet): the prod database password, the prod transaction pooler URL (port 6543, for the API), and prod's project URL and publishable key. The last two go into the phone app in part 4: they aren't secret, but they stay out of the public repo. Each account's login and two-factor recovery codes belong in Bitwarden too.
 
 **Not in any environment variable:** ESPN cookies (`espn_s2`, `SWID`) and league IDs live in the database, with the cookies encrypted by that environment's `FH_ENCRYPTION_KEY` (rule 5, ADR 0007). Dev has them. Prod gets them in part 2: you type them once at a hidden prompt.

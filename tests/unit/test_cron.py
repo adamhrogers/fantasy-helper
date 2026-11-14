@@ -64,9 +64,12 @@ def test_spacing_is_normalized() -> None:
 
 
 def test_the_workflows_and_the_table_agree() -> None:
+    """Every workflow that hands its cron entry to `fh --cron` must be in the table. Others (the
+    weekly deploy) aren't gated by New York's offset and keep their own schedule."""
     in_workflows = {
         match
         for path in WORKFLOWS.glob("*.yml")
+        if "--cron" in path.read_text()
         for match in re.findall(r'-\s*cron:\s*"([^"]+)"', path.read_text())
     }
     assert in_workflows == set(CRON_ENTRIES)

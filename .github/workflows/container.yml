@@ -1,0 +1,41 @@
+# Keeps the image the scheduled jobs run (ADR 0025) building, on any PR that could break it.
+# Not a required check, so it isn't in main's ruleset or the auto-merge guard (ADR 0024).
+name: Container
+
+on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - pyproject.toml
+      - uv.lock
+      - "src/**"
+      - .github/workflows/container.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Image builds and starts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          persist-credentials: false
+
+      - name: Build
+        run: docker build --tag fh:test .
+
+      # The image has no .env and no secrets: these prove it installs and starts, and that the
+      # scheduled command parses, without touching anything outside the runner.
+      - name: Start
+        run: |
+          docker run --rm fh:test version
+          docker run --rm fh:test snapshot --help
+          [ "$(docker run --rm --entrypoint id fh:test -u)" != "0" ] || { echo "::error::the image runs as root"; exit 1; }

@@ -1,4 +1,4 @@
-"""Helpers shared by `fh` command groups that touch the database."""
+"""Helpers shared by `fh` command groups: exits, alerts, the watchdog, the database."""
 
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from fantasy_helper.config import Settings
 from fantasy_helper.domain.runs import RunKind
 from fantasy_helper.observability.events import events_from_settings
+from fantasy_helper.observability.healthchecks import Heartbeat
 from fantasy_helper.storage import crypto
 from fantasy_helper.storage.db import make_engine
 from fantasy_helper.storage.raw_store import RawStore, RawStoreError, raw_store_from_settings
@@ -17,6 +18,28 @@ from fantasy_helper.storage.raw_store import RawStore, RawStoreError, raw_store_
 # Exit code for a failure the app has already sent to the phone. A scheduled workflow alerts on
 # any other failure, including a timeout, so nothing fails silently (run-events runbook).
 REPORTED_EXIT = 3
+
+
+@contextmanager
+def watched(heartbeat: Heartbeat) -> Iterator[None]:
+    """Pings the missed-run watchdog around a scheduled run (ADR 0025): `start`, then `success`
+    on a clean exit and `fail` on any other, reported or not (observability/healthchecks.py
+    says why). Heartbeats never raise, so the watchdog can't stop the run it watches."""
+    heartbeat.start()
+    try:
+        yield
+    except typer.Exit as exc:
+        if exc.exit_code == 0:
+            heartbeat.success()
+        elif exc.exit_code == REPORTED_EXIT:
+            heartbeat.fail("finished with a problem it reported to the phone")
+        else:
+            heartbeat.fail(f"exited with code {exc.exit_code}")
+        raise
+    except BaseException as exc:
+        heartbeat.fail(f"stopped on an unexpected {type(exc).__name__}")
+        raise
+    heartbeat.success()
 
 
 def alert_crash(settings: Settings, kind: RunKind, label: str, what: str) -> typer.Exit:

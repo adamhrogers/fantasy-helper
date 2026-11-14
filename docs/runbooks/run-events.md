@@ -208,5 +208,5 @@ From M3 the same variables live in the GitHub `prod` environment, and the schedu
 | M2 (lock-in) | `warned` when box scores disagree with ESPN's or Sleeper's own numbers more than usual (the daily reconciliation, ADR 0022) | Watches the one box score truth |
 | M3 | The same events from GitHub Actions, plus a workflow-level failure step for crashes before Python starts | The cloud runs. **Snapshots done in part 1** (also a `crashed` event for unexpected errors); the daily and weekly runs follow in part 2 |
 | M3 | `failed(urgent)` if the report isn't published by 7:45 a.m. | The 8 a.m. promise |
-| M3 | Missed run: a watchdog outside the runner (Healthchecks.io, free) that alerts if a scheduled run never started | A run that never starts can't report itself |
+| M3 | Missed run: a watchdog outside the runner (Healthchecks.io, free) that alerts if a scheduled run is late, never started, or stopped without reporting | **Snapshots: built** (ADR 0025): each Cloud Run job pings start and success or fail (`observability/healthchecks.py`), and Healthchecks alerts the prod topic. The daily and weekly runs follow in part 2 |
 | M4 | AI step failed, so the report shipped engine-only; daily model cost over a cap | Brain and budget |

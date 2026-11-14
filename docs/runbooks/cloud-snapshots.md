@@ -1,6 +1,6 @@
 # Moving snapshots to the cloud (M3 part 1)
 
-**Written:** 2026-11-06. **Revised:** 2026-11-07: the laptop keeps saving to its own disk, and keeps its schedule until the missed-run watchdog is live (ADR 0023, Update). **Who:** Adam, with Claude checking each step. **Design:** ADR 0023.
+**Written:** 2026-11-06. **Revised:** 2026-11-07: the laptop keeps saving to its own disk, and keeps its schedule until the missed-run watchdog is live (ADR 0023, Update). 2026-11-14: the cloud copy moves from GitHub's scheduler, which ran hours late, to Cloud Run Jobs ([ADR 0025](../decisions/0025-timed-jobs-on-cloud-run.md), [scheduled-jobs.md](scheduled-jobs.md)). **Who:** Adam, with Claude checking each step. **Design:** ADR 0023.
 
 The snapshot job moves from the Mac's schedule (launchd) to GitHub Actions, and the raw files move from `data/raw` to the R2 bucket. No day may be missed (rule 8), so the Mac keeps saving on its own until the cloud has proven itself and something watches for runs that never start.
 
@@ -12,8 +12,8 @@ The snapshot job moves from the Mac's schedule (launchd) to GitHub Actions, and 
 - [x] **1.** The laptop has the R2 values, and `fh doctor --only raw` passed against the live bucket (2026-11-07).
 - [x] **2.** Upload the backlog (2026-11-07). The laptop's copies since then are uploaded too: on 2026-11-14 all 1,898 local files were in R2 with the same bytes.
 - [x] **3.** The first cloud run: 2026-11-07, saved 4/4, but at 20:28 Eastern, 3 hours late. The notification reached the phone's prod subscription.
-- [ ] **4.** The overlap: four clean cloud runs in a row, **and** the Healthchecks pings live (part 5). **Blocked on timing:** from 2026-11-07 to 11-14 every cloud set saved, and none was dropped, but every one started hours late (mornings around 11:40–16:30, evenings around 20:00–23:10 Eastern, often after tip-off). On-time runs need a trigger other than GitHub's scheduler; see docs/session-handoff.md §7. The Healthchecks account and key exist (2026-11-14).
-- [ ] **5.** End of the overlap, with Claude's go-ahead: remove launchd, give the laptop its own R2 key, and switch it to R2.
+- [ ] **4.** The overlap: four clean cloud runs in a row, **and** the Healthchecks pings live (part 5). **Blocked on timing:** from 2026-11-07 to 11-14 every cloud set saved, and none was dropped, but every one started hours late (mornings around 11:40–16:30, evenings around 20:00–23:10 Eastern, often after tip-off). So the cloud copy moves to Cloud Run Jobs, which fire on the minute ([scheduled-jobs.md](scheduled-jobs.md)), and the count starts with its first on-time run.
+- [ ] **5.** End of the overlap, with Claude's go-ahead: remove launchd, give the laptop its own R2 key, switch it to R2, and drop the GitHub schedule.
 
 All commands run in your own Terminal app, from `~/projects/fantasy-helper`.
 
@@ -57,15 +57,15 @@ Nothing to do: the schedule starts it at 17:17 Eastern. To see it work sooner, u
 
 ## 4. The overlap: two copies that can't fail together
 
-Both schedules run, and each saves to its own place: the cloud to R2 (06:17 and 17:17), the laptop to `data/raw` (06:30 and 17:30). **Don't add `FH_RAW_STORE=r2` to `.env` yet.**
+The schedules run side by side, and the laptop saves to its own place: **Cloud Run** to R2 (06:17 and 17:17, on time), **GitHub** to R2 too (the same times, but hours late), and the laptop to `data/raw` (06:30 and 17:30). GitHub's copy is a spare until the end of the overlap. **Don't add `FH_RAW_STORE=r2` to `.env` yet.**
 
 **Why separate places:** the overlap is only a backup if the two runs can't fail together. If both saved to R2 with the same key and the same new code, one bad key, one bug or one R2 outage would stop both in the same evening. The laptop's disk is the path that has saved every day since 2026-11-06.
 
 **What you'll see:** two quiet successes per set, one on each topic. The laptop's morning run fetches Sleeper's player list for its own copy, so the morning message `already saved today by another run` doesn't appear.
 
 **How long:** until both of these are true. Then tell Claude.
-- **Four clean cloud runs in a row** (two mornings, two evenings). A failed cloud run restarts the count once it's fixed.
-- **The Healthchecks watchdog is live** (M3 part 5, setup section 6). GitHub can delay scheduled runs, and when it's busy it drops some. A run that never starts sends no alert, so until something watches for missing runs, the laptop is the only cover.
+- **Four clean, on-time Cloud Run runs in a row** (two mornings, two evenings), each starting within a few minutes of 06:17 or 17:17. A failed or late run restarts the count once it's fixed.
+- **The Healthchecks schedules are set** for both checks ([scheduled-jobs.md](scheduled-jobs.md), step 6), so a late, missing or silent run alerts the phone. Until then the laptop is the only cover for a run that never starts.
 
 Leave the Mac on or asleep at 06:30 and 17:30, not shut down. A sleeping Mac runs the job when it wakes; a Mac that's shut down skips it.
 
@@ -77,7 +77,7 @@ uv run fh raw upload
 
 It uploads every file R2 doesn't have yet. That includes the laptop's copies of sets the cloud also saved, which is harmless: nothing is overwritten, box scores and injury changes load once, and projections just gain a second capture a few minutes apart.
 
-**To pause the cloud job** (if it keeps failing): **Actions → Snapshot → ··· → Disable workflow**. The laptop keeps saving.
+**To pause a cloud job** (if it keeps failing): see [scheduled-jobs.md](scheduled-jobs.md), Pausing. For the GitHub copy: **Actions → Snapshot → ··· → Disable workflow**. The laptop keeps saving.
 
 ## 5. End of the overlap (with Claude's go-ahead)
 
@@ -97,7 +97,7 @@ scripts/snapshot-schedule.sh status
 uv run fh raw upload
 ```
 
-3. **Give the laptop its own R2 key**, so either machine's key can be revoked without breaking the other. In Cloudflare, go to **R2 → Manage API tokens → Create API token**, choose **Object Read & Write**, scope it to `fantasy-helper-raw`, and save the values in Bitwarden. Put its access key ID and secret into `.env` in place of the current ones. GitHub keeps the current token. The laptop's key has to be able to write, because `fh ingest` saves each league response it fetches.
+3. **Give the laptop its own R2 key**, so either machine's key can be revoked without breaking the other. In Cloudflare, go to **R2 → Manage API tokens → Create API token**, choose **Object Read & Write**, scope it to `fantasy-helper-raw`, and save the values in Bitwarden. Put its access key ID and secret into `.env` in place of the current ones. Cloud Run has its own token already, and GitHub keeps the current one for its manual fallback (step 6). The laptop's key has to be able to write, because `fh ingest` saves each league response it fetches.
 4. Add `FH_RAW_STORE=r2` to `.env`, so the ingest and report runs you start by hand use the same history as the cloud:
 
 ```bash
@@ -107,6 +107,8 @@ uv run fh doctor --only raw
 Expect `✓ raw  R2 bucket 'fantasy-helper-raw' configured (FH_RAW_STORE=r2); it refuses to overwrite objects`.
 
 5. `data/raw` stays as an old backup and stops growing.
+
+6. **Drop the GitHub schedule** (Claude, in a PR): `snapshot.yml` keeps only **Run workflow**, as a manual fallback for a day Cloud Run is down, and `pipeline/cron.py` goes. **Keep** the three `FH_R2_*` secrets in the `prod` environment: they're that fallback's own R2 token, now used by GitHub alone, since the laptop and Cloud Run have their own.
 
 ## Later: protecting the history from deletion (part 5)
 
