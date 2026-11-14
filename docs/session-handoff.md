@@ -16,7 +16,7 @@ A fantasy basketball assistant for Adam (customer one), then a friends beta, the
 - **Evidence over opinion.** Every call is logged before tip-off and never edited; inputs are versioned snapshots; grades come later, against a baseline.
 - **Adapters isolate platforms.** ESPN's API is unofficial; when it changes, only `adapters/espn/` changes.
 
-## 2. Where things stand (2026-11-07)
+## 2. Where things stand (2026-11-14)
 
 | Milestone | Status |
 |---|---|
@@ -64,12 +64,12 @@ Left for later: see §7. |
 | M4–M8, P9–P12 | See `docs/roadmap.md` v0.5. Friends beta **Nov 29**, hard stop **Dec 15**. |
 
 ### What runs today
-- **`fh snapshot`** runs on Adam's Mac through launchd: the morning set at **06:30** and the pre-tip evening set at **17:30** local time (America/New_York). It saves raw ESPN and Sleeper public data to `data/raw/` (git-ignored). History has accumulated since **2026-11-06**. Check it with `scripts/snapshot-schedule.sh status`; logs are in `~/Library/Logs/fantasy-helper/` (JSON lines). A sleeping Mac runs missed jobs on wake; a Mac that's shut down skips them. **The cloud job is live** since 2026-11-07 10:56 ET (`.github/workflows/snapshot.yml`, 06:17 and 17:17 Eastern, writing to R2; first run 17:17 that day). The laptop keeps saving to its own disk, independently, until four clean cloud runs **and** the Healthchecks watchdog (part 5); then launchd is removed (ADR 0023, Update 2026-11-07). The backlog (1,716 files on 2026-11-07) isn't in R2 yet: cutover step 2.
+- **`fh snapshot`** runs on Adam's Mac through launchd: the morning set at **06:30** and the pre-tip evening set at **17:30** local time (America/New_York). It saves raw ESPN and Sleeper public data to `data/raw/` (git-ignored). History has accumulated since **2026-11-06**. Check it with `scripts/snapshot-schedule.sh status`; logs are in `~/Library/Logs/fantasy-helper/` (JSON lines). A sleeping Mac runs missed jobs on wake; a Mac that's shut down skips them. **The cloud job is live** since 2026-11-07 10:56 ET (`.github/workflows/snapshot.yml`, 06:17 and 17:17 Eastern, writing to R2; first run 17:17 that day). The laptop keeps saving to its own disk, independently, until four clean cloud runs **and** the Healthchecks watchdog (part 5); then launchd is removed (ADR 0023, Update 2026-11-07). The backlog is in R2, and so are the laptop's copies through 2026-11-14 (1,898 files). **The cloud job runs hours late every time** (see §7, Found on 2026-11-14).
 - **`fh ingest`** is run by hand for now. It loads every not-yet-loaded snapshot plus fresh league data into Supabase, takes about 30 seconds, and is idempotent. First live run: 1,100 ESPN players; **all 1,852 active Sleeper players** (the Sleeper league has 142 rostered, all linked to ESPN, and **1,710 free agents**, 889 linked to ESPN and 410 with Sleeper projections); 1,200 games; 9 projection snapshots (8,490 rows); 226 injury changes; full rosters, matchups and transactions for all three leagues.
 - **`fh run daily` and `fh run weekly`** are run by hand (M3 schedules them). Each runs ingest first, which now also loads box scores and ESPN's lineup for each finished day. They write local HTML pages (`--open` opens them) and log every call in the registry. `fh run daily --dry-run` saves nothing.
 - **Supabase dev project**, migrated to **0005**. The **prod project** exists since 2026-11-07 and its `DATABASE_URL` is in GitHub's `prod` environment; it isn't migrated yet (part 2).
 - **LangSmith tracing** works (`fh doctor` sends a smoke trace). **ntfy run events** reach Adam's phone: every run sends started, steps and success quietly and failures loudly, and it's ops only; product notifications come from the PWA ([runbooks/run-events.md](runbooks/run-events.md), added 2026-11-06). iPhone notifications needed a settings fix, which is done.
-- **GitHub:** `adamhrogers/fantasy-helper`, public. CI runs lint, mypy, contracts, tests on Postgres 17, `alembic check`, and a gitleaks full-history scan. The repository secret `LANGSMITH_API_KEY` is set, and CI's smoke trace passes on `main` (checked 2026-11-06). Since 2026-11-07: the `prod` environment (only `main`; 7 of 8 secrets), the `main` ruleset (both CI jobs required, admin bypass), and Dependabot with auto-merge. Every action is pinned to a commit.
+- **GitHub:** `adamhrogers/fantasy-helper`, public. CI runs lint, mypy, contracts, tests on Postgres 17, `alembic check`, and a gitleaks full-history scan. The repository secret `LANGSMITH_API_KEY` is set, and CI's smoke trace passes on `main` (checked 2026-11-06). Since 2026-11-07: the `prod` environment (only `main`; all 8 secrets since 2026-11-14), the `main` ruleset (both CI jobs required, admin bypass), and Dependabot with auto-merge. Every action is pinned to a commit.
 
 ### Adam's three leagues (all 10 teams, season 2026-27 = `season 2027`)
 | Fixture alias | Platform / format | Adam's team | Key rules |
@@ -169,6 +169,12 @@ Full write-up: `docs/spikes/m1-data-sources.md`.
 
 **Commands:** `uv sync`, `uv run pytest`, `uv run ruff check . && uv run ruff format .`, `uv run mypy` (strict), `uv run lint-imports`, `uv run alembic upgrade head`, `uv run fh doctor`. There are 257 tests: unit, golden (`tests/golden/`, the hand-checked scores), contract (`tests/contract/`) and integration (DB).
 
+**This Mac and Homebrew (2026-11-14).** Adam's laptop is a 2018 Intel MacBook Pro on macOS 14. Homebrew moved Intel Macs to its lowest support tier in 2026 (no new prebuilt packages; support ends 2027-09-01), so **any `brew install` or `brew upgrade` that touches an updated package compiles from source**: a `brew upgrade` spent hours on LLVM and Rust just to update uv. So:
+- **Never suggest a plain `brew upgrade`.** Run `brew outdated` and upgrade one package by name, only if it's needed.
+- **Big tools come from their own installers:** uv from Astral's installer in `~/.local/bin` (update with `uv self update`), and `gcloud` from Google's installer in `~/google-cloud-sdk` (update with `gcloud components update`). Homebrew keeps only small things (`gh`, `postgresql@17`, `python@3.14`).
+- **The laptop's snapshot schedule runs `~/.local/bin/uv`.** The plists store uv's absolute path from when `scripts/snapshot-schedule.sh install` ran, so moving uv again means reinstalling the schedule (with the new uv first on PATH) before removing the old one, or the snapshots silently stop.
+- The project's Python is the python.org 3.12 framework build, not Homebrew's.
+
 **Database tests locally** need a throwaway Postgres. Homebrew's `postgresql@17` is installed but **isn't a service**:
 ```bash
 PGBIN=/usr/local/opt/postgresql@17/bin; export LC_ALL=en_US.UTF-8; D=<scratch dir>/pg
@@ -212,6 +218,11 @@ TCP only, because long scratch paths exceed the 103-byte Unix socket limit. `LC_
 
 ## 7. Exactly what's next
 
+### Found on 2026-11-14
+- **Every account M3 needs exists** (setup sections 1–7, checked 2026-11-14): Google Cloud project `fantasy-helper` in `us-east4` with billing, a $5 budget and the four services; Healthchecks with its ping key in `prod`; the iPhone is on iOS 16.4+; the prod ntfy subscription works.
+- **GitHub's scheduler is too late to use for timed jobs.** From 2026-11-07 to 11-14 every cloud snapshot saved and none was dropped, but every one started hours late: mornings at 11:40–16:30 instead of 06:17, evenings at 20:00–23:10 instead of 17:17, often after tip-off. The laptop's launchd copies were on time and are in R2. `daily.yml` and `weekly.yml` on the same scheduler would deliver the morning report in the afternoon, so **the trigger has to change before part 2's scheduled runs are useful**. The decision (and an ADR) comes next: Claude's recommendation is Cloud Scheduler starting Cloud Run Jobs, which reuses part 3's image, Secret Manager and keyless deploys, and needs no GitHub credential outside GitHub.
+- **This Mac and Homebrew:** see §6. uv moved to Astral's installer and `gcloud` came from Google's, both because Homebrew compiles from source on this Intel Mac.
+
 ### Found on 2026-11-07
 - **The laptop ran M1 code. Fixed:** its main checkout is at `02c3f0f` (M3 part 1) since 2026-11-07. After every merge, `git pull` there: launchd runs whatever that checkout holds.
 - **Sleeper re-issued its season projections** (06:30 run, 2026-11-07): 1,334 rows that held only ADP fields went empty, `gp`, `dd`, `td` and `dreb` were dropped, minutes became realistic, and 564 players have a points projection (524 the day before). Still per-game averages. The old check (half of all rows must have stats) flagged it; it now requires 300+ players with a points projection, like the ESPN check. None of Adam's leagues score the dropped stats.
@@ -227,11 +238,11 @@ Approved by Adam on 2026-11-06, in five parts, each a checkpoint he approves:
 
 | Part | Builds | Needs from Adam | Status |
 |---|---|---|---|
-| **1. Snapshots to the cloud** | `R2RawStore` (`storage/r2_store.py`), `fh raw upload`, `fh doctor --only raw`, `.github/workflows/snapshot.yml` with the DST gate (`pipeline/cron.py`), once-a-day guard for Sleeper's player list, crash alerts. ADR 0023 | Setup sections 1, 3 and 4 (**done**); then [runbooks/cloud-snapshots.md](runbooks/cloud-snapshots.md) | **Merged** (PR #4, 2026-11-07), **live**. Cutover: step 1 done; backlog upload, first run (17:17 ET) and the overlap to go |
+| **1. Snapshots to the cloud** | `R2RawStore` (`storage/r2_store.py`), `fh raw upload`, `fh doctor --only raw`, `.github/workflows/snapshot.yml` with the DST gate (`pipeline/cron.py`), once-a-day guard for Sleeper's player list, crash alerts. ADR 0023 | Setup sections 1, 3 and 4 (**done**); then [runbooks/cloud-snapshots.md](runbooks/cloud-snapshots.md) | **Merged** (PR #4, 2026-11-07), **live**. Cutover steps 1–3 done; the overlap waits on on-time runs and the part 5 pings |
 | **2. Prod database and scheduled runs** | Prod migrated, Adam's user and leagues in prod (local git-ignored prod env file), full history ingested from R2, migration 0006 (`reports`, `push_subscriptions`), `daily.yml` and `weekly.yml`, run log in the snapshot job | Sections 2 and 3 (**done**); ESPN cookies typed once at the hidden prompt | Next |
-| **3. API on Cloud Run** | FastAPI (reports, push subscriptions), Supabase JWT checked against its public keys (JWKS), every query scoped to the user, Docker image, keyless deploy (Workload Identity Federation), Secret Manager, max 2 instances | Section 5 (**not started**), plus the WIF commands | |
+| **3. API on Cloud Run** | FastAPI (reports, push subscriptions), Supabase JWT checked against its public keys (JWKS), every query scoped to the user, Docker image, keyless deploy (Workload Identity Federation), Secret Manager, max 2 instances | Section 5 (**done** 2026-11-14), plus the WIF commands | |
 | **4. The phone app** | `web/` PWA: sign-in, Today and This Week tabs, Home Screen install, Enable notifications, types from OpenAPI, Cloudflare Pages | Connect Pages to GitHub; the iPhone | |
-| **5. Push, ops, exit test** | VAPID keys straight into secrets, "report ready" push, Healthchecks pings (missed run, 7:45 late report), size alert, nightly backup and restore drill, broken-run test, laptop-closed test | Section 6 (**not started**); check schedules | |
+| **5. Push, ops, exit test** | VAPID keys straight into secrets, "report ready" push, Healthchecks pings (missed run, 7:45 late report), size alert, nightly backup and restore drill, broken-run test, laptop-closed test | Section 6 (**done** 2026-11-14: account, ntfy integration, ping key); check schedules | |
 
 **Decided with Adam (2026-11-06):**
 - **Sign-in by 6-digit email code, not a magic link.** A Home Screen app on iOS doesn't share Safari's session, so a tapped link would sign in Safari, not the app. Same Supabase Auth; the email template shows `{{ .Token }}`.

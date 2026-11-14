@@ -1,6 +1,6 @@
 # Accounts and secrets: what exists and where
 
-**Last checked:** 2026-11-07, by Claude, against `gh secret list` (names and dates only) and the names in the laptop's `.env`. No value was read. Claude updates this page whenever an account or secret is added, moved or rotated.
+**Last checked:** 2026-11-07, by Claude (Google Cloud, Healthchecks and the last `prod` secret on 2026-11-14), against `gh secret list` (names and dates only) and the names in the laptop's `.env`. No value was read. Claude updates this page whenever an account or secret is added, moved or rotated.
 
 Values live in **Bitwarden** and in the places listed below, never in this repo or the chat. How each account was set up, step by step: [m3-account-setup.md](m3-account-setup.md).
 
@@ -15,8 +15,8 @@ Values live in **Bitwarden** and in the places listed below, never in this repo 
 | **ntfy** (`ntfy.sh`, no account) | Ops alerts to the iPhone: a **dev** topic for the laptop, a **prod** topic for GitHub | Dev: M0. Prod: 2026-11-07 |
 | **Anthropic** | The Claude API, for the app only. Claude Code doesn't use this key (rule 6) | M0 |
 | **Bitwarden** | Holds every value on this page | 2026-11-07 |
-| **Google Cloud** | Cloud Run for the API (part 3) | **Not yet** (setup §5) |
-| **Healthchecks.io** | Watches for scheduled runs that never start (part 5) | **Not yet** (setup §6) |
+| **Google Cloud** | Project `fantasy-helper` (ID in Bitwarden), region `us-east4`: Cloud Run for the API (part 3), Artifact Registry, Secret Manager. Billing on the open billing account with a $5 budget. `gcloud` is installed from Google's installer in `~/google-cloud-sdk`, not Homebrew | 2026-11-14 |
+| **Healthchecks.io** | Watches for scheduled runs that never start or start late (part 5). Down alerts go to the prod ntfy topic. No checks until part 5 wires the pings | 2026-11-14 |
 
 ## Secrets
 
@@ -28,7 +28,7 @@ Values live in **Bitwarden** and in the places listed below, never in this repo 
 | `FH_R2_ENDPOINT`, `FH_R2_ACCESS_KEY_ID`, `FH_R2_SECRET_ACCESS_KEY` | the same token as prod, for now | | 2026-11-07 | Cloudflare → R2 → Manage API tokens: create a token, set it, then delete the old one. The laptop gets its own token at the end of the cutover ([cloud-snapshots.md](cloud-snapshots.md), step 5) |
 | `LANGSMITH_API_KEY` | ✓ | ✓ (2026-11-06) | ✓ (2026-11-07) | Revoke it in LangSmith, set the new one in all three places |
 | `FH_ANTHROPIC_API_KEY` | ✓ | | before M4 | Revoke it in the Anthropic Console |
-| `FH_HEALTHCHECKS_PING_KEY` | | | **not yet** (part 5) | Regenerate it in the project's settings |
+| `FH_HEALTHCHECKS_PING_KEY` | | | 2026-11-14 | Regenerate it in the project's settings |
 
 **Only in Bitwarden** (not in GitHub yet): the prod database password, the prod transaction pooler URL (port 6543, for the API), and prod's project URL and publishable key. The last two go into the phone app in part 4: they aren't secret, but they stay out of the public repo. Each account's login and two-factor recovery codes belong in Bitwarden too.
 

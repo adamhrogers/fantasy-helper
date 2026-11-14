@@ -6,19 +6,19 @@ This prepares everything M3 needs, so that M3 can start building as soon as M2's
 
 ## Progress
 
-**Checked 2026-11-07 by Claude**, against `gh secret list` (names and dates only), the names in the laptop's `.env`, and live checks. No value was read. What now exists, dev and prod side by side: [accounts-and-secrets.md](accounts-and-secrets.md).
+**Checked 2026-11-07 by Claude** (section 5 on 2026-11-14), against `gh secret list` (names and dates only), the names in the laptop's `.env`, and live checks. No value was read. What now exists, dev and prod side by side: [accounts-and-secrets.md](accounts-and-secrets.md).
 
 | Section | Status |
 |---|---|
 | 1. GitHub `prod` environment | **Done.** `prod` exists and only `main` can use it; `LANGSMITH_API_KEY` is set there |
 | 2. Supabase prod | **Done** (Adam, 2026-11-07). `DATABASE_URL` is in `prod`. Claude hasn't checked the region, plan or sign-up setting; part 2 checks them when it migrates prod |
-| 3. Encryption key and alerts | **Done.** `FH_ENCRYPTION_KEY` and `FH_NTFY_TOPIC` are in `prod`. The phone's prod subscription is proven by the first cloud run's notification |
+| 3. Encryption key and alerts | **Done.** `FH_ENCRYPTION_KEY` and `FH_NTFY_TOPIC` are in `prod`. The phone gets the cloud runs' notifications on its prod subscription (Adam, 2026-11-14) |
 | 4. Cloudflare R2 | **Done.** Bucket, token, and the three values in `prod` and the laptop's `.env`. `fh doctor --only raw` passed against the live bucket |
-| 5. Google Cloud | **Not started** (`gcloud` isn't installed). Needed for part 3 |
-| 6. Healthchecks.io | **Not started.** Needed for part 5. The laptop keeps its snapshot schedule until this is live |
-| 7. iPhone | iOS version not confirmed yet. Needed for part 4 |
+| 5. Google Cloud | **Done** (2026-11-14). Project `fantasy-helper` (its ID is in Bitwarden and `gcloud config get project`), billing linked, a $5 budget, `gcloud` 593 from Google's installer, region `us-east4`, the four services on. Checked by Claude with `gcloud` |
+| 6. Healthchecks.io | **Account done** (Adam, 2026-11-14). `FH_HEALTHCHECKS_PING_KEY` is in `prod`. No checks yet: they appear when part 5 wires the pings into the scheduled jobs. The laptop keeps its snapshot schedule until those pings are live |
+| 7. iPhone | **Done.** iOS 16.4 or later (Adam, 2026-11-14), so Web Push works from the Home Screen app in part 4 |
 
-Seven of the eight `prod` secrets are set; `FH_HEALTHCHECKS_PING_KEY` waits for section 6. Your password manager is **Bitwarden** (2026-11-07).
+**All eight `prod` secrets are set** (the last, `FH_HEALTHCHECKS_PING_KEY`, on 2026-11-14). **Every account M3 needs exists.** Your password manager is **Bitwarden** (2026-11-07).
 
 *Earlier check, 2026-11-06, at the start of M3:* the repository secret `LANGSMITH_API_KEY` was set and CI's LangSmith smoke trace passed on `main`; nothing else was done. Two fixes since the first version: the gcloud install command (section 5), and a new section 6 for the missed-run watchdog that docs/runbooks/run-events.md plans for M3.
 
@@ -99,7 +99,7 @@ uv run fh keygen --topic
 gh secret set FH_NTFY_TOPIC --env prod
 ```
 
-- [ ] In the ntfy app on your iPhone, tap **+**, subscribe to the new topic, and name it "Fantasy Helper prod". Keep the old subscription: the laptop still uses it. *(The first cloud run, 2026-11-07 at 17:17 Eastern, proves this: its success notification arrives on this subscription.)*
+- [x] In the ntfy app on your iPhone, tap **+**, subscribe to the new topic, and name it "Fantasy Helper prod". Keep the old subscription: the laptop still uses it. *(The first cloud run, 2026-11-07 at 17:17 Eastern, proves this: its success notification arrives on this subscription.)*
 
 ## 4. Cloudflare: R2 for the raw archive and backups (10 min)
 
@@ -137,43 +137,45 @@ gh secret set FH_R2_ENDPOINT --env prod
 
 The Cloud Run free tier covers 2 million requests, 180,000 vCPU-seconds and 360,000 GiB-seconds a month. `us-east4` (Northern Virginia) is a Tier 1 pricing region, next to the database.
 
-- [ ] At [console.cloud.google.com](https://console.cloud.google.com), create a project called `fantasy-helper`. **Write down the project ID**; it can differ from the name.
-- [ ] Go to **Billing** and link a billing account. Cloud Run requires one, even when usage stays inside the free tier.
-- [ ] Go to **Billing → Budgets & alerts → Create budget**. Scope it to this project, set **$5 a month**, and turn on email alerts at 50%, 90% and 100%. A budget only warns you; it doesn't stop spending. M3 also caps the service at one or two instances.
-- [ ] Update Homebrew first. Yours is from November 2025, and it can't install the current Google Cloud package, which has also been renamed from `google-cloud-sdk` to `gcloud-cli`:
+**Done 2026-11-14.** The steps as they were actually done, for a rebuild:
+
+- [x] At [console.cloud.google.com](https://console.cloud.google.com), create a project called `fantasy-helper`. **Write down the project ID**; it differs from the name. It isn't secret, but it stays out of this public repo: it's in Bitwarden.
+- [x] Go to **Billing** and link the **open** billing account ("My Billing Account 1"; an older, closed one also shows up). Cloud Run requires billing, even inside the free tier.
+- [x] Go to **Billing → Budgets & alerts → Create budget**: **$5 a month**, email alerts at 50%, 90% and 100%. Ours covers the whole billing account, which includes this project. A budget only warns you; it doesn't stop spending. M3 also caps the service at one or two instances.
+- [x] Install the Google Cloud command-line tool with **Google's own installer, not Homebrew**. This Mac is Intel, and Homebrew no longer builds packages for Intel Macs, so `brew install` and `brew upgrade` compile from source, for hours (see "This Mac and Homebrew" in docs/session-handoff.md). Google's download is ready-made, and it uses the Python 3.12 already installed:
 
 ```bash
-brew update
+cd ~ && curl -O https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-darwin-x86_64.tar.gz
 ```
-
-- [ ] Install the Google Cloud command-line tool:
 
 ```bash
-brew install --cask gcloud-cli
+tar -xf google-cloud-cli-darwin-x86_64.tar.gz && rm google-cloud-cli-darwin-x86_64.tar.gz
 ```
 
-- [ ] Sign in. This opens your browser:
+```bash
+./google-cloud-sdk/install.sh
+```
+
+  Answer **no** to installing Python 3.14 (3.12 works; gcloud supports 3.10 to 3.15) and **yes** to updating your PATH. Open a new terminal tab afterwards. Updates: `gcloud components update`.
+
+- [x] Sign in. This opens your browser:
 
 ```bash
 gcloud auth login
 ```
 
-- [ ] Point it at the new project, using your project ID:
+- [x] Claude did the rest with `gcloud`: point it at the project, set the region, and turn on the four services M3 uses (Cloud Run, Artifact Registry for images, Secret Manager, and keyless deploys from GitHub), plus the Budget API so the budget can be checked from the command line:
 
 ```bash
 gcloud config set project YOUR_PROJECT_ID
 ```
 
-- [ ] Set the default region:
-
 ```bash
 gcloud config set run/region us-east4
 ```
 
-- [ ] Turn on the four services M3 uses (Cloud Run, Artifact Registry for images, Secret Manager, and keyless deploys from GitHub):
-
 ```bash
-gcloud services enable run.googleapis.com artifactregistry.googleapis.com secretmanager.googleapis.com iamcredentials.googleapis.com
+gcloud services enable run.googleapis.com artifactregistry.googleapis.com secretmanager.googleapis.com iamcredentials.googleapis.com billingbudgets.googleapis.com
 ```
 
 GitHub Actions will deploy without a key file, using Workload Identity Federation. M3 gives you the exact commands to run for that.
@@ -182,23 +184,23 @@ GitHub Actions will deploy without a key file, using Workload Identity Federatio
 
 A run that never starts can't report itself: the GitHub scheduler skipped it, or scheduled workflows were turned off. Healthchecks.io expects a ping from each scheduled run and alerts you when one doesn't arrive on time. The same check covers the 7:45 a.m. late-report alert (docs/runbooks/run-events.md). It runs outside both GitHub and Google Cloud, so it still works when they don't. The free Hobbyist plan has 20 checks; M3 uses about five.
 
-- [ ] Sign up at [healthchecks.io](https://healthchecks.io) on the free plan, and turn on two-factor authentication.
-- [ ] Open your project and go to **Integrations → ntfy → Add integration**:
+- [x] Sign up at [healthchecks.io](https://healthchecks.io) on the free plan, and turn on two-factor authentication.
+- [x] Open your project and go to **Integrations → ntfy → Add integration**:
   - **Server URL:** `https://ntfy.sh`
   - **Topic:** the prod topic from section 3
   - **Priority for "down" events:** High
-- [ ] Remove the **email** integration that's on by default, unless you also want these alerts by email.
-- [ ] Go to **Settings** (the project's, not your account's) → **Ping key** → **Create**. Copy it into your password manager, then run:
+- [x] Remove the **email** integration that's on by default, unless you also want these alerts by email.
+- [x] Go to **Settings** (the project's, not your account's) → **Ping key** → **Create**. Copy it into your password manager, then run:
 
 ```bash
 gh secret set FH_HEALTHCHECKS_PING_KEY --env prod
 ```
 
-- [ ] Don't create any checks. The scheduled jobs create them on their first ping, and in M3 I'll give you each one's schedule to set (about two minutes).
+- [x] Don't create any checks. The scheduled jobs create them on their first ping, and in M3 I'll give you each one's schedule to set (about two minutes).
 
 ## 7. Your phone, and the later items (2 min)
 
-- [ ] Check that your iPhone runs **iOS 16.4 or later** (Settings → General → About). Web Push needs it, and the app has to be added to the Home Screen; we'll do that together in M3.
+- [x] Check that your iPhone runs **iOS 16.4 or later** (Settings → General → About). Web Push needs it, and the app has to be added to the Home Screen; we'll do that together in M3.
 - [ ] **Later, not now:**
   - **Before M4:** the Claude API key goes into `prod` with `gh secret set FH_ANTHROPIC_API_KEY --env prod`, with a monthly spend limit set in the Anthropic Console.
   - **Before M7:** friend invites need a custom email sender (for example Resend's free tier). That requires a domain you own, about $10–15 a year. Decide whether you want one before the beta.

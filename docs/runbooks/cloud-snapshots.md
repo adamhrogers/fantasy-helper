@@ -10,9 +10,9 @@ The snapshot job moves from the Mac's schedule (launchd) to GitHub Actions, and 
 - [x] PR #4 merged on 2026-11-07 at 10:56 Eastern. **The cloud schedule has been live since then**, at 06:17 and 17:17 Eastern.
 - [x] The laptop runs the M3 code (main checkout pulled to `02c3f0f` on 2026-11-07).
 - [x] **1.** The laptop has the R2 values, and `fh doctor --only raw` passed against the live bucket (2026-11-07).
-- [ ] **2.** Upload the backlog. 1,716 files were waiting at the dry run (2026-11-07, 12:30 Eastern).
-- [ ] **3.** The first cloud run: scheduled for 2026-11-07 at 17:17 Eastern.
-- [ ] **4.** The overlap: four clean cloud runs in a row, **and** the Healthchecks pings live (part 5).
+- [x] **2.** Upload the backlog (2026-11-07). The laptop's copies since then are uploaded too: on 2026-11-14 all 1,898 local files were in R2 with the same bytes.
+- [x] **3.** The first cloud run: 2026-11-07, saved 4/4, but at 20:28 Eastern, 3 hours late. The notification reached the phone's prod subscription.
+- [ ] **4.** The overlap: four clean cloud runs in a row, **and** the Healthchecks pings live (part 5). **Blocked on timing:** from 2026-11-07 to 11-14 every cloud set saved, and none was dropped, but every one started hours late (mornings around 11:40–16:30, evenings around 20:00–23:10 Eastern, often after tip-off). On-time runs need a trigger other than GitHub's scheduler; see docs/session-handoff.md §7. The Healthchecks account and key exist (2026-11-14).
 - [ ] **5.** End of the overlap, with Claude's go-ahead: remove launchd, give the laptop its own R2 key, and switch it to R2.
 
 All commands run in your own Terminal app, from `~/projects/fantasy-helper`.
