@@ -135,7 +135,8 @@ These steps depend on each other, so they're ordered. B and C run in parallel at
 - **Adam's accounts:** sections 1–4 done (GitHub `prod`, Supabase prod, the prod key and topic, R2), and 5 (Google Cloud) on 2026-11-14; 6 (Healthchecks) is next. Inventory: [runbooks/accounts-and-secrets.md](runbooks/accounts-and-secrets.md).
 - **Found 2026-11-14:** GitHub's scheduler started every cloud snapshot hours late for a week (none dropped). Timed jobs need another trigger before part 2's scheduled runs are useful (session-handoff §7).
 - **Decided 2026-11-14 (ADR 0025):** timed jobs move to Cloud Run Jobs started by Cloud Scheduler, watched by Healthchecks ([runbooks/scheduled-jobs.md](runbooks/scheduled-jobs.md)).
-- **Next:** roll out the snapshot jobs on Google Cloud, then part 2 (the prod database, and the daily and weekly reports on the same scheduler).
+- **Snapshots on Cloud Run: live** since 2026-11-14 (PRs #12, #14), tested end to end, Healthchecks schedules set. The laptop retires after four on-time runs in a row, counting from 2026-11-15 06:17.
+- **Next:** part 2, the prod database, and the daily and weekly reports on the same scheduler.
 
 | Lane | Work |
 |---|---|

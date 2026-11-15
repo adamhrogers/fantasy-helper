@@ -24,7 +24,7 @@ scripts/gcp-setup.sh infra
 scripts/gcp-secrets.sh
 ```
 
-- [ ] **4. Claude:** deploy (**Actions → Deploy → Run workflow**), then create the schedules. Until step 1 has run, Deploy does nothing and says so in a notice, rather than failing, so merging the PR is quiet.
+- [x] **4. Claude:** deploy (**Actions → Deploy → Run workflow**), then create the schedules (done 2026-11-14: the deploy ran on PR #14's merge, with the deployer's job-level role, and Cloud Scheduler is offered in `us-east4`, so neither fallback below was needed). Until step 1 has run, Deploy does nothing and says so in a notice, rather than failing, so merging the PR is quiet.
 
   If the deploy fails with **PERMISSION_DENIED** on a project-level permission (the deployer's role is granted on the two jobs only), grant `roles/run.developer` on the project to `fh-deployer` instead, note it in ADR 0025, and rerun. If `schedule` says Cloud Scheduler isn't offered in `us-east4`, set `SCHEDULER_LOCATION` in the script to the nearest location it lists, and use that location in the commands below.
 
@@ -32,13 +32,13 @@ scripts/gcp-secrets.sh
 scripts/gcp-setup.sh schedule
 ```
 
-- [ ] **5. Claude:** run the evening job once by hand and check it end to end: the job succeeds, a new evening set is in R2, the prod topic gets "Evening snapshot succeeded", and a `snapshot-evening` check appears in Healthchecks.
+- [x] **5. Claude:** run the evening job once by hand and check it end to end (done 2026-11-14: evening 4/4 and morning 9/9 into R2, with Sleeper's player list reused, notifications sent, and both checks pinged with no errors): the job succeeds, a new evening set is in R2, the prod topic gets "Evening snapshot succeeded", and a `snapshot-evening` check appears in Healthchecks.
 
 ```bash
 gcloud scheduler jobs run snapshot-evening --location us-east4
 ```
 
-- [ ] **6. Adam: the Healthchecks schedules** (2 min). Each check appears after its first ping. Open it, then **Change Schedule → Cron**:
+- [x] **6. Adam: the Healthchecks schedules** (done 2026-11-14). Each check appears after its first ping. Open it, then **Change Schedule → Cron**:
   - `snapshot-morning`: `17 6 * * *`, time zone `America/New_York`, grace **30 minutes**.
   - `snapshot-evening`: `17 17 * * *`, time zone `America/New_York`, grace **30 minutes**.
 
@@ -46,7 +46,9 @@ Then the overlap in [cloud-snapshots.md](cloud-snapshots.md) continues, with Clo
 
 ## Day to day
 
-Nothing to do. When something goes wrong:
+Nothing to do. **An occasional double start is expected:** Cloud Scheduler delivers "at least once", and on 2026-11-14 one test start of `snapshot-evening` ran twice, 30 seconds apart (two scheduler attempts, both HTTP 200). Both runs saved full sets under different keys, so nothing is lost or overwritten. If it happens on scheduled runs too, `fh snapshot` gets a guard that skips a set saved minutes earlier.
+
+When something goes wrong:
 - **The run's own alerts** (degraded, failed, crashed) come from the app on the prod topic, as before, and say what went wrong.
 - **Healthchecks** alerts on the prod topic when a run is **late, missing, stuck, or exits with any failure**. A degraded run therefore alerts twice, on purpose: if the app's own alert couldn't be sent, this one still arrives. The check goes back up on the next clean run.
 
