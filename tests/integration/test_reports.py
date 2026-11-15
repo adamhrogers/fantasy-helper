@@ -5,7 +5,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import Engine, delete, text
+from sqlalchemy import Engine, delete, event, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 from typer.testing import CliRunner
@@ -81,6 +81,32 @@ def test_reads_default_to_the_latest_date_and_filter_by_kind(session: Session) -
     assert [r.league_id for r in earlier] == [one.id]
     assert len(saved_reports.for_user(session, owner.id, ReportKind.WEEKLY)) == 1
     assert saved_reports.for_user(session, owner.id, ReportKind.DAILY, date(2026, 1, 1)) == []
+
+
+def test_the_latest_reports_come_in_one_query_in_league_name_order(
+    session: Session, engine: Engine
+) -> None:
+    """The phone app reads this on every open (ADR 0020), so it's one round trip, not two."""
+    owner = setup_owner(session)
+    mine = leagues.list_for_user(session, owner.id)
+    for lg in mine:
+        saved_reports.save(session, report(owner.id, lg.id, day=date(2026, 11, 15)))
+    saved_reports.save(session, report(owner.id, mine[0].id, day=date(2026, 11, 14)))
+    statements: list[str] = []
+
+    def record(_conn, _cursor, statement, *_rest):  # type: ignore[no-untyped-def]
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        found = saved_reports.for_user(session, owner.id, ReportKind.DAILY)
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+    selects = [s for s in statements if s.lstrip().upper().startswith("SELECT")]
+    assert len(selects) == 1
+    names = {lg.id: lg.name for lg in mine}
+    assert [names[r.league_id] for r in found] == sorted(names[lg.id] for lg in mine)
+    assert {r.for_date for r in found} == {date(2026, 11, 15)}  # the latest date, in the same query
 
 
 def test_one_users_reports_are_never_anothers(session: Session) -> None:

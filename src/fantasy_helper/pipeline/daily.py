@@ -158,7 +158,9 @@ def _lock_in_league(
         calls.append((starter, logged))
         new += int(created)
     report = lock_in_report(sheet, calls, user_id=user.id, generated_at=now)
-    saved_reports.save(session, report)  # inside this league's savepoint, with its calls
+    # Saved inside this league's savepoint, with its calls. A rerun keeps the first saved id, so the
+    # report handed on (to the push, the run summary) carries the id that's actually stored.
+    report = report.model_copy(update={"id": saved_reports.save(session, report)})
     return LeagueDaily(league, report=report, calls=len(calls), new_calls=new)
 
 

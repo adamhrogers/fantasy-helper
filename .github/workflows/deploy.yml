@@ -103,9 +103,14 @@ jobs:
           docker run --rm "$IMAGE" version
           docker push "$IMAGE"
 
-      # One job per task, each with a fixed command, so the scheduler only needs to start a job,
+      # One job per task, each with a fixed command, so whoever starts a job only needs to start it,
       # never to change what it runs. No retries: every run retries inside itself, and a whole
-      # rerun would fetch everything twice. deploy NAME ACCOUNT SECRETS ARGS TIMEOUT MEMORY.
+      # rerun would fetch everything twice.
+      #   deploy NAME ACCOUNT SECRETS ARGS TIMEOUT MEMORY NEXT
+      # NEXT is the job this one starts when it finishes (the morning chain, ADR 0028: the
+      # snapshot, then the daily run, then the weekly one), or - for none. It becomes FH_NEXT_JOB.
+      # Each job may start only its NEXT (scripts/gcp-setup.sh). Cloud Scheduler starts only the
+      # morning snapshot; nothing else starts the daily or weekly run on a clock.
       #
       # The order matters. The snapshot jobs don't touch the database, so they go first. Then the
       # database is migrated and the deploy waits for it: a failed migration stops here, and the
@@ -115,15 +120,17 @@ jobs:
         if: steps.fresh.outputs.newest == 'true'
         run: |
           deploy() {
+            envs=FH_ENV=prod,FH_RAW_STORE=r2,FH_LOG_JSON=true
+            [ "$7" = - ] || envs="$envs,FH_NEXT_JOB=projects/$PROJECT/locations/$REGION/jobs/$7"
             gcloud run jobs deploy "$1" --project "$PROJECT" --region "$REGION" --quiet \
               --image "$IMAGE" --service-account "$2" --set-secrets "$3" --args "$4" \
               --tasks 1 --max-retries 0 --task-timeout "$5" --cpu 1 --memory "$6" \
-              --set-env-vars FH_ENV=prod,FH_RAW_STORE=r2,FH_LOG_JSON=true
+              --set-env-vars "$envs"
           }
           REPORT_SECRETS="$SNAPSHOT_SECRETS,$DATABASE_SECRETS"
-          deploy snapshot-morning "$JOBS_SA" "$SNAPSHOT_SECRETS" snapshot,--set,morning 30m 512Mi
-          deploy snapshot-evening "$JOBS_SA" "$SNAPSHOT_SECRETS" snapshot,--set,evening 30m 512Mi
-          deploy migrate "$REPORTS_SA" DATABASE_URL=fh-database-url:latest migrate 10m 512Mi
+          deploy snapshot-morning "$JOBS_SA" "$SNAPSHOT_SECRETS" snapshot,--set,morning 30m 512Mi daily
+          deploy snapshot-evening "$JOBS_SA" "$SNAPSHOT_SECRETS" snapshot,--set,evening 30m 512Mi -
+          deploy migrate "$REPORTS_SA" DATABASE_URL=fh-database-url:latest migrate 10m 512Mi -
           gcloud run jobs execute migrate --project "$PROJECT" --region "$REGION" --wait
-          deploy daily "$REPORTS_SA" "$REPORT_SECRETS" run,daily,--require-snapshot-today 30m 1Gi
-          deploy weekly "$REPORTS_SA" "$REPORT_SECRETS" run,weekly,--require-snapshot-today 30m 1Gi
+          deploy daily "$REPORTS_SA" "$REPORT_SECRETS" run,daily,--require-snapshot-today 30m 1Gi weekly
+          deploy weekly "$REPORTS_SA" "$REPORT_SECRETS" run,weekly,--require-snapshot-today 30m 1Gi -

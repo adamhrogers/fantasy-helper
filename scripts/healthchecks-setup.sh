@@ -6,6 +6,9 @@
 # in UTC, its default, so the evening run looked six hours early and raised a false "down" alert.
 # This sets the time zone every time, and is safe to run again after a schedule changes.
 #
+# For a chained job (daily, weekly) the cron time is when the CHAIN starts and the grace runs to the
+# alert deadline: see the header of scripts/jobs.conf for why.
+#
 #   scripts/healthchecks-setup.sh
 #
 # It asks for the project's API key at a hidden prompt (Healthchecks -> your project -> Settings ->
@@ -24,7 +27,7 @@ echo
 out="$(mktemp)"
 trap 'rm -f "$out"' EXIT
 status=0
-while IFS='|' read -r job cron grace; do
+while IFS='|' read -r job cron grace _trigger; do
   case "$job" in ''|'#'*) continue ;; esac
   # `unique: slug` matches the check the job's first ping created (the ping URL's slug), updates
   # it in place, and creates it if no ping has come yet. `channels: *` keeps every integration

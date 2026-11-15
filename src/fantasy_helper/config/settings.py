@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     healthchecks_ping_key: SecretStr | None = Field(default=None, alias="FH_HEALTHCHECKS_PING_KEY")
     healthchecks_server: str = Field(default="https://hc-ping.com", alias="FH_HEALTHCHECKS_SERVER")
 
+    # The next job in the morning chain, as `projects/<id>/locations/<region>/jobs/<name>` (ADR
+    # 0028). Set by the deploy on the jobs that hand over: the morning snapshot starts the daily
+    # run, which starts the weekly one. Unset on the laptop, so hand runs never start a job.
+    next_job: str | None = Field(default=None, alias="FH_NEXT_JOB")
+
     # Local working folder (git-ignored): the raw store when FH_RAW_STORE=local, and HTML reports.
     data_dir: Path = Field(default=Path("data"), alias="FH_DATA_DIR")
 

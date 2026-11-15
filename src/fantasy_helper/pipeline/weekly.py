@@ -308,7 +308,9 @@ def _league_week(
             logged.append((key, stored))
             new += int(created)
     report = weekly_report(fact_sheet, logged, user_id=user.id, generated_at=now, lock_in=lock_in)
-    saved_reports.save(session, report)  # inside this league's savepoint, with its calls
+    # Saved inside this league's savepoint, with its calls. A rerun keeps the first saved id, so
+    # the report handed on carries the id that's actually stored.
+    report = report.model_copy(update={"id": saved_reports.save(session, report)})
     gap = None
     if fact_sheet.matchup and fact_sheet.matchup.my_banked is not None and ws.my_banked_reported:
         gap = round(fact_sheet.matchup.my_banked - ws.my_banked_reported, 1)

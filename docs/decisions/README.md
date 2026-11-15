@@ -40,6 +40,7 @@ Git keeps every version of every ADR (`git log -p docs/decisions/0011-*.md`), an
 | [0025](0025-timed-jobs-on-cloud-run.md) | Timed jobs run on Cloud Run Jobs, started by Cloud Scheduler | Accepted · 2026-11-14 |
 | [0026](0026-reports-saved-and-built-in-the-cloud.md) | Reports are saved, and built in the cloud every morning | Accepted · 2026-11-15 |
 | [0027](0027-operating-the-prod-database.md) | Operating the prod database: migrate on deploy, secrets per process, two accounts | Accepted · 2026-11-15 |
+| [0028](0028-the-morning-is-a-chain.md) | The morning is a chain: snapshot, then daily, then weekly | Accepted · 2026-11-15 |
 
 ## Template
 

@@ -16,12 +16,21 @@ SCHEDULER_LOCATION=us-east4           # Cloud Scheduler; checked against its loc
 REPO=fantasy-helper                   # Artifact Registry repository
 GITHUB_REPO=adamhrogers/fantasy-helper
 TIME_ZONE=America/New_York
-# The scheduled jobs, as "job:cron" (Eastern time; the scheduler handles daylight saving itself),
-# read from the table Healthchecks' schedules come from too.
+# The jobs, from the table Healthchecks' schedules come from too (scripts/jobs.conf). JOBS has every
+# job; SCHEDULED has the ones Cloud Scheduler starts, as "job:cron" (Eastern time; the scheduler
+# handles daylight saving itself); CHAINED has the ones another job starts, as "job:upstream"
+# (ADR 0028: the morning snapshot starts the daily run, which starts the weekly one).
 JOBS=()
-while IFS='|' read -r job cron _grace; do
+SCHEDULED=()
+CHAINED=()
+while IFS='|' read -r job cron _grace trigger; do
   case "$job" in ''|'#'*) continue ;; esac
-  JOBS+=("$job:$cron")
+  JOBS+=("$job")
+  case "$trigger" in
+    scheduler) SCHEDULED+=("$job:$cron") ;;
+    "after "*) CHAINED+=("$job:${trigger#after }") ;;
+    *) echo "jobs.conf: $job has trigger '$trigger'" >&2; exit 1 ;;
+  esac
 done <"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/jobs.conf"
 # Jobs nothing schedules: the deploy runs `migrate` itself, before the jobs that need new tables.
 ONE_OFF_JOBS=(migrate)
@@ -135,13 +144,20 @@ JSON
   # Job-level, so fh-deployer can't touch anything else in the project. If the first deploy
   # fails with PERMISSION_DENIED on a project-level permission, see scheduled-jobs.md.
   step "Jobs (placeholder image until the first deploy); fh-deployer may update only these"
-  for entry in "${JOBS[@]}" "${ONE_OFF_JOBS[@]}"; do
-    job="${entry%%:*}"
+  for job in "${JOBS[@]}" "${ONE_OFF_JOBS[@]}"; do
     gcloud run jobs describe "$job" --region "$REGION" >/dev/null 2>&1 ||
       gcloud run jobs create "$job" --region "$REGION" --image "$PLACEHOLDER" \
         --service-account "$(account_for "$job")" --tasks 1 --max-retries 0
     quiet gcloud run jobs add-iam-policy-binding "$job" --region "$REGION" \
       --member "serviceAccount:$SA_DEPLOYER" --role roles/run.developer
+  done
+
+  step "The chain: each job may start the next one, and only that one"
+  for entry in "${CHAINED[@]}"; do
+    job="${entry%%:*}" upstream="${entry#*:}"
+    quiet gcloud run jobs add-iam-policy-binding "$job" --region "$REGION" \
+      --member "serviceAccount:$(account_for "$upstream")" --role roles/run.invoker
+    echo "$upstream -> $job"
   done
 
   step "The prod environment's variables (IDs, not secrets)"
@@ -161,7 +177,7 @@ schedule() {
     exit 1
   fi
   ours="$REGION-docker.pkg.dev/$PROJECT/$REPO/app:"
-  for entry in "${JOBS[@]}"; do
+  for entry in "${SCHEDULED[@]}"; do
     job="${entry%%:*}" cron="${entry#*:}"
     step "$job at '$cron' $TIME_ZONE"
     # Fail closed: schedule only a job that runs our own image, never the placeholder, and not
@@ -185,10 +201,21 @@ schedule() {
         --description "Starts the Cloud Run job $job (ADR 0025)"
     fi
   done
+
+  # A chained job starts only when the one before it finishes. A schedule of its own would start it
+  # whether or not the snapshot was complete, so remove any that exists.
+  for entry in "${CHAINED[@]}"; do
+    job="${entry%%:*}"
+    if gcloud scheduler jobs describe "$job" --location "$SCHEDULER_LOCATION" >/dev/null 2>&1; then
+      step "$job is chained: removing its own schedule"
+      gcloud scheduler jobs delete "$job" --location "$SCHEDULER_LOCATION" --quiet
+    fi
+  done
 }
 
 show() {
   step "Jobs";      gcloud run jobs list --region "$REGION"
+  step "The chain"; printf '%s\n' "${CHAINED[@]}" | sed 's/^\(.*\):\(.*\)$/\2 -> \1/'
   step "Schedules"; gcloud scheduler jobs list --location "$SCHEDULER_LOCATION" || echo "(none yet)"
   step "Secrets (versions, never values)"
   for secret in "${SECRETS[@]}"; do

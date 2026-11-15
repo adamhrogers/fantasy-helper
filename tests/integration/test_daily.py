@@ -139,9 +139,13 @@ def test_the_daily_run_logs_each_call_once(session: Session, tmp_path: Path) -> 
     assert again.leagues[0].new_calls == 0  # a rerun logs nothing new
     assert again.leagues[0].calls == daily.calls
     assert count(session, RecommendationRow.id) == daily.calls
-    # A rerun replaces the day's report: still one row, still the first id.
+    # A rerun replaces the day's report: still one row, still the first id, and the report the
+    # run hands on (to the push, the summary) carries that stored id, not a fresh random one.
     assert count(session, ReportRow.id) == 1
     assert saved_reports.for_user(session, owner.id, ReportKind.DAILY)[0].id == saved_id
+    assert daily.report.id == saved_id
+    assert again.leagues[0].report is not None
+    assert again.leagues[0].report.id == saved_id
 
 
 def test_the_weekly_run_builds_every_league_and_stores_its_facts(
@@ -176,6 +180,10 @@ def test_the_weekly_run_builds_every_league_and_stores_its_facts(
     assert count(session, ReportRow.id) == 3  # each league's overview is saved for the app
     saved = saved_reports.for_user(session, owner.id, ReportKind.WEEKLY)
     assert {r.league_id for r in saved} == {lg.league.id for lg in result.leagues}
+    stored_ids = {r.league_id: r.id for r in saved}
+    assert all(
+        lg.report is not None and lg.report.id == stored_ids[lg.league.id] for lg in result.leagues
+    )  # the reports handed on carry the stored ids
 
     again = run_weekly(session, client, store=store, user=owner, key=KEY, clock=FixedClock())
     assert all(lg.new_calls == 0 for lg in again.leagues)  # calls are logged once
@@ -186,6 +194,9 @@ def test_the_weekly_run_builds_every_league_and_stores_its_facts(
     assert all(p.value_over_replacement is None for p in categories.sheet.my_players)
     assert count(session, RecommendationRow.id) == calls
     assert count(session, ReportRow.id) == 3  # replaced, not appended
+    assert all(
+        lg.report is not None and lg.report.id == stored_ids[lg.league.id] for lg in again.leagues
+    )  # and a rerun still hands on the first ids
 
 
 def test_merging_a_player_clears_his_cached_values(session: Session) -> None:

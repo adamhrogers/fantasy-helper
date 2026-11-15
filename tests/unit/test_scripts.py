@@ -56,11 +56,13 @@ def test_healthchecks_schedules_are_set_in_eastern_time_from_the_job_table(
     assert done.returncode == 0, done.stderr
     bodies = (tmp_path / "bodies.txt").read_text().splitlines()
     assert len(bodies) == 4
+    # A chained job's cron is when the chain starts (06:17), and its grace runs to the deadline:
+    # a ping before a cron time would make Healthchecks expect another one at it.
     expected = {
         "snapshot-morning": ("17 6 * * *", 1800),
         "snapshot-evening": ("17 17 * * *", 1800),
-        "daily": ("45 6 * * *", 3600),
-        "weekly": ("0 7 * * *", 3600),
+        "daily": ("17 6 * * *", 5280),
+        "weekly": ("17 6 * * *", 6180),
     }
     for job, (cron, grace) in expected.items():
         body = next(b for b in bodies if f'"slug":"{job}"' in b)

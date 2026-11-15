@@ -9,7 +9,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from fantasy_helper.domain.reports import ReportDocument, ReportKind
-from fantasy_helper.storage.tables import ReportRow
+from fantasy_helper.storage.tables import LeagueRow, ReportRow
 
 
 def save(session: Session, report: ReportDocument) -> UUID:
@@ -53,17 +53,23 @@ def latest_date(session: Session, user_id: UUID, kind: ReportKind) -> date | Non
 def for_user(
     session: Session, user_id: UUID, kind: ReportKind, for_date: date | None = None
 ) -> list[ReportDocument]:
-    """A user's reports of one kind for one date (default: the latest date that has any), one
-    per league, in a stable order."""
-    day = for_date or latest_date(session, user_id, kind)
-    if day is None:
-        return []
+    """A user's reports of one kind for one date (default: the latest date that has any), one per
+    league, by league name. One query either way: the phone app calls this on every open (the hot
+    read path, ADR 0020), so the latest date is a subquery, not a first round trip."""
+    day = (
+        for_date
+        if for_date is not None
+        else select(func.max(ReportRow.for_date))
+        .where(ReportRow.user_id == user_id, ReportRow.kind == kind.value)
+        .scalar_subquery()
+    )
     rows = session.scalars(
         select(ReportRow)
+        .join(LeagueRow, LeagueRow.id == ReportRow.league_id)
         .where(
             ReportRow.user_id == user_id, ReportRow.kind == kind.value, ReportRow.for_date == day
         )
-        .order_by(ReportRow.league_id)
+        .order_by(LeagueRow.name, ReportRow.league_id)
     )
     return [to_domain(row) for row in rows]
 

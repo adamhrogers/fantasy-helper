@@ -2,15 +2,15 @@
 
 **Written:** 2026-11-14. **Design:** ADR 0025. **Who:** Claude runs the setup and checks. Adam adds the secret values, creates one R2 token, and sets the Healthchecks schedules. The report jobs and the migration (2026-11-15, ADR 0026 and 0027) are in [prod-database.md](prod-database.md).
 
-| Job | Runs | Command | Watchdog check |
+| Job | Started by | Command | Watchdog check (alerts at) |
 |---|---|---|---|
-| `snapshot-morning` | 06:17 Eastern | `fh snapshot --set morning` | `snapshot-morning` |
-| `snapshot-evening` | 17:17 Eastern | `fh snapshot --set evening` | `snapshot-evening` |
-| `daily` | 06:45 Eastern | `fh run daily --require-snapshot-today` | `daily` (grace 60 min: the 07:45 alert) |
-| `weekly` | 07:00 Eastern | `fh run weekly --require-snapshot-today` | `weekly` |
-| `migrate` | every deploy | `fh migrate` | none: the deploy waits for it |
+| `snapshot-morning` | Cloud Scheduler, 06:17 Eastern | `fh snapshot --set morning` | `snapshot-morning` (06:47) |
+| `snapshot-evening` | Cloud Scheduler, 17:17 Eastern | `fh snapshot --set evening` | `snapshot-evening` (17:47) |
+| `daily` | `snapshot-morning`, when **everything** saved and passed | `fh run daily --require-snapshot-today` | `daily` (07:45: the late-report alert) |
+| `weekly` | `daily`, when it finishes | `fh run weekly --require-snapshot-today` | `weekly` (08:00) |
+| `migrate` | the deploy | `fh migrate` | none: the deploy waits for it |
 
-The times, and each check's grace, are in [`scripts/jobs.conf`](../../scripts/jobs.conf): Cloud Scheduler's entries and Healthchecks' schedules both come from it. The last three jobs are set up in [prod-database.md](prod-database.md).
+The morning is a chain, not three clocks (ADR 0028). Who starts whom, the cron times and each check's grace are in [`scripts/jobs.conf`](../../scripts/jobs.conf): Cloud Scheduler, the chain's start permissions and Healthchecks' schedules all come from it. The last three jobs are set up in [prod-database.md](prod-database.md).
 
 ## First-time setup (after the PR merges)
 

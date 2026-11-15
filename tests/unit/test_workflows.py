@@ -115,21 +115,21 @@ def test_deployed_secrets_match_the_setup_script_and_the_settings() -> None:
     assert set(mounted.values()) == set(_bash_array(ROOT / "scripts" / "gcp-secrets.sh", "NAMES"))
 
 
-def _jobs_conf() -> list[tuple[str, str, int]]:
+def _jobs_conf() -> list[tuple[str, str, int, str]]:
     rows = []
     for line in (ROOT / "scripts" / "jobs.conf").read_text().splitlines():
         if line and not line.startswith("#"):
-            job, cron, grace = line.split("|")
-            rows.append((job, cron, int(grace)))
+            job, cron, grace, trigger = line.split("|")
+            rows.append((job, cron, int(grace), trigger))
     return rows
 
 
-def _deploy_calls() -> dict[str, tuple[str, str, str, str, str]]:
-    """job -> (account variable, secrets, args, timeout, memory), from the deploy step."""
-    pattern = r'^\s+deploy (\S+) "\$(\w+)" (\S+) (\S+) (\S+) (\S+)$'
+def _deploy_calls() -> dict[str, tuple[str, str, str, str, str, str]]:
+    """job -> (account variable, secrets, args, timeout, memory, next job), from the deploy step."""
+    pattern = r'^\s+deploy (\S+) "\$(\w+)" (\S+) (\S+) (\S+) (\S+) (\S+)$'
     return {
-        job: (account, secrets, args, timeout, memory)
-        for job, account, secrets, args, timeout, memory in re.findall(
+        job: (account, secrets, args, timeout, memory, nxt)
+        for job, account, secrets, args, timeout, memory, nxt in re.findall(
             pattern, DEPLOY.read_text(), re.MULTILINE
         )
     }
@@ -146,7 +146,7 @@ EXPECTED_ARGS = {
 
 def test_every_job_is_deployed_with_its_own_command() -> None:
     deployed = _deploy_calls()
-    scheduled = [job for job, _, _ in _jobs_conf()]
+    scheduled = [job for job, *_ in _jobs_conf()]
     assert sorted(deployed) == sorted([*scheduled, *_bash_array(SETUP, "ONE_OFF_JOBS")])
     assert {job: call[2] for job, call in deployed.items()} == EXPECTED_ARGS
     assert "--max-retries 0" in DEPLOY.read_text()  # a rerun would fetch everything twice
@@ -197,15 +197,25 @@ def test_the_snapshot_jobs_never_get_the_database_or_the_key() -> None:
 
 def test_the_job_table_is_what_cloud_scheduler_and_healthchecks_both_read() -> None:
     rows = _jobs_conf()
-    assert [job for job, _, _ in rows] == [
+    assert [job for job, *_ in rows] == [
         "snapshot-morning", "snapshot-evening", "daily", "weekly"
     ]  # fmt: skip
-    for job, cron, grace in rows:
+    for job, cron, grace, _trigger in rows:
         assert len(cron.split()) == 5, job
         assert grace >= 60, job
-    by_job = {job: (cron, grace) for job, cron, grace in rows}
-    # The daily report's check alerts at 07:45, the 8 a.m. promise (run-events runbook).
-    assert by_job["daily"] == ("45 6 * * *", 3600)
+    by_job = {job: (cron, grace) for job, cron, grace, _ in rows}
+
+    def deadline(job: str) -> str:
+        """cron + grace: when Healthchecks alerts if the job hasn't reported."""
+        minute, hour = by_job[job][0].split()[:2]
+        total = int(hour) * 3600 + int(minute) * 60 + by_job[job][1]
+        return f"{total // 3600:02d}:{total % 3600 // 60:02d}"
+
+    # The daily report's check alerts at 07:45, the 8 a.m. promise (run-events runbook); the
+    # weekly overview's at 08:00. A chained job's cron is the chain's start, not its own run.
+    assert deadline("daily") == "07:45"
+    assert deadline("weekly") == "08:00"
+    assert by_job["daily"][0] == by_job["snapshot-morning"][0]
     setup = SETUP.read_text()
     assert 'done <"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/jobs.conf"' in setup
     assert (
@@ -239,3 +249,39 @@ def test_the_image_keeps_secrets_and_local_data_out() -> None:
     assert re.search(r"^USER fh$", dockerfile, re.MULTILINE)
     for image in re.findall(r"^FROM (\S+)", dockerfile, re.MULTILINE):
         assert re.search(r"@sha256:[0-9a-f]{64}$", image), image
+
+
+def test_the_morning_chain_is_the_same_in_the_job_table_the_workflow_and_the_setup_script() -> None:
+    """jobs.conf says who starts whom, deploy.yml gives each job its FH_NEXT_JOB, and gcp-setup.sh
+    lets each job start only that one. They must agree, or a hand-over fails at 06:17."""
+    triggers = {job: trigger for job, _c, _g, trigger in _jobs_conf()}
+    chain = {job: t.removeprefix("after ") for job, t in triggers.items() if t.startswith("after ")}
+    assert chain == {"daily": "snapshot-morning", "weekly": "daily"}
+    scheduled = {job for job, t in triggers.items() if t == "scheduler"}
+    assert scheduled == {"snapshot-morning", "snapshot-evening"}  # nothing else runs on a clock
+
+    nxt = {job: call[5] for job, call in _deploy_calls().items()}
+    downstream = {
+        up: job for job, up in chain.items()
+    }  # snapshot-morning -> daily, daily -> weekly
+    for job, expected in nxt.items():
+        assert expected == downstream.get(job, "-"), job
+    assert "FH_NEXT_JOB=projects/$PROJECT/locations/$REGION/jobs/$7" in DEPLOY.read_text()
+
+    setup = SETUP.read_text()
+    assert '"after "*) CHAINED+=("$job:${trigger#after }") ;;' in setup
+    # Each job may start the next one, with the starter's own account and nothing broader.
+    assert '--member "serviceAccount:$(account_for "$upstream")" --role roles/run.invoker' in setup
+    assert 'gcloud scheduler jobs delete "$job"' in setup  # a chained job has no clock of its own
+
+
+def test_dependabot_updates_to_the_deploy_path_wait_for_a_person() -> None:
+    """The deploy workflow's identity can deploy code that reads the prod database and the key
+    that decrypts every league login, so an automatic bump of anything it runs isn't merged."""
+    text = AUTO_MERGE.read_text()
+    assert 'gh pr diff "$PR_URL" --name-only' in text
+    assert r"^(\.github/workflows/deploy\.yml|Dockerfile|\.dockerignore)$" in text
+    merge = text.split("- name: Merge once the required checks pass", 1)[1]
+    assert "if: steps.deploy_path.outputs.hold != 'true'" in merge
+    assert "gh pr merge --auto --squash" in merge
+    assert "uses:" not in text  # still no third-party code in the job that can write to the repo

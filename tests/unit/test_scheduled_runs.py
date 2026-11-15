@@ -10,6 +10,8 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
+from fantasy_helper.adapters import cloud_run
+from fantasy_helper.cli import _runs
 from fantasy_helper.cli import ingest as cli_ingest
 from fantasy_helper.cli import run as cli_run
 from fantasy_helper.cli._common import REPORTED_EXIT
@@ -18,6 +20,7 @@ from fantasy_helper.domain.league import League, Platform
 from fantasy_helper.domain.runs import FailureKind, RunRecord, RunStatus
 from fantasy_helper.domain.users import Role, User
 from fantasy_helper.pipeline.daily import DailyResult
+from fantasy_helper.pipeline.freshness import mark_snapshot_complete
 from fantasy_helper.pipeline.ingest import IngestReport, LeagueResult
 from fantasy_helper.pipeline.weekly import WeeklyResult
 from fantasy_helper.storage import crypto
@@ -96,8 +99,9 @@ def no_snapshot_yet(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
 
 
 def snapshot_from(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, at: datetime) -> None:
+    """A store holding the marker a complete morning snapshot leaves (ADR 0028)."""
     store = LocalRawStore(tmp_path / "raw")
-    store.put(source="espn", dataset="game_logs", fetched_at=at, body=b"{}", meta={})
+    mark_snapshot_complete(store, run_set="morning", datasets=["espn.game_logs"], at=at)
     monkeypatch.setattr(cli_run, "open_raw_store", lambda _s: store)
 
 
@@ -150,7 +154,7 @@ def test_a_snapshot_that_arrives_during_the_wait_is_picked_up(
 
     def arrives(seconds: float) -> None:
         h.sleeps.append(seconds)
-        store.put(source="espn", dataset="game_logs", fetched_at=today(), body=b"{}", meta={})
+        mark_snapshot_complete(store, run_set="morning", datasets=[], at=today())
 
     monkeypatch.setattr(cli_run, "_sleep", arrives)
     result = runner.invoke(app, ["run", "daily", "--require-snapshot-today"])
@@ -260,3 +264,149 @@ def test_ingest_takes_its_turn_and_a_failure_exits_reported(
     failed = runner.invoke(app, ["ingest"])
     assert failed.exit_code == REPORTED_EXIT
     assert h.logged[-1].status is RunStatus.FAILED
+
+
+def with_next_job(
+    monkeypatch: pytest.MonkeyPatch, started: list[str], *, fails: bool = False
+) -> None:
+    """Make this run the middle of a chain: FH_NEXT_JOB is set, and starting the next job is
+    recorded (or refused) instead of calling Google."""
+    monkeypatch.setenv(
+        "FH_NEXT_JOB", "projects/fantasy-helper-123456/locations/us-east4/jobs/weekly"
+    )
+
+    def starter(resource: str) -> None:
+        if fails:
+            raise cloud_run.CloudRunError("HTTP 403")
+        started.append(resource)
+
+    real = _runs.start_next
+    monkeypatch.setattr(
+        cli_run, "start_next",
+        lambda settings, events, after: real(settings, events, after=after, starter=starter),
+    )  # fmt: skip
+
+
+def test_warnings_alone_dont_make_a_run_fail(
+    h: Harness, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A condition that lasts (a Sleeper player not linked yet, a matchup spanning two weeks, a
+    database nearing its quota) is a warning on the phone and DEGRADED in the log. It must not
+    exit non-zero: that would raise a "down" alert every morning and bury the real failures."""
+    snapshot_from(monkeypatch, tmp_path, today())
+
+    def warned(*_a: object, **_k: object) -> DailyResult:
+        league_ok = LeagueResult(league=league(), unresolved_players=2)  # loaded, with a warning
+        return DailyResult(ingest=IngestReport(leagues=[league_ok]))
+
+    monkeypatch.setattr(cli_run, "run_daily", warned)
+    result = runner.invoke(app, ["run", "daily", "--require-snapshot-today"])
+    assert result.exit_code == 0, result.output
+    assert h.beat.pings == ["start", "success"]
+    assert h.logged[0].status is RunStatus.DEGRADED  # the run log still says what it was
+
+    def warned_week(*_a: object, **_k: object) -> WeeklyResult:
+        league_ok = LeagueResult(league=league(), unresolved_players=2)
+        return WeeklyResult(ingest=IngestReport(leagues=[league_ok]))
+
+    monkeypatch.setattr(cli_run, "run_weekly", warned_week)
+    weekly = runner.invoke(app, ["run", "weekly", "--require-snapshot-today"])
+    assert weekly.exit_code == 0, weekly.output
+
+
+def test_the_daily_run_hands_on_to_the_weekly_one_when_it_finishes(
+    h: Harness, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    snapshot_from(monkeypatch, tmp_path, today())
+    monkeypatch.setattr(cli_run, "run_daily", clean_daily(h))
+    started: list[str] = []
+    with_next_job(monkeypatch, started)
+    result = runner.invoke(app, ["run", "daily", "--require-snapshot-today"])
+    assert result.exit_code == 0, result.output
+    assert started == ["projects/fantasy-helper-123456/locations/us-east4/jobs/weekly"]
+
+
+def test_the_weekly_one_starts_even_when_a_league_failed_in_the_daily_run(
+    h: Harness, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The overview is its own product and checks its own inputs; one league's failure in the
+    daily run shouldn't also cost the day's overview. The run still exits 3 and pings fail."""
+    snapshot_from(monkeypatch, tmp_path, today())
+
+    def one_failed(*_a: object, **_k: object) -> DailyResult:
+        report = IngestReport(leagues=[LeagueResult(league=league(), failure=FailureKind.AUTH)])
+        return DailyResult(ingest=report)
+
+    monkeypatch.setattr(cli_run, "run_daily", one_failed)
+    started: list[str] = []
+    with_next_job(monkeypatch, started)
+    result = runner.invoke(app, ["run", "daily", "--require-snapshot-today"])
+    assert result.exit_code == REPORTED_EXIT
+    assert len(started) == 1
+    assert h.beat.pings == ["start", "fail"]
+
+
+def test_a_daily_run_that_stopped_never_starts_the_weekly_one(
+    h: Harness, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    no_snapshot_yet(monkeypatch, tmp_path)  # the gate fails: this run never got going
+    monkeypatch.setattr(cli_run, "run_daily", clean_daily(h))
+    started: list[str] = []
+    with_next_job(monkeypatch, started)
+    result = runner.invoke(app, ["run", "daily", "--require-snapshot-today"])
+    assert result.exit_code == REPORTED_EXIT
+    assert started == []  # nothing is built on an incomplete snapshot, and nothing chains from it
+
+
+def test_a_dry_run_starts_nothing(
+    h: Harness, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    snapshot_from(monkeypatch, tmp_path, today())
+    monkeypatch.setattr(cli_run, "run_daily", clean_daily(h))
+    started: list[str] = []
+    with_next_job(monkeypatch, started)
+    result = runner.invoke(app, ["run", "daily", "--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert started == []
+
+
+def test_a_chain_that_cant_continue_alerts_and_fails_the_check(
+    h: Harness, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    snapshot_from(monkeypatch, tmp_path, today())
+    monkeypatch.setattr(cli_run, "run_daily", clean_daily(h))
+    with_next_job(monkeypatch, [], fails=True)
+    result = runner.invoke(app, ["run", "daily", "--require-snapshot-today"])
+    assert result.exit_code == REPORTED_EXIT
+    assert "couldn't start weekly: HTTP 403" in result.output
+    assert h.beat.pings == ["start", "fail"]
+
+
+def test_the_last_link_has_nothing_to_start(
+    h: Harness, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    snapshot_from(monkeypatch, tmp_path, today())
+    monkeypatch.setattr(
+        cli_run, "run_weekly", lambda *_a, **_k: WeeklyResult(ingest=IngestReport())
+    )
+    started: list[str] = []
+    monkeypatch.setattr(
+        cli_run, "start_next",
+        lambda settings, events, after: started.append(after),
+    )  # fmt: skip
+    result = runner.invoke(app, ["run", "weekly", "--require-snapshot-today"])
+    assert result.exit_code == 0, result.output
+    assert started == ["Weekly run"]  # called; with FH_NEXT_JOB unset it does nothing
+
+
+def test_a_bad_secret_fails_the_check_at_once_not_an_hour_later(
+    h: Harness, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Reading the settings is inside the watchdog now: a missing or invalid secret pings start
+    and fail immediately, so the alert comes at 06:18, not when the grace expires."""
+    monkeypatch.setenv("FH_ENCRYPTION_KEY", "too-short")
+    snapshot_from(monkeypatch, tmp_path, today())
+    result = runner.invoke(app, ["run", "daily", "--require-snapshot-today"])
+    assert result.exit_code == 1
+    assert "FH_ENCRYPTION_KEY is invalid" in result.output
+    assert h.beat.pings == ["start", "fail"]

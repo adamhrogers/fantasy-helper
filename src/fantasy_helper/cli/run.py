@@ -20,10 +20,15 @@ from fantasy_helper.cli._common import (
     watched,
     write_report_page,
 )
-from fantasy_helper.cli._runs import REQUIRE_SNAPSHOT_TODAY, run_to_completion
+from fantasy_helper.cli._runs import (
+    REQUIRE_SNAPSHOT_TODAY,
+    finish_run,
+    run_to_completion,
+    start_next,
+)
 from fantasy_helper.config import get_settings
 from fantasy_helper.domain.ports import SystemClock
-from fantasy_helper.domain.runs import RunKind, RunRecord, RunStatus
+from fantasy_helper.domain.runs import RunKind, RunRecord
 from fantasy_helper.observability.events import RunEvents, events_from_settings
 from fantasy_helper.observability.healthchecks import heartbeat_from_settings
 from fantasy_helper.pipeline.daily import DailyResult, daily_summary, run_daily
@@ -56,15 +61,17 @@ def daily(
 ) -> None:
     """Ingest, decide lock or pass for every open starter, log each call, build the report."""
     settings = get_settings()
-    url, key = require_db_and_key(settings)
-    store = open_raw_store(settings)
     clock = SystemClock()
     started = clock.now()
     events = events_from_settings(settings, RunKind.DAILY, label="Daily run")
+    # Everything, including reading the settings, runs inside the watchdog: a bad secret fails the
+    # check at once (and the phone hears) instead of an hour later at the end of its grace.
     with (
         watched(heartbeat_from_settings(settings, "daily")),
         crash_guard(settings, RunKind.DAILY, "Daily run"),
     ):
+        url, key = require_db_and_key(settings)
+        store = open_raw_store(settings)
         events.started()
 
         def once() -> DailyResult:
@@ -99,20 +106,25 @@ def daily(
         failed = [lg for lg in result.leagues if lg.failure] + [
             lg for lg in result.ingest.leagues if lg.failure
         ]
-        status = RunStatus.SUCCEEDED if not failed and not problems else RunStatus.DEGRADED
-        record_run_safely(url, RunRecord(
-            kind=RunKind.DAILY, status=status, started_at=started, ended_at=clock.now(),
-            errors=tuple(result.ingest.errors + result.ingest.warnings),
-        ))  # fmt: skip
-        if failed:
-            events.failed(detail, problems, urgent=not result.reports)
-        elif problems:
-            events.warned(problems, detail)
-        else:
-            events.succeeded(detail)
+        finish_run(
+            events,
+            kind=RunKind.DAILY,
+            started=started,
+            ended=clock.now(),
+            failed_parts=len(failed),
+            urgent=not result.reports,
+            detail=detail,
+            problems=problems,
+            errors=result.ingest.errors + result.ingest.warnings,
+            log_run=lambda run: record_run_safely(url, run),
+        )
         if open_report and path is not None:
             webbrowser.open(path.resolve().as_uri())
-        if status is not RunStatus.SUCCEEDED:
+        if not dry_run:
+            # The weekly overview is next in the morning chain: it starts when this run is done,
+            # whatever its result (it checks its own inputs), never before.
+            start_next(settings, events, after="Daily run")
+        if failed:
             raise typer.Exit(code=REPORTED_EXIT)  # the events above already told the phone
 
 
@@ -170,8 +182,6 @@ def weekly(
 ) -> None:
     """Ingest, then the weekly overview for every league: matchup, games, streaming moves."""
     settings = get_settings()
-    url, key = require_db_and_key(settings)
-    store = open_raw_store(settings)
     clock = SystemClock()
     started = clock.now()
     events = events_from_settings(settings, RunKind.WEEKLY, label="Weekly run")
@@ -179,6 +189,8 @@ def weekly(
         watched(heartbeat_from_settings(settings, "weekly")),
         crash_guard(settings, RunKind.WEEKLY, "Weekly run"),
     ):
+        url, key = require_db_and_key(settings)
+        store = open_raw_store(settings)
         events.started()
 
         def once() -> WeeklyResult:
@@ -225,18 +237,20 @@ def weekly(
 
         detail, problems = weekly_summary(result, attempts)
         failed = [lg for lg in result.leagues if lg.failure]
-        status = RunStatus.SUCCEEDED if not failed and not problems else RunStatus.DEGRADED
-        record_run_safely(url, RunRecord(
-            kind=RunKind.WEEKLY, status=status, started_at=started, ended_at=clock.now(),
-            errors=tuple(result.ingest.errors + result.ingest.warnings),
-        ))  # fmt: skip
-        if failed:
-            events.failed(detail, problems, urgent=not result.reports)
-        elif problems:
-            events.warned(problems, detail)
-        else:
-            events.succeeded(detail)
+        finish_run(
+            events,
+            kind=RunKind.WEEKLY,
+            started=started,
+            ended=clock.now(),
+            failed_parts=len(failed),
+            urgent=not result.reports,
+            detail=detail,
+            problems=problems,
+            errors=result.ingest.errors + result.ingest.warnings,
+            log_run=lambda run: record_run_safely(url, run),
+        )
         if open_report and path is not None:
             webbrowser.open(path.resolve().as_uri())
-        if status is not RunStatus.SUCCEEDED:
+        start_next(settings, events, after="Weekly run")  # the last link: nothing set, no-op
+        if failed:
             raise typer.Exit(code=REPORTED_EXIT)  # the events above already told the phone

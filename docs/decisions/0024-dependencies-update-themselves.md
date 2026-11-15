@@ -26,6 +26,9 @@ Monday 07:00 comes after the morning snapshot (06:17), so a merged update that b
 - **Auto-merging Python majors:** see Why.
 - **Requiring branches to be up to date before merging:** auto-merge doesn't update branches, so grouped PRs would stall behind each other. The Python and Actions PRs touch different files, and Dependabot rebases its PRs when they conflict.
 
+## Update, 2026-11-15: the deploy path waits for a person
+Part 2 made the deploy's identity far more powerful: it can deploy code that reads the prod database and the key that decrypts every league login (ADR 0027, 0028), and every action in the deploy job can ask GitHub for the token that identity uses. A week-old release (the cooldown) is too little review for that. So **`dependabot-auto-merge.yml` leaves a PR open when it changes `.github/workflows/deploy.yml`, the `Dockerfile` or `.dockerignore`**, even when CI passes. In practice that is every Docker update and every grouped Actions update (`actions/checkout` is in the deploy job); Python updates still merge themselves. A held PR stays open and Dependabot emails you; ask Claude to review and merge it ([runbooks/dependency-updates.md](../runbooks/dependency-updates.md)).
+
 ## Consequences
 - Adam does nothing routinely. A PR whose CI fails stays open; ask Claude to fix it or close it ([runbooks/dependency-updates.md](../runbooks/dependency-updates.md)).
 - GitHub doesn't start workflows from events made with its built-in token, so CI doesn't run again on `main` after a Dependabot merge: the PR's run is the gate. Once deploys run on pushes to `main` (M3 part 3), a dependency update ships with the next deploy rather than on its own.

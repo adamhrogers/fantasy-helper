@@ -309,12 +309,13 @@ expected value on day d  =  realized so far       (actual box scores, in league 
 ## 10. Pipeline and scheduling
 
 ```
-daily (06:45 ET):    ingest all leagues + snapshots (raw saved) → normalize → PREFLIGHT ✋
+snapshot (06:17 ET): every dataset of the morning set saved and validated → completion marker → starts daily
+daily (after it):    ingest all leagues + snapshots (raw saved) → normalize → PREFLIGHT ✋
                     → grade (close windows) → evaluate (append trajectory points for open takes/calls/trades)
                     → engine → FactSheets → brain (+ shadow setups) → guardrails → registry (frozen)
                     → ReportDocument → publish → push → run log record
                     → backup irreplaceable tables to R2 → database size check (alert at 60% / 80%)
-weekly (07:00 ET):   same spine + weekly overview, every morning (ADR 0026); the report card joins in M6
+weekly (after daily): same spine + weekly overview, every morning (ADR 0026, 0028); the report card joins in M6
 season end (Apr):   export the season to Parquet in R2 → verify counts → remove its bulky rows (§5.5)
 ```
 
@@ -322,7 +323,7 @@ Until M4 adds the brain, the daily run is **engine-only**: code writes every car
 
 - **Preflight checks (fail closed):** every rostered player has a projection; today's games are loaded; scoring settings match the league; the identity crosswalk covers 100% of rostered players; sources are fresher than the threshold.
 - **Idempotent** per (job, league, date), and stages can be resumed. **The scheduled runs also take turns** (one Postgres advisory lock for every run that writes) **and insist on this morning's snapshot** (`--require-snapshot-today`), so a double start can't ingest twice at once and a missing snapshot can't quietly produce a report from yesterday's box scores (ADR 0026). Each built report is saved in the `reports` table (§5.3), where the API reads it.
-- **Early schedule.** West Coast games end around 1:30 a.m. ET, and starting at about 4:30 ET leaves headroom before 8 a.m. The jobs run on Cloud Run Jobs, started on the minute by Cloud Scheduler (ADR 0025), after GitHub Actions cron proved hours late. The late-report alert and the Healthchecks watchdog cover the rest.
+- **The morning is a chain** (ADR 0028). West Coast games end around 1:30 a.m. ET, so box scores are in by 06:17, when Cloud Scheduler starts the snapshot (after GitHub Actions cron proved hours late, ADR 0025). The snapshot starts the daily run only if every dataset saved and passed, and the daily run starts the weekly one when it finishes: a chain of hand-overs, not three clocks. That leaves about 90 minutes before the 8 a.m. promise, and a late-report alert at 07:45 (Healthchecks' `daily` check) if the report isn't done.
 
 ---
 
