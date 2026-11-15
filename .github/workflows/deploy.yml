@@ -1,5 +1,6 @@
-# Builds the image and deploys the scheduled Cloud Run jobs (ADR 0025). Cloud Scheduler starts
-# them on the minute; this workflow only ships new code. No key file exists: GitHub proves who
+# Builds the image and deploys the Cloud Run jobs (ADR 0025, 0026, 0027). Cloud Scheduler starts
+# the scheduled ones on the minute; this workflow only ships new code, and migrates the database
+# before the jobs that use the new schema. No key file exists: GitHub proves who
 # it is to Google with a short-lived token (Workload Identity Federation), accepted only from
 # this repository's main branch (scripts/gcp-setup.sh).
 #
@@ -43,11 +44,16 @@ jobs:
       PROJECT: ${{ vars.GCP_PROJECT }}
       REGION: us-east4
       IMAGE: us-east4-docker.pkg.dev/${{ vars.GCP_PROJECT }}/fantasy-helper/app:${{ github.sha }}
+      # Two accounts. The snapshot jobs fetch public data and get no database and no encryption
+      # key; only the report jobs (and the migration) can reach the database and league logins.
       JOBS_SA: fh-jobs@${{ vars.GCP_PROJECT }}.iam.gserviceaccount.com
-      # Secret Manager secret -> the setting it fills (config/settings.py). Values never pass
-      # through GitHub: the job reads them from Secret Manager when it starts.
-      SECRETS: >-
+      REPORTS_SA: fh-reports@${{ vars.GCP_PROJECT }}.iam.gserviceaccount.com
+      # Setting = Secret Manager secret (config/settings.py). Values never pass through GitHub:
+      # each job reads them from Secret Manager when it starts.
+      SNAPSHOT_SECRETS: >-
         FH_R2_ENDPOINT=fh-r2-endpoint:latest,FH_R2_ACCESS_KEY_ID=fh-r2-access-key-id:latest,FH_R2_SECRET_ACCESS_KEY=fh-r2-secret-access-key:latest,FH_NTFY_TOPIC=fh-ntfy-topic:latest,FH_HEALTHCHECKS_PING_KEY=fh-healthchecks-ping-key:latest
+      DATABASE_SECRETS: >-
+        DATABASE_URL=fh-database-url:latest,FH_ENCRYPTION_KEY=fh-encryption-key:latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
@@ -97,19 +103,34 @@ jobs:
           docker run --rm "$IMAGE" version
           docker push "$IMAGE"
 
-      # One job per scheduled task, each with a fixed command, so the scheduler only needs to
-      # start a job, never to change what it runs. No retries: the snapshot retries inside
-      # itself, and a whole rerun would fetch everything twice.
-      - name: Deploy the jobs
+      # One job per task, each with a fixed command, so whoever starts a job only needs to start it,
+      # never to change what it runs. No retries: every run retries inside itself, and a whole
+      # rerun would fetch everything twice.
+      #   deploy NAME ACCOUNT SECRETS ARGS TIMEOUT MEMORY NEXT
+      # NEXT is the job this one starts when it finishes (the morning chain, ADR 0028: the
+      # snapshot, then the daily run, then the weekly one), or - for none. It becomes FH_NEXT_JOB.
+      # Each job may start only its NEXT (scripts/gcp-setup.sh). Cloud Scheduler starts only the
+      # morning snapshot; nothing else starts the daily or weekly run on a clock.
+      #
+      # The order matters. The snapshot jobs don't touch the database, so they go first. Then the
+      # database is migrated and the deploy waits for it: a failed migration stops here, and the
+      # report jobs keep running their old image against the old schema. Only after it succeeds
+      # do the report jobs move to code that expects the new tables.
+      - name: Deploy the jobs, migrating the database in between
         if: steps.fresh.outputs.newest == 'true'
         run: |
           deploy() {
+            envs=FH_ENV=prod,FH_RAW_STORE=r2,FH_LOG_JSON=true
+            [ "$7" = - ] || envs="$envs,FH_NEXT_JOB=projects/$PROJECT/locations/$REGION/jobs/$7"
             gcloud run jobs deploy "$1" --project "$PROJECT" --region "$REGION" --quiet \
-              --image "$IMAGE" --service-account "$JOBS_SA" \
-              --tasks 1 --max-retries 0 --task-timeout 30m --cpu 1 --memory 512Mi \
-              --set-env-vars FH_ENV=prod,FH_RAW_STORE=r2,FH_LOG_JSON=true \
-              --set-secrets "$SECRETS" \
-              --args "$2"
+              --image "$IMAGE" --service-account "$2" --set-secrets "$3" --args "$4" \
+              --tasks 1 --max-retries 0 --task-timeout "$5" --cpu 1 --memory "$6" \
+              --set-env-vars "$envs"
           }
-          deploy snapshot-morning snapshot,--set,morning
-          deploy snapshot-evening snapshot,--set,evening
+          REPORT_SECRETS="$SNAPSHOT_SECRETS,$DATABASE_SECRETS"
+          deploy snapshot-morning "$JOBS_SA" "$SNAPSHOT_SECRETS" snapshot,--set,morning 30m 512Mi daily
+          deploy snapshot-evening "$JOBS_SA" "$SNAPSHOT_SECRETS" snapshot,--set,evening 30m 512Mi -
+          deploy migrate "$REPORTS_SA" DATABASE_URL=fh-database-url:latest migrate 10m 512Mi -
+          gcloud run jobs execute migrate --project "$PROJECT" --region "$REGION" --wait
+          deploy daily "$REPORTS_SA" "$REPORT_SECRETS" run,daily,--require-snapshot-today 30m 1Gi weekly
+          deploy weekly "$REPORTS_SA" "$REPORT_SECRETS" run,weekly,--require-snapshot-today 30m 1Gi -

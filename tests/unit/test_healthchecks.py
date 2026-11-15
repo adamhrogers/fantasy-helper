@@ -1,8 +1,8 @@
 import httpx
 import pytest
-from structlog.testing import capture_logs
 
 from fantasy_helper.config import Settings
+from fantasy_helper.observability import healthchecks
 from fantasy_helper.observability.healthchecks import (
     MAX_BODY,
     HealthchecksHeartbeat,
@@ -11,6 +11,24 @@ from fantasy_helper.observability.healthchecks import (
 )
 
 KEY = "ping-key-very-secret"
+
+
+class _Log:
+    """Stands in for the module's logger. structlog caches a logger on first use, so once any
+    earlier test has made a heartbeat log, `capture_logs` can no longer see this module's."""
+
+    def __init__(self) -> None:
+        self.events: list[dict[str, object]] = []
+
+    def warning(self, event: str, **fields: object) -> None:
+        self.events.append({"event": event, **fields})
+
+
+@pytest.fixture
+def log(monkeypatch: pytest.MonkeyPatch) -> _Log:
+    recorder = _Log()
+    monkeypatch.setattr(healthchecks, "log", recorder)
+    return recorder
 
 
 def _heartbeat(handler: httpx.MockTransport) -> HealthchecksHeartbeat:
@@ -51,11 +69,12 @@ def test_pings_start_success_and_fail_on_one_run_id() -> None:
         httpx.MockTransport(lambda r: (_ for _ in ()).throw(httpx.ConnectError("down", request=r))),
     ],
 )
-def test_a_failed_ping_never_fails_the_run_or_logs_the_key(transport: httpx.MockTransport) -> None:
-    with capture_logs() as logs:
-        _heartbeat(transport).success()
-    assert [e["event"] for e in logs] == ["healthchecks_ping_failed"]
-    assert KEY not in repr(logs)
+def test_a_failed_ping_never_fails_the_run_or_logs_the_key(
+    transport: httpx.MockTransport, log: _Log
+) -> None:
+    _heartbeat(transport).success()
+    assert [e["event"] for e in log.events] == ["healthchecks_ping_failed"]
+    assert KEY not in repr(log.events)
 
 
 def test_no_ping_key_means_no_pings() -> None:
@@ -84,13 +103,12 @@ def test_a_key_pasted_with_a_newline_still_pings(monkeypatch: pytest.MonkeyPatch
     assert seen[0].url.path == f"/{KEY}/snapshot-morning/start"
 
 
-def test_a_key_that_cant_form_a_url_is_logged_not_raised() -> None:
+def test_a_key_that_cant_form_a_url_is_logged_not_raised(log: _Log) -> None:
     client = httpx.Client(transport=httpx.MockTransport(lambda _r: httpx.Response(200)))
     beat = HealthchecksHeartbeat(
         server="https://hc.example", ping_key="bad\x00key", slug="snapshot-morning", client=client
     )
-    with capture_logs() as logs:
-        beat.start()
-        beat.fail("x")
-    assert [e["error"] for e in logs] == ["InvalidURL", "InvalidURL"]
-    assert "bad" not in repr(logs)
+    beat.start()
+    beat.fail("x")
+    assert [e["error"] for e in log.events] == ["InvalidURL", "InvalidURL"]
+    assert "bad" not in repr(log.events)

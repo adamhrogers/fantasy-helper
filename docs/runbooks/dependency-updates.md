@@ -1,6 +1,6 @@
 # Dependency updates (Dependabot)
 
-**Written:** 2026-11-07. **Design:** ADR 0024. **Your part:** nothing routine. The one-time ruleset below was created on 2026-11-07.
+**Written:** 2026-11-07. **Design:** ADR 0024. **Your part:** nothing routine, except that PRs touching the deploy path wait for you to say so (below). The one-time ruleset was created on 2026-11-07.
 
 ## What happens on its own
 
@@ -8,6 +8,8 @@
 |---|---|---|
 | A security advisory affects a dependency | One grouped PR per ecosystem (Python, Actions), any version | CI runs; it merges itself when CI passes |
 | Mondays, 07:00 Eastern | One grouped PR per ecosystem with that week's updates, each release at least 7 days old. No Python major versions | Same |
+
+**Except** PRs that change the deploy path (`deploy.yml`, the `Dockerfile`, `.dockerignore`): those are tested but stay open, because that workflow can deploy code with access to the prod database. That's every Docker update and every grouped Actions update (ADR 0024, Update 2026-11-15). Python updates merge themselves.
 
 Merged PRs show up in `main`'s history as `Bump ...` commits. A PR whose CI fails stays open, and GitHub emails you about it.
 
@@ -52,6 +54,8 @@ EOF
 Also worth turning on, but optional: **Settings → General → Automatically delete head branches**, so merged branches don't pile up.
 
 ## When something needs you
+
+- **A Dependabot PR is open with green checks and hasn't merged.** It changes the deploy path (`deploy.yml`, the `Dockerfile` or `.dockerignore`: every Docker update, and every grouped Actions update because `actions/checkout` is in the deploy job), so the auto-merge job leaves it for a person (ADR 0024, Update 2026-11-15). Tell Claude "review and merge the held Dependabot PRs": it reads the diff, looks at what the new pin changed upstream, and merges.
 
 - **A Dependabot PR has a red check.** Tell Claude "fix or close the Dependabot PR". Don't merge it by hand with the admin bypass.
 - **The auto-merge job fails with "doesn't require these checks".** The ruleset is missing, or a CI job was renamed. Fix the ruleset as above, then open the PR's **Checks** tab and re-run the failed job.

@@ -33,3 +33,12 @@ def test_app_ignores_the_claude_code_api_key_variable(monkeypatch: pytest.Monkey
     """The app's key is FH_ANTHROPIC_API_KEY, so it can't come from the Claude Code shell."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-from-the-shell")
     assert Settings().anthropic_api_key is None
+
+
+def test_the_next_job_in_the_morning_chain_is_unset_unless_the_deploy_sets_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert Settings().next_job is None  # the laptop: a hand run never starts a cloud job
+    job = "projects/fantasy-helper-123456/locations/us-east4/jobs/weekly"
+    monkeypatch.setenv("FH_NEXT_JOB", job)
+    assert Settings().next_job == job

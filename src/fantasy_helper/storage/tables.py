@@ -461,6 +461,30 @@ class RecommendationRow(Base):
     is_shadow: Mapped[bool] = mapped_column(Boolean)
 
 
+# ------------------------------------------------------------------ M3: reports (ADR 0026)
+
+
+class ReportRow(Base):
+    """The daily and weekly reports the scheduled runs build: one per league, kind and date,
+    replaced when a run repeats. The cards are derived from calls in the registry, which is
+    never edited, so a report is rebuildable. The API reads the latest with one indexed query."""
+
+    __tablename__ = "reports"
+    __table_args__ = (
+        UniqueConstraint("league_id", "kind", "for_date"),
+        Index("ix_reports_user_id_kind_for_date", "user_id", "kind", "for_date"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    league_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("leagues.id", ondelete="CASCADE"))
+    kind: Mapped[str] = mapped_column(Text)
+    for_date: Mapped[date] = mapped_column(Date)
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    engine_only: Mapped[bool] = mapped_column(Boolean)
+    cards: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
+
+
 # ------------------------------------------------------------- M2: read models (ADR 0020)
 
 

@@ -18,10 +18,15 @@ uv run fh doctor                          # check config, encryption, DB, tracin
 uv run fh snapshot                        # save today's raw public data (GitHub Actions, twice a day)
 uv run fh raw upload [--dry-run]          # copy local raw snapshots to R2 (never overwrites)
 uv run fh ingest                          # load leagues + snapshots into the database (idempotent)
+uv run fh migrate                         # bring DATABASE_URL's schema to head (the deploy runs this in the cloud)
+uv run fh report open [weekly]            # show the latest report saved in the database
 uv run fh run daily [--dry-run] [--open]  # ingest, lock-or-pass calls (logged), daily report page
 uv run fh run weekly [--open]             # ingest, weekly overview per league (FactSheets, calls)
 uv run fh fixtures record                 # re-record redacted fixtures (then update contract test counts)
 scripts/snapshot-schedule.sh status       # snapshot schedule state and logs
+scripts/fh-prod.sh league add ...         # ONE fh command against prod (league|report|doctor only); secrets never touch disk
+scripts/gcp-setup.sh infra|schedule|show  # Google Cloud: accounts, secrets, jobs, schedules (docs/runbooks/scheduled-jobs.md)
+scripts/healthchecks-setup.sh             # set the Healthchecks schedules from scripts/jobs.conf (always Eastern)
 ```
 
 ## Rules that are never broken

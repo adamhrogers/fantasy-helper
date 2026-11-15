@@ -9,14 +9,17 @@ import typer
 from typer.testing import CliRunner
 
 from fantasy_helper import __version__
+from fantasy_helper.adapters import cloud_run
+from fantasy_helper.cli import _runs
 from fantasy_helper.cli import main as cli_main
 from fantasy_helper.cli._common import REPORTED_EXIT, watched
+from fantasy_helper.cli.doctor import supabase_region
 from fantasy_helper.cli.main import app
 from fantasy_helper.domain.calendar import NBA_TIMEZONE
-from fantasy_helper.domain.runs import RunKind, RunRecord, RunStatus
+from fantasy_helper.domain.runs import FailureKind, RunKind, RunRecord, RunStatus
 from fantasy_helper.observability.healthchecks import HealthchecksHeartbeat
 from fantasy_helper.pipeline.cron import CRON_ENTRIES
-from fantasy_helper.pipeline.snapshot import SnapshotResult, SnapshotSet
+from fantasy_helper.pipeline.snapshot import DatasetResult, SnapshotResult, SnapshotSet
 from fantasy_helper.storage import crypto, r2_store
 from fantasy_helper.storage.raw_store import LocalRawStore, RawStoreError
 from tests.fake_s3 import FakeS3, client_error, fake_store
@@ -320,3 +323,149 @@ def test_a_broken_ping_key_never_stops_the_snapshot(
     result = runner.invoke(app, ["snapshot", "--set", "evening"])
     assert ran == [True]
     assert result.exit_code == 0, result.output
+
+
+@pytest.mark.parametrize(
+    ("url", "region"),
+    [
+        (
+            "postgresql://postgres.abc:pw@aws-0-us-east-1.pooler.supabase.com:5432/postgres",
+            "us-east-1",
+        ),
+        (
+            "postgresql://postgres.abc:pw@aws-1-eu-west-2.pooler.supabase.com:6543/postgres",
+            "eu-west-2",
+        ),
+        (
+            "postgresql://u@db.abc.supabase.co:5432/postgres",
+            None,
+        ),  # the direct host names no region
+        ("postgresql://fh@localhost:54329/fh_test", None),
+    ],
+)
+def test_the_doctor_names_the_supabase_region_from_the_pooler_host(
+    url: str, region: str | None
+) -> None:
+    assert supabase_region(url) == region
+
+
+# ---- the morning chain: the snapshot hands on only when everything saved (ADR 0028)
+
+NEXT = "projects/fantasy-helper-123456/locations/us-east4/jobs/daily"
+
+
+def _morning(*, failed: int = 0, run_set: SnapshotSet = SnapshotSet.MORNING) -> SnapshotResult:
+    now = datetime.now(UTC)
+    ok = DatasetResult("espn.players_projections", "k", 10, 100, now, None)
+    bad = DatasetResult("sleeper.players", None, 0, 0, now, "HTTP 500", FailureKind.SERVER_ERROR)
+    results = (ok, *([bad] * failed))
+    status = RunStatus.SUCCEEDED if not failed else RunStatus.DEGRADED
+    run = RunRecord(kind=RunKind.SNAPSHOT, status=status, started_at=now, ended_at=now)
+    return SnapshotResult(run_set=run_set, run=run, results=results, recorded=False)
+
+
+class _Chain:
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, fails: bool = False):
+        self.store = LocalRawStore(tmp_path)
+        self.started: list[str] = []
+        monkeypatch.setattr(cli_main, "raw_store_from_settings", lambda _s: self.store)
+
+        def starter(resource: str) -> None:
+            if fails:
+                raise cloud_run.CloudRunError("HTTP 503")
+            self.started.append(resource)
+
+        real = _runs.start_next  # the real one, with the Google call swapped for `starter`
+        monkeypatch.setattr(
+            cli_main, "start_next",
+            lambda settings, events, after: real(settings, events, after=after, starter=starter),
+        )  # fmt: skip
+
+    @property
+    def markers(self) -> int:
+        return len(self.store.keys("fh", "snapshot_complete"))
+
+
+def test_a_complete_morning_snapshot_is_marked_and_starts_the_daily_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    chain = _Chain(monkeypatch, tmp_path)
+    monkeypatch.setenv("FH_NEXT_JOB", NEXT)
+    monkeypatch.setattr(cli_main, "run_snapshot", lambda *_a, **_k: _morning())
+    result = runner.invoke(app, ["snapshot", "--set", "morning"])
+    assert result.exit_code == 0, result.output
+    assert chain.markers == 1
+    assert chain.started == [NEXT]
+    assert "the morning set is complete" in result.output
+
+
+def test_on_the_laptop_a_complete_snapshot_is_marked_but_starts_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    chain = _Chain(monkeypatch, tmp_path)  # FH_NEXT_JOB isn't set
+    monkeypatch.setattr(cli_main, "run_snapshot", lambda *_a, **_k: _morning())
+    result = runner.invoke(app, ["snapshot", "--set", "morning"])
+    assert result.exit_code == 0, result.output
+    assert (chain.markers, chain.started) == (1, [])
+
+
+def test_an_incomplete_morning_snapshot_starts_nothing_and_says_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One dataset failed: no marker, so the daily run can't start from it, and the daily
+    run's late-report check tells the phone the report isn't coming."""
+    chain = _Chain(monkeypatch, tmp_path)
+    monkeypatch.setenv("FH_NEXT_JOB", NEXT)
+    monkeypatch.setattr(cli_main, "run_snapshot", lambda *_a, **_k: _morning(failed=1))
+    result = runner.invoke(app, ["snapshot", "--set", "morning"])
+    assert result.exit_code == REPORTED_EXIT  # the snapshot itself is degraded
+    assert (chain.markers, chain.started) == (0, [])
+    assert "the morning set is incomplete (1 of 2 datasets failed)" in result.output
+
+
+@pytest.mark.parametrize(
+    "args",
+    [["--set", "morning", "--only", "espn.game_logs"], ["--set", "evening"]],
+    ids=["a partial backfill", "the evening set"],
+)
+def test_only_a_whole_morning_set_completes_anything(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, args: list[str]
+) -> None:
+    chain = _Chain(monkeypatch, tmp_path)
+    monkeypatch.setenv("FH_NEXT_JOB", NEXT)
+    monkeypatch.setattr(
+        cli_main, "run_snapshot",
+        lambda *_a, **_k: _morning(run_set=SnapshotSet(args[1])),
+    )  # fmt: skip
+    result = runner.invoke(app, ["snapshot", *args])
+    assert result.exit_code == 0, result.output
+    assert (chain.markers, chain.started) == (0, [])
+
+
+def test_a_chain_that_cant_continue_alerts_after_the_data_is_safe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    chain = _Chain(monkeypatch, tmp_path, fails=True)
+    monkeypatch.setenv("FH_NEXT_JOB", NEXT)
+    monkeypatch.setattr(cli_main, "run_snapshot", lambda *_a, **_k: _morning())
+    result = runner.invoke(app, ["snapshot", "--set", "morning"])
+    assert result.exit_code == REPORTED_EXIT
+    assert chain.markers == 1  # everything was saved and marked; only the hand-over broke
+    assert "couldn't start daily: HTTP 503" in result.output
+
+
+def test_a_marker_that_cant_be_written_stops_the_chain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    chain = _Chain(monkeypatch, tmp_path)
+    monkeypatch.setenv("FH_NEXT_JOB", NEXT)
+    monkeypatch.setattr(cli_main, "run_snapshot", lambda *_a, **_k: _morning())
+
+    def refuse(*_a: object, **_k: object) -> str:
+        raise RawStoreError("R2 refused the write")
+
+    monkeypatch.setattr(chain.store, "put", refuse)
+    result = runner.invoke(app, ["snapshot", "--set", "morning"])
+    assert result.exit_code == REPORTED_EXIT
+    assert chain.started == []
+    assert "completion marker not written" in result.output

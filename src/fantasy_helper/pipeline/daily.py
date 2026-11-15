@@ -3,7 +3,8 @@
 1. Ingest: fresh league data plus every new snapshot (box scores included).
 2. For every lock-in league: load the facts, decide lock or pass for each open starter, and log
    each call in the registry before his next tip (never edited; a rerun logs nothing new).
-3. Build one daily ReportDocument per lock-in league from what was logged.
+3. Build one daily ReportDocument per lock-in league from what was logged, and save it (a
+   rerun replaces the same day's report, ADR 0026).
 
 Each league runs in its own savepoint, so one league failing never stops the others.
 """
@@ -39,6 +40,7 @@ from fantasy_helper.registry.calls import log_call
 from fantasy_helper.reports.daily import lock_in_report
 from fantasy_helper.storage.raw_store import RawStore
 from fantasy_helper.storage.repositories import league_data, leagues, nba
+from fantasy_helper.storage.repositories import reports as saved_reports
 from fantasy_helper.storage.tables import PlayerGameStatRow
 
 log = get_logger(__name__)
@@ -155,12 +157,11 @@ def _lock_in_league(
         logged, created = log_call(session, rec, dedupe_key(starter), now=now)
         calls.append((starter, logged))
         new += int(created)
-    return LeagueDaily(
-        league,
-        report=lock_in_report(sheet, calls, user_id=user.id, generated_at=now),
-        calls=len(calls),
-        new_calls=new,
-    )
+    report = lock_in_report(sheet, calls, user_id=user.id, generated_at=now)
+    # Saved inside this league's savepoint, with its calls. A rerun keeps the first saved id, so the
+    # report handed on (to the push, the run summary) carries the id that's actually stored.
+    report = report.model_copy(update={"id": saved_reports.save(session, report)})
+    return LeagueDaily(league, report=report, calls=len(calls), new_calls=new)
 
 
 def check_summary(checks: list[LeagueCheck]) -> str:
