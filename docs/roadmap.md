@@ -136,7 +136,8 @@ These steps depend on each other, so they're ordered. B and C run in parallel at
 - **Found 2026-11-14:** GitHub's scheduler started every cloud snapshot hours late for a week (none dropped). Timed jobs need another trigger before part 2's scheduled runs are useful (session-handoff §7).
 - **Decided 2026-11-14 (ADR 0025):** timed jobs move to Cloud Run Jobs started by Cloud Scheduler, watched by Healthchecks ([runbooks/scheduled-jobs.md](runbooks/scheduled-jobs.md)).
 - **Snapshots on Cloud Run: live** since 2026-11-14 (PRs #12, #14), tested end to end, Healthchecks schedules set. The laptop retires after four on-time runs in a row, counting from 2026-11-15 06:17.
-- **Next:** part 2, the prod database, and the daily and weekly reports on the same scheduler.
+- **Part 2 (2026-11-15, PR open):** reports saved in a `reports` table; `migrate`, `daily` and `weekly` as Cloud Run jobs (06:45 and 07:00 Eastern, every morning); a freshness gate and a run lock; the prod database migrated by the deploy; `scripts/fh-prod.sh`; Healthchecks schedules set by script. ADRs 0026 and 0027, [runbooks/prod-database.md](runbooks/prod-database.md).
+- **Next:** roll out part 2, then part 3 (the API and sign-in).
 
 | Lane | Work |
 |---|---|

@@ -11,6 +11,7 @@ from typer.testing import CliRunner
 from fantasy_helper import __version__
 from fantasy_helper.cli import main as cli_main
 from fantasy_helper.cli._common import REPORTED_EXIT, watched
+from fantasy_helper.cli.doctor import supabase_region
 from fantasy_helper.cli.main import app
 from fantasy_helper.domain.calendar import NBA_TIMEZONE
 from fantasy_helper.domain.runs import RunKind, RunRecord, RunStatus
@@ -320,3 +321,27 @@ def test_a_broken_ping_key_never_stops_the_snapshot(
     result = runner.invoke(app, ["snapshot", "--set", "evening"])
     assert ran == [True]
     assert result.exit_code == 0, result.output
+
+
+@pytest.mark.parametrize(
+    ("url", "region"),
+    [
+        (
+            "postgresql://postgres.abc:pw@aws-0-us-east-1.pooler.supabase.com:5432/postgres",
+            "us-east-1",
+        ),
+        (
+            "postgresql://postgres.abc:pw@aws-1-eu-west-2.pooler.supabase.com:6543/postgres",
+            "eu-west-2",
+        ),
+        (
+            "postgresql://u@db.abc.supabase.co:5432/postgres",
+            None,
+        ),  # the direct host names no region
+        ("postgresql://fh@localhost:54329/fh_test", None),
+    ],
+)
+def test_the_doctor_names_the_supabase_region_from_the_pooler_host(
+    url: str, region: str | None
+) -> None:
+    assert supabase_region(url) == region

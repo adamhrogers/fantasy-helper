@@ -11,6 +11,7 @@ from fantasy_helper.adapters.espn.mapper import EspnMappingError
 from fantasy_helper.adapters.sleeper.league import SleeperLookupError
 from fantasy_helper.domain.runs import FailureKind, RunKind
 from fantasy_helper.observability.events import RunEvents
+from fantasy_helper.pipeline.freshness import StaleSnapshotError
 from fantasy_helper.pipeline.retry import (
     MAX_ATTEMPTS,
     RunStoppedError,
@@ -53,6 +54,7 @@ def test_http_statuses(status: int, kind: FailureKind, retryable: bool) -> None:
         (json.JSONDecodeError("bad", "{", 0), FailureKind.BAD_RESPONSE),
         (RawStoreError("refusing to overwrite"), FailureKind.STORAGE),
         (RawStoreUnavailableError("R2 unreachable"), FailureKind.STORAGE_DOWN),
+        (StaleSnapshotError("from yesterday"), FailureKind.STALE_SNAPSHOT),
         (KeyError("oops"), FailureKind.BUG),
     ],
 )
@@ -66,6 +68,7 @@ def test_only_causes_that_can_clear_up_are_retried() -> None:
         FailureKind.NETWORK, FailureKind.SERVER_ERROR, FailureKind.RATE_LIMITED,
         FailureKind.BAD_RESPONSE, FailureKind.MISSING_INPUT, FailureKind.DATABASE,
         FailureKind.STORAGE_DOWN,  # R2 unreachable (M3): nothing was saved, so try again
+        FailureKind.STALE_SNAPSHOT,  # this morning's snapshot may just be minutes late
     }  # fmt: skip
 
 

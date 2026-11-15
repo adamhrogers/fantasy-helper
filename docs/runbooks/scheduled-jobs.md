@@ -1,13 +1,16 @@
 # Scheduled jobs on Google Cloud (Cloud Run Jobs + Cloud Scheduler)
 
-**Written:** 2026-11-14. **Design:** ADR 0025. **Who:** Claude runs the setup and checks. Adam adds the secret values, creates one R2 token, and sets two Healthchecks schedules.
+**Written:** 2026-11-14. **Design:** ADR 0025. **Who:** Claude runs the setup and checks. Adam adds the secret values, creates one R2 token, and sets the Healthchecks schedules. The report jobs and the migration (2026-11-15, ADR 0026 and 0027) are in [prod-database.md](prod-database.md).
 
 | Job | Runs | Command | Watchdog check |
 |---|---|---|---|
 | `snapshot-morning` | 06:17 Eastern | `fh snapshot --set morning` | `snapshot-morning` |
 | `snapshot-evening` | 17:17 Eastern | `fh snapshot --set evening` | `snapshot-evening` |
+| `daily` | 06:45 Eastern | `fh run daily --require-snapshot-today` | `daily` (grace 60 min: the 07:45 alert) |
+| `weekly` | 07:00 Eastern | `fh run weekly --require-snapshot-today` | `weekly` |
+| `migrate` | every deploy | `fh migrate` | none: the deploy waits for it |
 
-Part 2 adds the daily and weekly reports here.
+The times, and each check's grace, are in [`scripts/jobs.conf`](../../scripts/jobs.conf): Cloud Scheduler's entries and Healthchecks' schedules both come from it. The last three jobs are set up in [prod-database.md](prod-database.md).
 
 ## First-time setup (after the PR merges)
 
@@ -38,9 +41,7 @@ scripts/gcp-setup.sh schedule
 gcloud scheduler jobs run snapshot-evening --location us-east4
 ```
 
-- [x] **6. Adam: the Healthchecks schedules** (done 2026-11-14). Each check appears after its first ping. Open it, then **Change Schedule → Cron**:
-  - `snapshot-morning`: `17 6 * * *`, time zone `America/New_York`, grace **30 minutes**.
-  - `snapshot-evening`: `17 17 * * *`, time zone `America/New_York`, grace **30 minutes**.
+- [x] **6. Adam: the Healthchecks schedules** (typed in on 2026-11-14 and **saved in UTC**, the website's default, which raised a false "down" alert for the evening snapshot that night). Since 2026-11-15 they're set by `scripts/healthchecks-setup.sh`, from `scripts/jobs.conf`, always in `America/New_York` ([prod-database.md](prod-database.md), step 9). Don't type a schedule into the website.
 
 Then the overlap in [cloud-snapshots.md](cloud-snapshots.md) continues, with Cloud Run as the cloud copy.
 
@@ -113,6 +114,6 @@ Then revoke the old one at its source. To undo a bad value: `gcloud secrets vers
 ## Adding a scheduled job
 
 Three places, kept in step by `tests/unit/test_workflows.py`:
-1. A `deploy <job> <args>` line in `.github/workflows/deploy.yml`.
-2. An entry in `JOBS` in `scripts/gcp-setup.sh`, then `scripts/gcp-setup.sh infra` and `scripts/gcp-setup.sh schedule`.
-3. The job's Healthchecks schedule, after its first ping.
+1. A `deploy <job> <account> <secrets> <args> <timeout> <memory>` line in `.github/workflows/deploy.yml`.
+2. A `job|cron|grace` line in `scripts/jobs.conf`, then `scripts/gcp-setup.sh infra` (it creates the job) and, after the first deploy, `scripts/gcp-setup.sh schedule`.
+3. `scripts/healthchecks-setup.sh`, which sets the job's check from the same line.

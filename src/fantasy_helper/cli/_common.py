@@ -1,19 +1,27 @@
 """Helpers shared by `fh` command groups: exits, alerts, the watchdog, the database."""
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+from datetime import date
+from pathlib import Path
 
 import typer
 from sqlalchemy import pool
 from sqlalchemy.orm import Session
 
 from fantasy_helper.config import Settings
+from fantasy_helper.domain.reports import ReportDocument
 from fantasy_helper.domain.runs import RunKind
 from fantasy_helper.observability.events import events_from_settings
 from fantasy_helper.observability.healthchecks import Heartbeat
+from fantasy_helper.observability.logs import get_logger
+from fantasy_helper.reports.html import render
 from fantasy_helper.storage import crypto
 from fantasy_helper.storage.db import make_engine
 from fantasy_helper.storage.raw_store import RawStore, RawStoreError, raw_store_from_settings
+from fantasy_helper.storage.repositories import database
+
+log = get_logger(__name__)
 
 # Exit code for a failure the app has already sent to the phone. A scheduled workflow alerts on
 # any other failure, including a timeout, so nothing fails silently (run-events runbook).
@@ -40,6 +48,19 @@ def watched(heartbeat: Heartbeat) -> Iterator[None]:
         heartbeat.fail(f"stopped on an unexpected {type(exc).__name__}")
         raise
     heartbeat.success()
+
+
+@contextmanager
+def crash_guard(settings: Settings, kind: RunKind, label: str) -> Iterator[None]:
+    """A run that stops on something unexpected still tells the phone (an urgent alert naming only
+    the kind of failure), then exits REPORTED_EXIT. Exits the run chose for itself pass through."""
+    try:
+        yield
+    except typer.Exit:
+        raise
+    except Exception as exc:
+        log.exception("run_crashed", kind=kind.value, error=type(exc).__name__)
+        raise alert_crash(settings, kind, label, f"an unexpected {type(exc).__name__}") from exc
 
 
 def alert_crash(settings: Settings, kind: RunKind, label: str, what: str) -> typer.Exit:
@@ -86,3 +107,33 @@ def transaction(url: str) -> Iterator[Session]:
             yield session
     finally:
         engine.dispose()
+
+
+@contextmanager
+def pipeline_transaction(url: str) -> Iterator[Session]:
+    """A transaction for a run that writes: it waits its turn behind any other run first, so a
+    double start or an overlap can't ingest the same rows twice at once (ADR 0026)."""
+    with transaction(url) as session:
+        database.lock_pipeline(session)
+        yield session
+
+
+def write_report_page(
+    reports: Sequence[ReportDocument],
+    names: dict[str, str],
+    data_dir: Path,
+    name: str,
+    title: str,
+    *,
+    for_date: date | None = None,
+) -> Path | None:
+    """Until the phone app (M3 parts 3 and 4), a report is a local page under the git-ignored
+    data dir: reports/<date>/<name>.html."""
+    if not reports:
+        return None
+    day = for_date or reports[0].for_date
+    page = render(list(reports), title=title, league_names=names)
+    path = data_dir / "reports" / day.isoformat() / f"{name}.html"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(page, encoding="utf-8")
+    return path

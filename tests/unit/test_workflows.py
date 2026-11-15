@@ -105,22 +105,113 @@ def test_only_mains_newest_commit_deploys_and_daily() -> None:
 
 def test_deployed_secrets_match_the_setup_script_and_the_settings() -> None:
     """A secret named in one place and not the others would leave a job without a setting."""
-    mounted = dict(re.findall(r"(FH_\w+)=(fh-[\w-]+):latest", DEPLOY.read_text()))
+    mounted = dict(re.findall(r"(\w+)=(fh-[\w-]+):latest", DEPLOY.read_text()))
     aliases = {field.alias for field in Settings.model_fields.values()}
     assert set(mounted) <= aliases
-    assert sorted(mounted.values()) == sorted(_bash_array(SETUP, "SECRETS"))
-    assert sorted(mounted.values()) == sorted(
-        _bash_array(ROOT / "scripts" / "gcp-secrets.sh", "NAMES")
+    in_setup = set(_bash_array(SETUP, "SNAPSHOT_SECRETS")) | set(
+        _bash_array(SETUP, "DATABASE_SECRETS")
     )
+    assert set(mounted.values()) == in_setup
+    assert set(mounted.values()) == set(_bash_array(ROOT / "scripts" / "gcp-secrets.sh", "NAMES"))
 
 
-def test_every_scheduled_job_is_deployed_with_its_own_command() -> None:
-    deployed = dict(re.findall(r"^\s+deploy (\S+) (\S+)$", DEPLOY.read_text(), re.MULTILINE))
-    scheduled = [entry.split(":")[0] for entry in _bash_array(SETUP, "JOBS")]
-    assert sorted(deployed) == sorted(scheduled)
-    for job, args in deployed.items():
-        assert args == "snapshot,--set," + job.removeprefix("snapshot-")
+def _jobs_conf() -> list[tuple[str, str, int]]:
+    rows = []
+    for line in (ROOT / "scripts" / "jobs.conf").read_text().splitlines():
+        if line and not line.startswith("#"):
+            job, cron, grace = line.split("|")
+            rows.append((job, cron, int(grace)))
+    return rows
+
+
+def _deploy_calls() -> dict[str, tuple[str, str, str, str, str]]:
+    """job -> (account variable, secrets, args, timeout, memory), from the deploy step."""
+    pattern = r'^\s+deploy (\S+) "\$(\w+)" (\S+) (\S+) (\S+) (\S+)$'
+    return {
+        job: (account, secrets, args, timeout, memory)
+        for job, account, secrets, args, timeout, memory in re.findall(
+            pattern, DEPLOY.read_text(), re.MULTILINE
+        )
+    }
+
+
+EXPECTED_ARGS = {
+    "snapshot-morning": "snapshot,--set,morning",
+    "snapshot-evening": "snapshot,--set,evening",
+    "migrate": "migrate",
+    "daily": "run,daily,--require-snapshot-today",
+    "weekly": "run,weekly,--require-snapshot-today",
+}
+
+
+def test_every_job_is_deployed_with_its_own_command() -> None:
+    deployed = _deploy_calls()
+    scheduled = [job for job, _, _ in _jobs_conf()]
+    assert sorted(deployed) == sorted([*scheduled, *_bash_array(SETUP, "ONE_OFF_JOBS")])
+    assert {job: call[2] for job, call in deployed.items()} == EXPECTED_ARGS
     assert "--max-retries 0" in DEPLOY.read_text()  # a rerun would fetch everything twice
+
+
+def test_the_database_is_migrated_before_the_jobs_that_need_it_move() -> None:
+    """A failed migration must stop the deploy while the report jobs still run the old code
+    against the old schema, and the snapshot jobs (no database) must not wait for it."""
+    text = DEPLOY.read_text()
+    order = [
+        text.index(marker)
+        for marker in (
+            "deploy snapshot-morning",
+            "deploy snapshot-evening",
+            "deploy migrate",
+            "gcloud run jobs execute migrate",
+            "deploy daily",
+            "deploy weekly",
+        )
+    ]
+    assert order == sorted(order)
+    execute = next(ln for ln in text.splitlines() if "jobs execute migrate" in ln)
+    assert "--wait" in execute  # without it the deploy would carry on while the migration runs
+
+
+def test_the_snapshot_jobs_never_get_the_database_or_the_key() -> None:
+    """The job that fetches from the public internet can't reach league logins."""
+    deployed = _deploy_calls()
+    for job, (account, secrets, *_rest) in deployed.items():
+        if job.startswith("snapshot-"):
+            assert (account, secrets) == ("JOBS_SA", '"$SNAPSHOT_SECRETS"')
+        else:
+            assert account == "REPORTS_SA", job
+    text = DEPLOY.read_text()
+    snapshot_secrets = text.split("SNAPSHOT_SECRETS: >-\n", 1)[1].split("\n", 1)[0]
+    assert "DATABASE_URL" not in snapshot_secrets
+    assert "FH_ENCRYPTION_KEY" not in snapshot_secrets
+    setup = SETUP.read_text()
+    assert "fh-database-url" not in " ".join(_bash_array(SETUP, "SNAPSHOT_SECRETS"))
+    assert 'snapshot-*) echo "$SA_JOBS" ;;' in setup  # the placeholder jobs match the deploy
+    # fh-jobs may read the snapshot secrets and only those.
+    assert (
+        'for secret in "${SNAPSHOT_SECRETS[@]}"; do\n'
+        '    quiet gcloud secrets add-iam-policy-binding "$secret" \\\n'
+        '      --member "serviceAccount:$SA_JOBS"'
+    ) in setup
+
+
+def test_the_job_table_is_what_cloud_scheduler_and_healthchecks_both_read() -> None:
+    rows = _jobs_conf()
+    assert [job for job, _, _ in rows] == [
+        "snapshot-morning", "snapshot-evening", "daily", "weekly"
+    ]  # fmt: skip
+    for job, cron, grace in rows:
+        assert len(cron.split()) == 5, job
+        assert grace >= 60, job
+    by_job = {job: (cron, grace) for job, cron, grace in rows}
+    # The daily report's check alerts at 07:45, the 8 a.m. promise (run-events runbook).
+    assert by_job["daily"] == ("45 6 * * *", 3600)
+    setup = SETUP.read_text()
+    assert 'done <"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/jobs.conf"' in setup
+    assert (
+        'CONF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/jobs.conf"'
+        in (ROOT / "scripts" / "healthchecks-setup.sh").read_text()
+    )
 
 
 def test_the_container_workflow_holds_nothing_secret() -> None:

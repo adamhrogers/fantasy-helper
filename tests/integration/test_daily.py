@@ -23,12 +23,19 @@ from fantasy_helper.domain.recommendations import (
     OutcomeWindow,
     Recommendation,
 )
+from fantasy_helper.domain.reports import ReportKind
 from fantasy_helper.pipeline.daily import run_daily
 from fantasy_helper.pipeline.lock_calls import ENGINE_PRODUCER
 from fantasy_helper.pipeline.weekly import run_weekly
 from fantasy_helper.registry.calls import TipOffPassedError, log_call
 from fantasy_helper.storage.repositories import leagues
-from fantasy_helper.storage.tables import FactSheetRow, LeaguePlayerValueRow, RecommendationRow
+from fantasy_helper.storage.repositories import reports as saved_reports
+from fantasy_helper.storage.tables import (
+    FactSheetRow,
+    LeaguePlayerValueRow,
+    RecommendationRow,
+    ReportRow,
+)
 from tests.integration.test_ingest import (
     KEY,
     NOW,
@@ -122,10 +129,19 @@ def test_the_daily_run_logs_each_call_once(session: Session, tmp_path: Path) -> 
     assert sleeper_check.method == "one game a week"
     assert sleeper_check.agreement.total > 0
 
+    # The report is saved with its calls, and reads back exactly as it was built.
+    (stored,) = saved_reports.for_user(session, owner.id, ReportKind.DAILY)
+    assert stored.cards == daily.report.cards
+    assert stored.for_date == daily.report.for_date
+    saved_id = stored.id
+
     again = run_daily(session, client, store=store, user=owner, key=KEY, clock=FixedClock())
     assert again.leagues[0].new_calls == 0  # a rerun logs nothing new
     assert again.leagues[0].calls == daily.calls
     assert count(session, RecommendationRow.id) == daily.calls
+    # A rerun replaces the day's report: still one row, still the first id.
+    assert count(session, ReportRow.id) == 1
+    assert saved_reports.for_user(session, owner.id, ReportKind.DAILY)[0].id == saved_id
 
 
 def test_the_weekly_run_builds_every_league_and_stores_its_facts(
@@ -157,6 +173,9 @@ def test_the_weekly_run_builds_every_league_and_stores_its_facts(
     calls = count(session, RecommendationRow.id)
     assert sheets == 3
     assert values > 0
+    assert count(session, ReportRow.id) == 3  # each league's overview is saved for the app
+    saved = saved_reports.for_user(session, owner.id, ReportKind.WEEKLY)
+    assert {r.league_id for r in saved} == {lg.league.id for lg in result.leagues}
 
     again = run_weekly(session, client, store=store, user=owner, key=KEY, clock=FixedClock())
     assert all(lg.new_calls == 0 for lg in again.leagues)  # calls are logged once
@@ -166,6 +185,7 @@ def test_the_weekly_run_builds_every_league_and_stores_its_facts(
     assert categories.sheet is not None
     assert all(p.value_over_replacement is None for p in categories.sheet.my_players)
     assert count(session, RecommendationRow.id) == calls
+    assert count(session, ReportRow.id) == 3  # replaced, not appended
 
 
 def test_merging_a_player_clears_his_cached_values(session: Session) -> None:

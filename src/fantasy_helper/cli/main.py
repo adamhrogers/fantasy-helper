@@ -11,8 +11,8 @@ from sqlalchemy.orm import Session
 from fantasy_helper import __version__
 from fantasy_helper.adapters._http import make_client
 from fantasy_helper.adapters.espn.public import GAME_LOG_DEPTH
-from fantasy_helper.cli import fixtures, leagues, raw, run
-from fantasy_helper.cli._common import REPORTED_EXIT, alert_crash, watched
+from fantasy_helper.cli import fixtures, leagues, raw, report, run
+from fantasy_helper.cli._common import REPORTED_EXIT, alert_crash, fail, watched
 from fantasy_helper.cli.doctor import Check, Status, run_checks
 from fantasy_helper.cli.ingest import ingest as ingest_command
 from fantasy_helper.config import Settings, get_settings
@@ -24,6 +24,7 @@ from fantasy_helper.observability.healthchecks import heartbeat_from_settings
 from fantasy_helper.observability.logs import configure_logging, get_logger
 from fantasy_helper.pipeline.cron import UnknownCronError, job_for
 from fantasy_helper.pipeline.snapshot import DATASETS, SnapshotSet, run_snapshot
+from fantasy_helper.storage import migrate as migrations
 from fantasy_helper.storage.crypto import generate_key
 from fantasy_helper.storage.db import make_engine
 from fantasy_helper.storage.raw_store import (
@@ -48,6 +49,7 @@ app.add_typer(leagues.app, name="league")
 app.add_typer(fixtures.app, name="fixtures")
 app.add_typer(run.app, name="run")
 app.add_typer(raw.app, name="raw")
+app.add_typer(report.app, name="report")
 app.command("ingest")(ingest_command)
 
 _SYMBOLS = {Status.OK: "✓", Status.SKIP: "-", Status.FAIL: "✗"}
@@ -63,6 +65,27 @@ def _main() -> None:
 def version() -> None:
     """Print the installed version."""
     typer.echo(__version__)
+
+
+@app.command("migrate")
+def migrate_command() -> None:
+    """Bring the database to the latest schema. The Cloud Run `migrate` job runs this on every
+    deploy, before the jobs that use the new tables (ADR 0027). Safe to repeat."""
+    settings = get_settings()
+    if settings.database_url is None:
+        raise fail("DATABASE_URL is not set (see .env.example)")
+    url = settings.database_url.get_secret_value()
+    engine = make_engine(url, poolclass=pool.NullPool)
+    try:
+        before = migrations.current_revision(engine)
+    finally:
+        engine.dispose()
+    migrations.upgrade(url)
+    head = migrations.head_revision()
+    if before == head:
+        typer.echo(f"already at head ({head}): nothing to do")
+    else:
+        typer.echo(f"migrated {before or 'an empty database'} to {head}")
 
 
 @app.command()

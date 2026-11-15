@@ -140,7 +140,7 @@ All of these live in one Python package, `src/fantasy_helper/`, with strict inte
 | NBA | `players` (canonical), `player_external_ids`, `nba_games` (schedule, tip times), `player_game_stats` (box scores: **the one source of truth for every league**, ADR 0022) |
 | Inputs | `projection_snapshots`, `projection_rows`, `news_items` |
 | Judgment | `watchlist_entries`, `takes` (player, claim text, **direction**, conviction 1–5, horizon, created_at) |
-| Brain | `runs` (the run log), `fact_sheets`, `league_player_values` (read model, §5.4), `agent_setups`, `reports` |
+| Brain | `runs` (the run log), `fact_sheets`, `league_player_values` (read model, §5.4), `agent_setups`, `reports` (one per league, kind and date, replaced on a rerun; ADR 0026) |
 | Evidence | `recommendations` (every field from the spec's registry table, plus `is_shadow`, `first_tip_utc`, `fact_sheet_id`), `recommendation_follows`, `grades` (outcome, metric, baseline, lift, grade, miss cause and its source), **`evaluation_points`** (one per open take, call or trade per night; §8.1), `report_cards`, `feedback` |
 
 **Gradable takes (refinement):** a free-text take can't be graded mechanically. The phone form asks for a **direction** (will beat or trail projections), a **horizon** (7, 14 or 30 days) and conviction, and keeps the one-line text for color. Code can then grade every take with no LLM.
@@ -309,19 +309,19 @@ expected value on day d  =  realized so far       (actual box scores, in league 
 ## 10. Pipeline and scheduling
 
 ```
-daily (≈04:30 ET):  ingest all leagues + snapshots (raw saved) → normalize → PREFLIGHT ✋
+daily (06:45 ET):    ingest all leagues + snapshots (raw saved) → normalize → PREFLIGHT ✋
                     → grade (close windows) → evaluate (append trajectory points for open takes/calls/trades)
                     → engine → FactSheets → brain (+ shadow setups) → guardrails → registry (frozen)
                     → ReportDocument → publish → push → run log record
                     → backup irreplaceable tables to R2 → database size check (alert at 60% / 80%)
-weekly (Mon AM):    same spine + weekly overview + report card per league
+weekly (07:00 ET):   same spine + weekly overview, every morning (ADR 0026); the report card joins in M6
 season end (Apr):   export the season to Parquet in R2 → verify counts → remove its bulky rows (§5.5)
 ```
 
 Until M4 adds the brain, the daily run is **engine-only**: code writes every card, including Sleeper lock-or-pass cards (M2). M4 adds the model-written prose around the same cards.
 
 - **Preflight checks (fail closed):** every rostered player has a projection; today's games are loaded; scoring settings match the league; the identity crosswalk covers 100% of rostered players; sources are fresher than the threshold.
-- **Idempotent** per (job, league, date), and stages can be resumed.
+- **Idempotent** per (job, league, date), and stages can be resumed. **The scheduled runs also take turns** (one Postgres advisory lock for every run that writes) **and insist on this morning's snapshot** (`--require-snapshot-today`), so a double start can't ingest twice at once and a missing snapshot can't quietly produce a report from yesterday's box scores (ADR 0026). Each built report is saved in the `reports` table (§5.3), where the API reads it.
 - **Early schedule.** West Coast games end around 1:30 a.m. ET, and starting at about 4:30 ET leaves headroom before 8 a.m. The jobs run on Cloud Run Jobs, started on the minute by Cloud Scheduler (ADR 0025), after GitHub Actions cron proved hours late. The late-report alert and the Healthchecks watchdog cover the rest.
 
 ---

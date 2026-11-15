@@ -5,19 +5,21 @@ import time
 import typer
 
 from fantasy_helper.adapters._http import make_client
-from fantasy_helper.cli._common import fail, open_raw_store, require_db_and_key, transaction
+from fantasy_helper.cli._common import (
+    REPORTED_EXIT,
+    crash_guard,
+    fail,
+    open_raw_store,
+    pipeline_transaction,
+    require_db_and_key,
+    transaction,
+)
+from fantasy_helper.cli._runs import run_to_completion
 from fantasy_helper.config import get_settings
 from fantasy_helper.domain.ports import SystemClock
 from fantasy_helper.domain.runs import RunKind, RunRecord, RunStatus
 from fantasy_helper.observability.events import RunEvents, events_from_settings
-from fantasy_helper.pipeline.ingest import (
-    MB,
-    IngestReport,
-    MissingSnapshotError,
-    phone_summary,
-    run_ingest,
-)
-from fantasy_helper.pipeline.retry import RunStoppedError, outcome, run_with_retries
+from fantasy_helper.pipeline.ingest import MB, IngestReport, phone_summary, run_ingest
 from fantasy_helper.storage.raw_store import RawStore
 from fantasy_helper.storage.repositories import users
 from fantasy_helper.storage.repositories.runs import record_run
@@ -36,63 +38,52 @@ def ingest() -> None:
     clock = SystemClock()
     started = clock.now()
     events = events_from_settings(settings, RunKind.INGEST, label="Ingest")
-    events.started()
-    # Ingest is idempotent, so a retry is simply another full run: whatever loaded stays loaded,
-    # and the leagues (or the whole run) that failed in a retryable way get another go.
-    try:
-        report, attempt = run_with_retries(
+    with crash_guard(settings, RunKind.INGEST, "Ingest"):
+        events.started()
+        # Ingest is idempotent, so a retry is simply another full run: whatever loaded stays
+        # loaded, and the leagues (or the whole run) that failed in a retryable way get another go.
+        report, attempt = run_to_completion(
             lambda: _run_once(url, key, store, events),
             events,
+            kind=RunKind.INGEST,
+            started=started,
+            now=clock.now,
             retryable_parts=_retryable_leagues,
             describe_parts=lambda r, n: (
                 f"{_retryable_leagues(r)} of {len(r.leagues)} leagues failed in a way a retry "
                 "can fix; everything else is saved.",
                 [p for p in phone_summary(r, n)[1] if "failed" in p],
             ),
-            passthrough=(MissingSnapshotError, typer.Exit),
+            after_stop="Nothing was saved (one transaction).",
+            log_failed=lambda run: _log_run(url, run),
             sleep=_sleep,
         )
-    except MissingSnapshotError as exc:
-        events.failed("No snapshot to load yet: run `fh snapshot` first.")
-        raise fail(str(exc)) from exc
-    except RunStoppedError as stop:
-        cause = stop.__cause__
-        _log_run(url, RunRecord(
-            kind=RunKind.INGEST, status=RunStatus.FAILED, started_at=started,
-            ended_at=clock.now(), errors=(f"{type(cause).__name__}: {cause}"[:500],),
-        ))  # fmt: skip
-        # The exception's text can hold league data; the phone gets only its kind.
-        events.failed(
-            f"Stopped: {outcome(stop.kind, stop.attempts)}. Nothing was saved (one transaction)."
-        )
-        typer.echo(f"✗ stopped: {type(cause).__name__}: {cause}", err=True)
-        raise typer.Exit(code=1) from cause
 
-    _print(report)
-    status = (
-        RunStatus.SUCCEEDED if not report.errors and not report.warnings else RunStatus.DEGRADED
-    )
-    rows = (
-        report.projection_rows
-        + report.injury_changes
-        + report.game_log_rows
-        + sum(lg.roster_entries + lg.matchups + lg.transactions for lg in report.leagues)
-    )
-    _log_run(url, RunRecord(
-        kind=RunKind.INGEST, status=status, started_at=started, ended_at=clock.now(),
-        rows_loaded=rows, errors=tuple(report.errors + report.warnings),
-    ))  # fmt: skip
-    detail, problems = phone_summary(report, attempt)
-    failed = [lg for lg in report.leagues if lg.failure is not None]
-    if failed:
-        events.failed(detail, problems, urgent=len(failed) == len(report.leagues))
-    elif problems:
-        events.warned(problems, detail)
-    else:
-        events.succeeded(detail)
-    typer.echo(f"ingest {status.value} after {attempt} attempt(s), run logged")
-    if report.errors:
-        raise typer.Exit(code=1)
+        _print(report)
+        status = (
+            RunStatus.SUCCEEDED if not report.errors and not report.warnings else RunStatus.DEGRADED
+        )
+        rows = (
+            report.projection_rows
+            + report.injury_changes
+            + report.game_log_rows
+            + sum(lg.roster_entries + lg.matchups + lg.transactions for lg in report.leagues)
+        )
+        _log_run(url, RunRecord(
+            kind=RunKind.INGEST, status=status, started_at=started, ended_at=clock.now(),
+            rows_loaded=rows, errors=tuple(report.errors + report.warnings),
+        ))  # fmt: skip
+        detail, problems = phone_summary(report, attempt)
+        failed = [lg for lg in report.leagues if lg.failure is not None]
+        if failed:
+            events.failed(detail, problems, urgent=len(failed) == len(report.leagues))
+        elif problems:
+            events.warned(problems, detail)
+        else:
+            events.succeeded(detail)
+        typer.echo(f"ingest {status.value} after {attempt} attempt(s), run logged")
+        if report.errors:
+            raise typer.Exit(code=REPORTED_EXIT)  # the events above already told the phone
 
 
 def _retryable_leagues(report: IngestReport) -> int:
@@ -100,7 +91,7 @@ def _retryable_leagues(report: IngestReport) -> int:
 
 
 def _run_once(url: str, key: bytes, store: RawStore, events: RunEvents) -> IngestReport:
-    with transaction(url) as session, make_client() as client:
+    with pipeline_transaction(url) as session, make_client() as client:
         owner = users.get_owner(session)
         if owner is None:
             raise fail("no user yet: run `fh league add` first")

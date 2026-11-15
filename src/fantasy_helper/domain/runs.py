@@ -45,6 +45,7 @@ class FailureKind(StrEnum):
     FORMAT_CHANGED = "format_changed"
     STORAGE = "storage"
     STORAGE_DOWN = "storage_down"  # the raw store (R2) couldn't be reached
+    STALE_SNAPSHOT = "stale_snapshot"  # this morning's snapshot isn't saved (yet)
     BUG = "bug"
 
     @property
@@ -60,7 +61,7 @@ class FailureKind(StrEnum):
 _RETRYABLE = frozenset({
     FailureKind.NETWORK, FailureKind.SERVER_ERROR, FailureKind.RATE_LIMITED,
     FailureKind.BAD_RESPONSE, FailureKind.MISSING_INPUT, FailureKind.DATABASE,
-    FailureKind.STORAGE_DOWN,
+    FailureKind.STORAGE_DOWN, FailureKind.STALE_SNAPSHOT,
 })  # fmt: skip
 _DESCRIPTIONS = {
     FailureKind.NETWORK: "couldn't connect",
@@ -74,6 +75,7 @@ _DESCRIPTIONS = {
     FailureKind.FORMAT_CHANGED: "the platform changed its data format (needs a code fix)",
     FailureKind.STORAGE: "couldn't save the file",
     FailureKind.STORAGE_DOWN: "the raw store (R2) was unreachable",
+    FailureKind.STALE_SNAPSHOT: "this morning's snapshot isn't saved yet",
     FailureKind.BUG: "a bug in our code",
 }
 

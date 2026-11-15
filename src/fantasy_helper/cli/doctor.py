@@ -1,10 +1,12 @@
 """`fh doctor`: check that this machine (or CI) is set up correctly, one check at a time."""
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 
 from sqlalchemy import pool, text
+from sqlalchemy.engine import make_url
 
 from fantasy_helper.config import Settings
 from fantasy_helper.domain.ports import Alert
@@ -64,6 +66,17 @@ def check_encryption(settings: Settings) -> Result:
     return Result(Check.ENCRYPTION, Status.OK, "AES-256-GCM key loads and round-trips")
 
 
+_POOLER_HOST = re.compile(r"^aws-\d+-(?P<region>[a-z0-9-]+)\.pooler\.supabase\.com$")
+
+
+def supabase_region(url: str) -> str | None:
+    """The Supabase region a pooler URL points at (aws-0-us-east-1.pooler.supabase.com), so the
+    doctor can show prod is in the region the API will run next to (ADR 0020). None for any
+    other host."""
+    match = _POOLER_HOST.match(make_url(url).host or "")
+    return match["region"] if match else None
+
+
 def check_database(settings: Settings) -> Result:
     if settings.database_url is None:
         return Result(Check.DATABASE, Status.SKIP, "DATABASE_URL not set (see .env.example)")
@@ -86,7 +99,11 @@ def check_database(settings: Settings) -> Result:
             f"Postgres {version}, migrations at {current or 'none'} but head is {head}"
             " (run: uv run alembic upgrade head)",
         )
-    return Result(Check.DATABASE, Status.OK, f"Postgres {version}, migrations at head ({head})")
+    region = supabase_region(settings.database_url.get_secret_value())
+    where = f", Supabase {region}" if region else ""
+    return Result(
+        Check.DATABASE, Status.OK, f"Postgres {version}, migrations at head ({head}){where}"
+    )
 
 
 def check_tracing(settings: Settings) -> Result:

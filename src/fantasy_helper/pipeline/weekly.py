@@ -69,6 +69,7 @@ from fantasy_helper.registry.calls import log_call
 from fantasy_helper.reports.weekly import weekly_report
 from fantasy_helper.storage.raw_store import RawStore
 from fantasy_helper.storage.repositories import leagues, nba, read_models
+from fantasy_helper.storage.repositories import reports as saved_reports
 from fantasy_helper.storage.tables import PlayerGameStatRow
 
 log = get_logger(__name__)
@@ -307,6 +308,7 @@ def _league_week(
             logged.append((key, stored))
             new += int(created)
     report = weekly_report(fact_sheet, logged, user_id=user.id, generated_at=now, lock_in=lock_in)
+    saved_reports.save(session, report)  # inside this league's savepoint, with its calls
     gap = None
     if fact_sheet.matchup and fact_sheet.matchup.my_banked is not None and ws.my_banked_reported:
         gap = round(fact_sheet.matchup.my_banked - ws.my_banked_reported, 1)

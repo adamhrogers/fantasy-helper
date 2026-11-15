@@ -38,6 +38,8 @@ Git keeps every version of every ADR (`git log -p docs/decisions/0011-*.md`), an
 | [0023](0023-cloud-snapshots-on-r2.md) | Cloud snapshots: GitHub Actions on Eastern time, raw store on R2, overlap before cutover | Accepted · 2026-11-06 |
 | [0024](0024-dependencies-update-themselves.md) | Dependencies update themselves: Dependabot PRs that merge once CI passes | Accepted · 2026-11-07 |
 | [0025](0025-timed-jobs-on-cloud-run.md) | Timed jobs run on Cloud Run Jobs, started by Cloud Scheduler | Accepted · 2026-11-14 |
+| [0026](0026-reports-saved-and-built-in-the-cloud.md) | Reports are saved, and built in the cloud every morning | Accepted · 2026-11-15 |
+| [0027](0027-operating-the-prod-database.md) | Operating the prod database: migrate on deploy, secrets per process, two accounts | Accepted · 2026-11-15 |
 
 ## Template
 

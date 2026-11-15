@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Google Cloud for the scheduled jobs (ADR 0025). Safe to re-run: each step checks before it
+# Google Cloud for the jobs (ADR 0025, 0026, 0027). Safe to re-run: each step checks before it
 # creates, and IAM bindings are idempotent. Needs gcloud signed in as the project owner and gh.
 #
 #   scripts/gcp-setup.sh infra      # APIs, image repository, service accounts, empty secrets,
@@ -16,17 +16,29 @@ SCHEDULER_LOCATION=us-east4           # Cloud Scheduler; checked against its loc
 REPO=fantasy-helper                   # Artifact Registry repository
 GITHUB_REPO=adamhrogers/fantasy-helper
 TIME_ZONE=America/New_York
-# Cloud Run job : schedule (Eastern time; the scheduler handles daylight saving itself)
-JOBS=("snapshot-morning:17 6 * * *" "snapshot-evening:17 17 * * *")
-# The secrets the jobs read, mapped to settings in .github/workflows/deploy.yml.
-SECRETS=(fh-r2-endpoint fh-r2-access-key-id fh-r2-secret-access-key fh-ntfy-topic fh-healthchecks-ping-key)
+# The scheduled jobs, as "job:cron" (Eastern time; the scheduler handles daylight saving itself),
+# read from the table Healthchecks' schedules come from too.
+JOBS=()
+while IFS='|' read -r job cron _grace; do
+  case "$job" in ''|'#'*) continue ;; esac
+  JOBS+=("$job:$cron")
+done <"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/jobs.conf"
+# Jobs nothing schedules: the deploy runs `migrate` itself, before the jobs that need new tables.
+ONE_OFF_JOBS=(migrate)
+# The secrets the jobs read, mapped to settings in .github/workflows/deploy.yml. The snapshot
+# jobs get the first group only: they fetch public data and never see the database or the key
+# that decrypts league logins. The report jobs and the migration get both.
+SNAPSHOT_SECRETS=(fh-r2-endpoint fh-r2-access-key-id fh-r2-secret-access-key fh-ntfy-topic fh-healthchecks-ping-key)
+DATABASE_SECRETS=(fh-database-url fh-encryption-key)
+SECRETS=("${SNAPSHOT_SECRETS[@]}" "${DATABASE_SECRETS[@]}")
 # A public sample image, only until the first deploy replaces it.
 PLACEHOLDER=us-docker.pkg.dev/cloudrun/container/job:latest
 
 PROJECT="$(gcloud config get-value project 2>/dev/null)"
 [[ -n "$PROJECT" ]] || { echo "no gcloud project set (gcloud config set project ...)" >&2; exit 1; }
 NUMBER="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')"
-SA_JOBS="fh-jobs@$PROJECT.iam.gserviceaccount.com"
+SA_JOBS="fh-jobs@$PROJECT.iam.gserviceaccount.com"          # the snapshot jobs
+SA_REPORTS="fh-reports@$PROJECT.iam.gserviceaccount.com"    # the report jobs and the migration
 SA_SCHEDULER="fh-scheduler@$PROJECT.iam.gserviceaccount.com"
 SA_DEPLOYER="fh-deployer@$PROJECT.iam.gserviceaccount.com"
 POOL=github
@@ -34,6 +46,14 @@ PROVIDER=github-actions
 
 step() { printf '\n== %s\n' "$*"; }
 quiet() { "$@" >/dev/null; }  # IAM commands print whole policies
+
+# Which account runs a job: the snapshot jobs get the one with no database access.
+account_for() {
+  case "$1" in
+    snapshot-*) echo "$SA_JOBS" ;;
+    *) echo "$SA_REPORTS" ;;
+  esac
+}
 
 infra() {
   step "APIs"
@@ -59,17 +79,22 @@ JSON
   rm -f "$policy"
 
   step "Service accounts"
-  for sa in fh-jobs:"Runs the scheduled jobs" fh-scheduler:"Starts the scheduled jobs" \
-            fh-deployer:"GitHub Actions deploys"; do
+  for sa in fh-jobs:"Runs the snapshot jobs (public data only)" \
+            fh-reports:"Runs the report jobs and the migration (database access)" \
+            fh-scheduler:"Starts the scheduled jobs" fh-deployer:"GitHub Actions deploys"; do
     name="${sa%%:*}"
     gcloud iam service-accounts describe "$name@$PROJECT.iam.gserviceaccount.com" >/dev/null 2>&1 ||
       gcloud iam service-accounts create "$name" --display-name "${sa#*:}"
   done
 
-  step "Secrets (empty until scripts/gcp-secrets.sh), readable by fh-jobs only"
+  step "Secrets (empty until scripts/gcp-secrets.sh): each readable only by the jobs that need it"
   for secret in "${SECRETS[@]}"; do
     gcloud secrets describe "$secret" >/dev/null 2>&1 ||
       gcloud secrets create "$secret" --replication-policy automatic
+    quiet gcloud secrets add-iam-policy-binding "$secret" \
+      --member "serviceAccount:$SA_REPORTS" --role roles/secretmanager.secretAccessor
+  done
+  for secret in "${SNAPSHOT_SECRETS[@]}"; do
     quiet gcloud secrets add-iam-policy-binding "$secret" \
       --member "serviceAccount:$SA_JOBS" --role roles/secretmanager.secretAccessor
   done
@@ -99,20 +124,22 @@ JSON
   quiet gcloud iam service-accounts add-iam-policy-binding "$SA_DEPLOYER" \
     --member "$principals" --role roles/iam.workloadIdentityUser
 
-  step "fh-deployer: push images to $REPO, and run the jobs as fh-jobs"
+  step "fh-deployer: push images to $REPO, and run the jobs as fh-jobs and fh-reports"
   quiet gcloud artifacts repositories add-iam-policy-binding "$REPO" --location "$REGION" \
     --member "serviceAccount:$SA_DEPLOYER" --role roles/artifactregistry.writer
-  quiet gcloud iam service-accounts add-iam-policy-binding "$SA_JOBS" \
-    --member "serviceAccount:$SA_DEPLOYER" --role roles/iam.serviceAccountUser
+  for account in "$SA_JOBS" "$SA_REPORTS"; do
+    quiet gcloud iam service-accounts add-iam-policy-binding "$account" \
+      --member "serviceAccount:$SA_DEPLOYER" --role roles/iam.serviceAccountUser
+  done
 
   # Job-level, so fh-deployer can't touch anything else in the project. If the first deploy
   # fails with PERMISSION_DENIED on a project-level permission, see scheduled-jobs.md.
   step "Jobs (placeholder image until the first deploy); fh-deployer may update only these"
-  for entry in "${JOBS[@]}"; do
+  for entry in "${JOBS[@]}" "${ONE_OFF_JOBS[@]}"; do
     job="${entry%%:*}"
     gcloud run jobs describe "$job" --region "$REGION" >/dev/null 2>&1 ||
       gcloud run jobs create "$job" --region "$REGION" --image "$PLACEHOLDER" \
-        --service-account "$SA_JOBS" --tasks 1 --max-retries 0
+        --service-account "$(account_for "$job")" --tasks 1 --max-retries 0
     quiet gcloud run jobs add-iam-policy-binding "$job" --region "$REGION" \
       --member "serviceAccount:$SA_DEPLOYER" --role roles/run.developer
   done

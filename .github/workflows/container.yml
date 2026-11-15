@@ -24,6 +24,20 @@ jobs:
     name: Image builds and starts
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # A throwaway database for the migration check below (nothing in it is real).
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: fh
+          POSTGRES_PASSWORD: fh
+          POSTGRES_DB: fh_image
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U fh -d fh_image"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
@@ -38,4 +52,17 @@ jobs:
         run: |
           docker run --rm fh:test version
           docker run --rm fh:test snapshot --help
+          docker run --rm fh:test run daily --help | grep -q require-snapshot-today
           [ "$(docker run --rm --entrypoint id fh:test -u)" != "0" ] || { echo "::error::the image runs as root"; exit 1; }
+
+      # The deploy migrates prod with this image (ADR 0027), so the migration files have to ship
+      # inside it. Migrate an empty database, check it again, and let the doctor confirm the head.
+      - name: Migrations ship in the image
+        env:
+          DATABASE_URL: postgresql://fh:fh@localhost:5432/fh_image
+        run: |
+          run() { docker run --rm --network host -e DATABASE_URL "$@"; }
+          run fh:test migrate | tee migrate.log
+          grep -q "migrated an empty database to" migrate.log
+          run fh:test migrate | grep -q "already at head"
+          run fh:test doctor --only database
