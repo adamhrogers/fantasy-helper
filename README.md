@@ -4,7 +4,7 @@ A personal fantasy basketball brain that tells you what to do, not just what hap
 
 Every morning it sends a short briefing to your phone: what happened last night, what moved in your league, and the moves to make today, all built on your league's own scoring rules. Tell it which players you believe in and it watches them for you. It keeps score on every call it makes, so by the end of the season you know exactly how much it helped.
 
-**Status (2026-11-15):** M0 to M2 done (data, scoring, the weekly overview, Sleeper lock-in). M3 (cloud delivery and the phone app) is under way: snapshots and reports already build themselves in the cloud every morning; the API and the app are next · see [docs/roadmap.md](docs/roadmap.md) and [docs/m3-plan.md](docs/m3-plan.md)
+**Status (2026-11-16):** M0 to M2 done (data, scoring, the weekly overview, Sleeper lock-in). M3 (cloud delivery and the phone app) is under way: snapshots and reports already build themselves in the cloud every morning, the API is live, and the phone app (`web/`) is built and waiting to be connected to Cloudflare; push notifications are next · see [docs/roadmap.md](docs/roadmap.md) and [docs/m3-plan.md](docs/m3-plan.md)
 
 ## How it's built
 

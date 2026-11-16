@@ -26,7 +26,7 @@ fantasy-helper/
 │   ├── deploy.yml                    # builds the image, deploys the Cloud Run jobs from main, migrating in between
 │   ├── snapshot.yml                  # a manual fallback for the snapshot (no schedule since 2026-11-16)
 │   ├── dependabot-auto-merge.yml     # Dependabot PRs merge once CI passes (ADR 0024)
-│   ├── web.yml                (M3)   # PWA typecheck · lint · build
+│   ├── web.yml                       # the phone app (web/): install · API types match openapi.json · typecheck · lint · tests · build · Worker dry run (PRs only, not required)
 │   └── evals.yml              (M6)   # regression replay when brain/ or prompts/ change
 │
 ├── src/fantasy_helper/
@@ -118,17 +118,24 @@ fantasy-helper/
 │   │   └── schemas.py                # the API's request and response models (web/openapi.json is generated from them)
 │   └── cli/                          # Typer: `fh version | keygen | doctor` (M0); `league add | ingest | run | grade | fixtures record | mcp serve | replay` later
 │
-├── web/                       (M3)   # PWA: Vite + React + TypeScript
-│   ├── package.json
-│   ├── vite.config.ts                # vite-plugin-pwa (manifest, service worker)
-│   ├── public/                       # icons, manifest.webmanifest
+├── web/                       (M3)   # PWA: Vite + React + TypeScript (built 2026-11-16; docs/runbooks/phone-app.md, part 2)
+│   ├── package.json                  # exact pins; `packageManager` pins npm 11 (Cloudflare's npm 10 can't install vitest)
+│   ├── .node-version                 # Node 24, for CI and Cloudflare
+│   ├── wrangler.jsonc                # an assets-only Cloudflare Worker named `fantasy-helper` (SPA fallback)
+│   ├── vite.config.ts                # vite-plugin-pwa in injectManifest mode; the build id comes from build-id.ts
+│   ├── openapi.json                  # the API's committed schema (`fh openapi`); `npm run gen:api` makes src/api/schema.d.ts from it
+│   ├── build-id.ts                   # the footer's build code: a hash of the app's sources, not the commit
+│   ├── .env.example                  # VITE_API_URL · VITE_SUPABASE_URL · VITE_SUPABASE_PUBLISHABLE_KEY · VITE_SIGN_IN_WITH_CODE
+│   ├── public/                       # _headers (CSP by pattern, cache rules) · icons · favicon; scripts/make_icons.py draws them
 │   └── src/
-│       ├── app/                      # shell, routing, tab bar, sign-in
-│       ├── features/                 # today/ · this-week/ · watchlist/ · scorecard/ · onboarding/ (M7) · chat/ (later)
-│       ├── components/cards/         # swipeable decision cards + feedback buttons
-│       ├── components/charts/ (M6)   # timeline graph: horizon band, event markers, final-grade marker (Recharts)
-│       ├── api/                      # client generated from FastAPI OpenAPI
-│       └── sw/                       # push handler, notification click → deep link
+│       ├── main.tsx · App.tsx        # shell, tabs (/today, /week), freshness banner, sign-out, update bar
+│       ├── config.ts · route.ts      # the three build variables, checked · the two paths
+│       ├── api/                      # client.ts (token in a header, never cached) · schema.d.ts (generated) · types.ts
+│       ├── auth/                     # Supabase sign-in: password, and the emailed code behind VITE_SIGN_IN_WITH_CODE
+│       ├── lib/                      # freshness.ts (today in the user's zone) · install.ts (iOS install help)
+│       ├── components/               # CardView (an unknown kind is a plain card) · ReportsView · SignIn · banners
+│       ├── sw.ts                     # the service worker: app shell only, nothing signed-in cached (push joins it in Phase 4)
+│       └── features/ · charts/       # (later) watchlist · scorecard · onboarding · chat · timeline graphs (M6)
 │
 ├── tests/
 │   ├── conftest.py
