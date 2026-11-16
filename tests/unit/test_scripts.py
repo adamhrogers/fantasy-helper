@@ -170,6 +170,16 @@ def test_the_secrets_script_checks_the_apis_three_values(tmp_path: Path) -> None
     assert "pw@" not in done.stdout + done.stderr
     done = run("gcp-secrets.sh", "fh-api-database-url", stdin=transaction + "\n", env=env)
     assert done.returncode == 0, done.stderr
+    # A pooler user must carry the project ref: a bare "postgres" is what failed in prod.
+    bare = f"postgresql://postgres:pw@{host}:6543/postgres"
+    for name, url in (
+        ("fh-api-database-url", bare),
+        ("fh-database-url", bare.replace("6543", "5432")),
+    ):
+        done = run("gcp-secrets.sh", name, stdin=url + "\n", env=env)
+        assert done.returncode == 1, name
+        assert "project ref" in done.stderr
+        assert "pw@" not in done.stdout + done.stderr
     for bad in ("http://abc.supabase.co", "https://abc.supabase.co/auth", "https://example.com"):
         done = run("gcp-secrets.sh", "fh-supabase-url", stdin=bad + "\n", env=env)
         assert done.returncode == 1, bad
@@ -206,7 +216,7 @@ done
 printf '%s\\n' "$args" >> "$FAKE_DIR/argv.txt"
 reply() { printf '%s\\n%s' "$1" "$2"; }
 case "$url" in
-  */healthz) reply '{"status": "ok"}' 200 ;;
+  */livez) reply '{"status": "ok"}' 200 ;;
   */auth/v1/otp)
     case "$data" in
       *example.invalid*) reply '{"msg": "Signups not allowed for otp"}' "${FAKE_SIGNUPS:-422}" ;;

@@ -70,6 +70,14 @@ for name in "${NAMES[@]}"; do
       exit 1
     fi
   fi
+  if [[ "$name" == fh-database-url || "$name" == fh-api-database-url ]] \
+    && [[ "$value" == *.pooler.supabase.com* ]] \
+    && [[ "$value" =~ ^postgres(ql)?://([^:@/]+) && "${BASH_REMATCH[2]}" != *.* ]]; then
+    echo "  ✗ $name: a Supabase pooler's user is postgres.<project ref>, not just postgres:" >&2
+    echo "    copy the string from Connect again; the user is the part before the first colon." >&2
+    unset value
+    exit 1
+  fi
   if [[ "$name" == fh-supabase-url && ! "$value" =~ ^https://[a-z0-9-]+\.supabase\.co$ ]]; then
     echo "  ✗ $name: expected https://<project>.supabase.co, nothing after .co" >&2
     unset value

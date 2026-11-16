@@ -401,9 +401,9 @@
   },
   "openapi": "3.1.0",
   "paths": {
-    "/healthz": {
+    "/livez": {
       "get": {
-        "operationId": "healthz_healthz_get",
+        "operationId": "livez_livez_get",
         "responses": {
           "200": {
             "content": {
@@ -416,7 +416,7 @@
             "description": "Successful Response"
           }
         },
-        "summary": "Healthz",
+        "summary": "Livez",
         "tags": [
           "ops"
         ]

@@ -113,7 +113,7 @@ fantasy-helper/
 │   │
 │   ├── observability/                # logs (redacting) · tracing (LangSmith) · alerts (ntfy) · cost accounting
 │   ├── api/                   (M3)   # FastAPI backend-for-frontend
-│   │   ├── app.py                    # /healthz · /v1/me · /v1/reports · /v1/push (ADR 0029); more routes come with M5
+│   │   ├── app.py                    # /livez · /v1/me · /v1/reports · /v1/push (ADR 0029); more routes come with M5
 │   │   ├── auth.py                   # Supabase JWT verification against its public keys; user id on every request
 │   │   └── schemas.py                # the API's request and response models (web/openapi.json is generated from them)
 │   └── cli/                          # Typer: `fh version | keygen | doctor` (M0); `league add | ingest | run | grade | fixtures record | mcp serve | replay` later

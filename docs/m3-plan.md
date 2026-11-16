@@ -140,7 +140,7 @@ Phase 0  part 2 rollout ──► Phase 1  end the overlap          (rollout; da
 - **A sign-in is tied to our user by its id, not its email.** Migration 0007 adds `users.auth_user_id` (nullable, unique). The first time a token arrives whose email matches a user with no `auth_user_id`, the API sets it; after that only the id is looked at. No match: 403. The API never creates a user. *Why:* emails change, ids don't, and the same code is what M7's invites need. Only fields Supabase sets are trusted (`sub`, `email`, `role`); never `user_metadata`, which the user can edit.
 - **The service is the same image, started with `fh serve`** (a new command that runs uvicorn on `$PORT`). One Dockerfile, one build, and `container.yml` can start it.
 - **Its own account, `fh-api`, with the least it needs:** its database URL and the Supabase URL. **No encryption key, no R2, no ping key.** A test fails if a change gives it the key, like the one for the snapshot jobs.
-- **Public at Cloud Run, private in the app.** The phone can't present Google credentials, so the service accepts unauthenticated requests at the platform (the owner grants that once, in `gcp-setup.sh`) and every route but `/healthz` requires a valid token. At most 2 instances, scale to zero.
+- **Public at Cloud Run, private in the app.** The phone can't present Google credentials, so the service accepts unauthenticated requests at the platform (the owner grants that once, in `gcp-setup.sh`) and every route but `/livez` requires a valid token. At most 2 instances, scale to zero.
 - **CORS is an allow-list** read from `FH_APP_ORIGINS`. Until Phase 3 knows the app's address, the secret holds a placeholder that matches nothing (`https://not-set.invalid`), because a secret with no value can't be mounted. Tokens travel in the `Authorization` header, never cookies.
 - **The schema is committed.** `fh openapi` prints it, `web/openapi.json` holds it, and a test fails when they differ, the same idea as `alembic check`.
 
@@ -154,7 +154,7 @@ Phase 0  part 2 rollout ──► Phase 1  end the overlap          (rollout; da
 
    | Route | Returns |
    |---|---|
-   | `GET /healthz` | `{"status": "ok", "version": ...}`. No token, no database |
+   | `GET /livez` | `{"status": "ok", "version": ...}`. No token, no database |
    | `GET /v1/me` | The user's name, time zone and leagues (id, name, platform) |
    | `GET /v1/reports/{daily\|weekly}?date=` | `{for_date, reports: [ReportDocument]}`, the latest date by default (`reports.for_user`, one query). Empty list when there are none, not a 404 |
    | `GET /v1/push/public-key` | The VAPID public key; 503 until Phase 4 sets it |
@@ -162,7 +162,7 @@ Phase 0  part 2 rollout ──► Phase 1  end the overlap          (rollout; da
 
 6. **CLI:** `fh serve`, `fh openapi`.
 7. **Cloud side:** in `scripts/gcp-setup.sh`: the `fh-api` account; secrets `fh-api-database-url`, `fh-supabase-url`, `fh-app-origins`; a placeholder service `api`; the deployer's role on that service and on `fh-api`; public access. In `scripts/gcp-secrets.sh`: the new names, and refuse a port-5432 URL for `fh-api-database-url` (the mirror of the existing check). In `deploy.yml`: deploy `api` **after** `migrate`, with `--min-instances 0 --max-instances 2`, 512 MiB, a 30-second timeout.
-8. **Tests:** the verifier against keys made in the test (good token; expired; wrong audience; wrong issuer; `HS256`; `none`; unknown key id). First sign-in links, second doesn't relink, unknown email is 403. **Two users in one database: A's token never returns B's reports or subscriptions** (the tenancy test M7 promises, started now). Routes through FastAPI's test client on Postgres. Workflow tests: the API's secrets, no encryption key, migrate before the service. `container.yml`: start the image with `serve` and fetch `/healthz`.
+8. **Tests:** the verifier against keys made in the test (good token; expired; wrong audience; wrong issuer; `HS256`; `none`; unknown key id). First sign-in links, second doesn't relink, unknown email is 403. **Two users in one database: A's token never returns B's reports or subscriptions** (the tenancy test M7 promises, started now). Routes through FastAPI's test client on Postgres. Workflow tests: the API's secrets, no encryption key, migrate before the service. `container.yml`: start the image with `serve` and fetch `/livez`.
 9. **`scripts/api-smoke.sh`:** signs in through Supabase with a code Adam types at a hidden prompt, calls each route, and prints statuses and counts only. The token never reaches the terminal or the chat.
 10. **Docs:** ADR 0029, `runbooks/phone-app.md`, accounts-and-secrets, architecture §9, the handoff.
 
