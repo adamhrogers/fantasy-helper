@@ -2,6 +2,8 @@
 scripts/readonly-login.sql against the migrated test database, the same file the setup script
 runs in prod."""
 
+import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -34,13 +36,18 @@ def apply_login(engine: Engine) -> None:
         raw.close()
 
 
+def drop_login(engine: Engine) -> None:
+    with engine.begin() as conn:
+        if conn.exec_driver_sql("select 1 from pg_roles where rolname = 'fh_readonly'").first():
+            conn.exec_driver_sql("DROP OWNED BY fh_readonly")
+            conn.exec_driver_sql("DROP ROLE fh_readonly")
+
+
 @pytest.fixture
 def login(engine: Engine) -> Iterator[None]:
     apply_login(engine)
     yield
-    with engine.begin() as conn:
-        conn.exec_driver_sql("DROP OWNED BY fh_readonly")
-        conn.exec_driver_sql("DROP ROLE fh_readonly")
+    drop_login(engine)
 
 
 def public_tables(conn: Connection) -> list[str]:
@@ -81,6 +88,39 @@ def test_it_reads_every_table_except_the_kept_out_ones_and_writes_none(
             assert can(conn, table, "SELECT") is (table not in KEPT_OUT), table
             for privilege in WRITES:
                 assert not can(conn, table, privilege), (table, privilege)
+
+
+def test_setup_doesnt_deadlock_with_an_analyze_running_on_a_table(engine: Engine) -> None:
+    """Autovacuum's analyze holds a light lock on a table, then waits for the table's catalog
+    row; a grant already holding that row and waiting for the table is a deadlock (seen in CI
+    on 2026-11-16). The setup locks every table first, so it only ever waits on the analyze."""
+    holding, failures = threading.Event(), []
+
+    def analyze() -> None:
+        raw = engine.raw_connection()
+        try:
+            cursor = raw.cursor()
+            cursor.execute("LOCK TABLE nba_games IN SHARE UPDATE EXCLUSIVE MODE")
+            holding.set()
+            time.sleep(0.7)  # long enough for the setup to reach this table, then analyze
+            cursor.execute("ANALYZE nba_games")
+            raw.commit()
+        except Exception as error:
+            failures.append(error)
+            holding.set()
+        finally:
+            raw.close()
+
+    other = threading.Thread(target=analyze)
+    other.start()
+    holding.wait()
+    try:
+        apply_login(engine)
+        other.join()
+        assert failures == []
+    finally:
+        other.join()
+        drop_login(engine)
 
 
 def test_row_level_security_shows_it_rows_only_in_the_tables_it_may_read(

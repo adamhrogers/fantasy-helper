@@ -36,6 +36,19 @@ DECLARE
   kept_out CONSTANT text[] := ARRAY['platform_credentials', 'push_subscriptions'];
   t record;
 BEGIN
+  -- Lock every table first, before changing any grant. A grant row-locks the table's catalog
+  -- entry, and autovacuum's analyze (which holds a lighter lock on the table and then waits
+  -- for that catalog row) would otherwise wait on this transaction while this transaction
+  -- waits on it for the table lock: a deadlock. Taking the table locks first means the
+  -- lock-holder is only waited on, never waiting on us (found in CI, 2026-11-16).
+  FOR t IN
+    SELECT c.relname
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
+    ORDER BY c.relname
+  LOOP
+    EXECUTE format('LOCK TABLE public.%I IN ACCESS EXCLUSIVE MODE', t.relname);
+  END LOOP;
   REVOKE ALL ON ALL TABLES IN SCHEMA public FROM fh_readonly;
   REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM fh_readonly;
   FOR t IN
