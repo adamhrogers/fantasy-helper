@@ -3,8 +3,9 @@
 # creates, and IAM bindings are idempotent. Needs gcloud signed in as the project owner and gh.
 #
 #   scripts/gcp-setup.sh infra      # APIs, image repository, service accounts, empty secrets,
-#                                   # keyless GitHub deploys, the jobs (placeholder image), and
-#                                   # the prod environment's variables
+#                                   # keyless GitHub deploys, the jobs and the API service
+#                                   # (placeholder images), public access to the API, and the
+#                                   # prod environment's variables
 #   scripts/gcp-setup.sh schedule   # Cloud Scheduler entries, after the first deploy
 #   scripts/gcp-setup.sh show       # what exists, no changes
 #
@@ -34,20 +35,28 @@ while IFS='|' read -r job cron _grace trigger; do
 done <"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/jobs.conf"
 # Jobs nothing schedules: the deploy runs `migrate` itself, before the jobs that need new tables.
 ONE_OFF_JOBS=(migrate)
+# The phone app's API is a service, not a job (ADR 0029).
+API_SERVICE=api
 # The secrets the jobs read, mapped to settings in .github/workflows/deploy.yml. The snapshot
 # jobs get the first group only: they fetch public data and never see the database or the key
 # that decrypts league logins. The report jobs and the migration get both.
 SNAPSHOT_SECRETS=(fh-r2-endpoint fh-r2-access-key-id fh-r2-secret-access-key fh-ntfy-topic fh-healthchecks-ping-key)
 DATABASE_SECRETS=(fh-database-url fh-encryption-key)
-SECRETS=("${SNAPSHOT_SECRETS[@]}" "${DATABASE_SECRETS[@]}")
-# A public sample image, only until the first deploy replaces it.
+# The API gets its own three and nothing else: its database URL (Supabase's transaction pooler, a
+# different string from the jobs'), the Supabase project it trusts sign-ins from, and the app's
+# addresses. No encryption key, no R2, no ping key, so it can never decrypt a league login.
+API_SECRETS=(fh-api-database-url fh-supabase-url fh-app-origins)
+SECRETS=("${SNAPSHOT_SECRETS[@]}" "${DATABASE_SECRETS[@]}" "${API_SECRETS[@]}")
+# Public sample images, only until the first deploy replaces them.
 PLACEHOLDER=us-docker.pkg.dev/cloudrun/container/job:latest
+PLACEHOLDER_SERVICE=us-docker.pkg.dev/cloudrun/container/hello:latest
 
 PROJECT="$(gcloud config get-value project 2>/dev/null)"
 [[ -n "$PROJECT" ]] || { echo "no gcloud project set (gcloud config set project ...)" >&2; exit 1; }
 NUMBER="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')"
 SA_JOBS="fh-jobs@$PROJECT.iam.gserviceaccount.com"          # the snapshot jobs
 SA_REPORTS="fh-reports@$PROJECT.iam.gserviceaccount.com"    # the report jobs and the migration
+SA_API="fh-api@$PROJECT.iam.gserviceaccount.com"            # the phone app's API
 SA_SCHEDULER="fh-scheduler@$PROJECT.iam.gserviceaccount.com"
 SA_DEPLOYER="fh-deployer@$PROJECT.iam.gserviceaccount.com"
 POOL=github
@@ -90,6 +99,7 @@ JSON
   step "Service accounts"
   for sa in fh-jobs:"Runs the snapshot jobs (public data only)" \
             fh-reports:"Runs the report jobs and the migration (database access)" \
+            fh-api:"Runs the phone app's API (its own database URL, no encryption key)" \
             fh-scheduler:"Starts the scheduled jobs" fh-deployer:"GitHub Actions deploys"; do
     name="${sa%%:*}"
     gcloud iam service-accounts describe "$name@$PROJECT.iam.gserviceaccount.com" >/dev/null 2>&1 ||
@@ -100,12 +110,18 @@ JSON
   for secret in "${SECRETS[@]}"; do
     gcloud secrets describe "$secret" >/dev/null 2>&1 ||
       gcloud secrets create "$secret" --replication-policy automatic
+  done
+  for secret in "${SNAPSHOT_SECRETS[@]}" "${DATABASE_SECRETS[@]}"; do
     quiet gcloud secrets add-iam-policy-binding "$secret" \
       --member "serviceAccount:$SA_REPORTS" --role roles/secretmanager.secretAccessor
   done
   for secret in "${SNAPSHOT_SECRETS[@]}"; do
     quiet gcloud secrets add-iam-policy-binding "$secret" \
       --member "serviceAccount:$SA_JOBS" --role roles/secretmanager.secretAccessor
+  done
+  for secret in "${API_SECRETS[@]}"; do
+    quiet gcloud secrets add-iam-policy-binding "$secret" \
+      --member "serviceAccount:$SA_API" --role roles/secretmanager.secretAccessor
   done
 
   step "Keyless deploys: only deploy.yml on $GITHUB_REPO's main branch can act as fh-deployer"
@@ -133,10 +149,10 @@ JSON
   quiet gcloud iam service-accounts add-iam-policy-binding "$SA_DEPLOYER" \
     --member "$principals" --role roles/iam.workloadIdentityUser
 
-  step "fh-deployer: push images to $REPO, and run the jobs as fh-jobs and fh-reports"
+  step "fh-deployer: push images to $REPO, and run the jobs and the API as fh-jobs, fh-reports and fh-api"
   quiet gcloud artifacts repositories add-iam-policy-binding "$REPO" --location "$REGION" \
     --member "serviceAccount:$SA_DEPLOYER" --role roles/artifactregistry.writer
-  for account in "$SA_JOBS" "$SA_REPORTS"; do
+  for account in "$SA_JOBS" "$SA_REPORTS" "$SA_API"; do
     quiet gcloud iam service-accounts add-iam-policy-binding "$account" \
       --member "serviceAccount:$SA_DEPLOYER" --role roles/iam.serviceAccountUser
   done
@@ -151,6 +167,19 @@ JSON
     quiet gcloud run jobs add-iam-policy-binding "$job" --region "$REGION" \
       --member "serviceAccount:$SA_DEPLOYER" --role roles/run.developer
   done
+
+  step "The API service $API_SERVICE (placeholder image); fh-deployer may update only this service"
+  gcloud run services describe "$API_SERVICE" --region "$REGION" >/dev/null 2>&1 ||
+    gcloud run deploy "$API_SERVICE" --region "$REGION" --image "$PLACEHOLDER_SERVICE" \
+      --service-account "$SA_API" --min-instances 0 --max-instances 2 --quiet
+  quiet gcloud run services add-iam-policy-binding "$API_SERVICE" --region "$REGION" \
+    --member "serviceAccount:$SA_DEPLOYER" --role roles/run.developer
+  # Public at the platform, private in the app: the phone can't present Google credentials, so
+  # Cloud Run lets anyone reach the service and the app checks every token itself (ADR 0029).
+  # Only this owner script can grant it; the deployer can't change IAM policy. If an organization
+  # policy blocks `allUsers`, this fails and the ADR's fallback is needed.
+  quiet gcloud run services add-iam-policy-binding "$API_SERVICE" --region "$REGION" \
+    --member allUsers --role roles/run.invoker
 
   step "The chain: each job may start the next one, and only that one"
   for entry in "${CHAINED[@]}"; do
@@ -215,6 +244,7 @@ schedule() {
 
 show() {
   step "Jobs";      gcloud run jobs list --region "$REGION"
+  step "The API";   gcloud run services list --region "$REGION" ||:
   step "The chain"; printf '%s\n' "${CHAINED[@]}" | sed 's/^\(.*\):\(.*\)$/\2 -> \1/'
   step "Schedules"; gcloud scheduler jobs list --location "$SCHEDULER_LOCATION" || echo "(none yet)"
   step "Secrets (versions, never values)"

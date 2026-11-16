@@ -10,7 +10,7 @@ This is the plan for everything between "part 2 is merged" and "M3 is done": six
 |---|---|---|
 | **0** | Finish part 2's rollout: leagues in prod, history loaded, first chained morning | **Done (2026-11-16).** All 11 runbook steps are ticked; the chain ran on its own at 06:17 on 2026-11-16 (snapshot, `daily`, `weekly` all succeeded by 06:20) |
 | **1** | End the snapshot overlap: retire launchd and the GitHub schedule | **Done 2026-11-16** except Adam's three laptop steps (upload the last copies, the laptop's own R2 key, `FH_RAW_STORE=r2`). He ended it after 3 of 4 on-time runs; the Mac's schedule is removed and GitHub's is dropped (PR #19) | Adam: runbook section 5, steps 2 to 4 |
-| **2** | Part 3: the API on Cloud Run, sign-in checked, reports served | Code written on branch `m3-part3-api` (pushed, no PR, held until the cloud setup is done); Adam's inputs and the cloud setup still to do |
+| **2** | Part 3: the API on Cloud Run, sign-in checked, reports served | **PR open, held until the cloud setup is done** (2026-11-16): the code, the cloud side in `scripts/gcp-setup.sh` and `deploy.yml`, `scripts/api-smoke.sh`, ADR 0029 and [runbooks/phone-app.md](runbooks/phone-app.md) are all written and tested. Left: Adam's part 1 of that runbook (Supabase settings, `gcp-setup.sh infra`, three secrets), then the merge and the smoke check |
 | **3** | Part 4: the phone app | Not started |
 | **4** | Part 5a: push ("your report is ready") | Not started |
 | **5** | Part 5b: backups, locks, loose ends, the exit test | Not started |
@@ -124,7 +124,7 @@ Phase 0  part 2 rollout ──► Phase 1  end the overlap          (rollout; da
 
 ## Phase 2 (part 3): the API
 
-**Goal:** `https://<the api>/v1/reports/daily` returns this morning's saved report to Adam's signed-in token, and to nobody else. Branch `m3-part3-api`.
+**Goal:** `https://<the api>/v1/reports/daily` returns this morning's saved report to Adam's signed-in token, and to nobody else. Branch `m3-part3-api`. **Status 2026-11-16:** built; the steps below became [runbooks/phone-app.md](runbooks/phone-app.md), which Adam follows. **Changed the same day:** Adam signs in with an email and a password (no email service, no template edit, no code); the emailed code and its custom sender move to the beta's setup. The "Auth email template" step below no longer applies.
 
 ### What Adam does (about 15 minutes; a new runbook `docs/runbooks/phone-app.md` holds the steps)
 

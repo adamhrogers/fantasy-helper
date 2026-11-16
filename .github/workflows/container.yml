@@ -1,4 +1,5 @@
-# Keeps the image the scheduled jobs run (ADR 0025) building, on any PR that could break it.
+# Keeps the image the scheduled jobs and the API run (ADR 0025, 0029) building and starting, on any
+# PR that could break it.
 # Not a required check, so it isn't in main's ruleset or the auto-merge guard (ADR 0024).
 name: Container
 
@@ -66,3 +67,23 @@ jobs:
           grep -q "migrated an empty database to" migrate.log
           run fh:test migrate | grep -q "already at head"
           run fh:test doctor --only database
+
+      # The API is the same image started with `serve` (ADR 0029). It has to start with only its
+      # settings, and answer /healthz, which needs no token and no database round trip.
+      - name: The API starts and answers
+        env:
+          DATABASE_URL: postgresql://fh:fh@localhost:5432/fh_image
+        run: |
+          docker run --rm fh:test serve --help | grep -q 'Cloud Run'
+          docker run -d --name api --network host -e DATABASE_URL \
+            -e FH_SUPABASE_URL=https://example.supabase.co \
+            -e FH_APP_ORIGINS=https://app.example.test fh:test serve
+          for _ in $(seq 1 30); do
+            if curl -fsS http://localhost:8080/healthz | grep -q '"status":"ok"'; then
+              docker rm -f api >/dev/null
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs api
+          exit 1

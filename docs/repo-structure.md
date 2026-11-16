@@ -113,9 +113,9 @@ fantasy-helper/
 │   │
 │   ├── observability/                # logs (redacting) · tracing (LangSmith) · alerts (ntfy) · cost accounting
 │   ├── api/                   (M3)   # FastAPI backend-for-frontend
-│   │   ├── app.py
-│   │   ├── auth.py                   # Supabase JWT verification; user_id on every request
-│   │   └── routes/                   # reports · leagues · watchlist · takes · trajectories · feedback · push · scorecard
+│   │   ├── app.py                    # /healthz · /v1/me · /v1/reports · /v1/push (ADR 0029); more routes come with M5
+│   │   ├── auth.py                   # Supabase JWT verification against its public keys; user id on every request
+│   │   └── schemas.py                # the API's request and response models (web/openapi.json is generated from them)
 │   └── cli/                          # Typer: `fh version | keygen | doctor` (M0); `league add | ingest | run | grade | fixtures record | mcp serve | replay` later
 │
 ├── web/                       (M3)   # PWA: Vite + React + TypeScript
@@ -143,7 +143,7 @@ fantasy-helper/
 │   └── datasets/              (M6)   # LangSmith dataset exports of graded days
 │
 ├── scripts/                          # cloud setup and ops: gcp-setup.sh · gcp-secrets.sh · jobs.conf · fh-prod.sh ·
-│                                     #   healthchecks-setup.sh · snapshot-schedule.sh
+│                                     #   healthchecks-setup.sh · snapshot-schedule.sh · api-smoke.sh
 ├── Dockerfile                        # one image: every Cloud Run job, and the API from M3 part 3
 │
 └── docs/
