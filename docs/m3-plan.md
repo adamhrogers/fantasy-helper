@@ -283,6 +283,7 @@ gcloud run jobs execute weekly --region us-east4 --update-env-vars=FH_RAW_STORE=
 
 ## After M3
 
+- **Chat comes early (Adam, 2026-11-15).** It is M4b in the roadmap, about Nov 25, a third lane. From this plan it needs: the API's pattern (a signed-in route; Phase 2), the app's Chat tab (Phase 3), and the Claude and LangSmith keys in the cloud with a spend cap (below). Nothing in Phases 2 to 5 needs to change for it, but **keep the app's card rendering generic** (Phase 3, item 3): it is also what lets reports be customized per person later.
 The dates in roadmap v0.5 assumed M3 would end on 2026-11-12. It won't end before about 2026-11-23, so everything after it moves. Roadmap v0.6 has the new dates; they are a proposal until Adam confirms them.
 
 - **M4 can start beside Phase 3.** Its lane A (the LLM gateway, the baseline graph, guardrails, the MCP server) lives in `brain/` and `mcp_server/` and touches nothing the phone app does. Running it as a second session is the difference between a beta around 2026-12-06 and one around 2026-12-12; the hard stop is 2026-12-15.

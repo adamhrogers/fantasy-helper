@@ -2,13 +2,14 @@
 
 **Status:** v0.6, 2026-11-15 (dates proposed, waiting on Adam) · companion to [architecture.md](architecture.md)
 
-**Friends beta: about Dec 6 with M4's brain work in parallel, about Dec 12 without (planned Nov 15, then Nov 22, then Nov 29). Hard stop: Dec 15.** Each milestone ends with something Adam uses the next morning and an automated check that proves it works. Lanes (A, B, …) inside a milestone have no dependencies on each other, so they can run as parallel sub-agents or sessions once you approve.
+**Friends beta: about Dec 8, with M4's brain work and the chat running as parallel lanes (planned Nov 15, then Nov 22, then Nov 29). Without parallel lanes the plan no longer fits before the hard stop. Hard stop: Dec 15.** Each milestone ends with something Adam uses the next morning and an automated check that proves it works. Lanes (A, B, …) inside a milestone have no dependencies on each other, so they can run as parallel sub-agents or sessions once you approve.
 
 **What changed in v0.6 (Nov 15):**
 - **M3 is about ten days behind v0.5.** It was planned for Nov 7–12 beside M2. Part 1 shipped on Nov 7, then a week went to accounts and to finding that GitHub's scheduler ran every job hours late, which moved all timed jobs to Cloud Run (ADR 0025, Nov 14). Part 2 merged on Nov 15. The API, the phone app, push and backups remain, and are planned step by step in [m3-plan.md](m3-plan.md). M3 is now expected to end about **Nov 23**.
-- **Everything after M3 moves with it.** In sequence that puts the beta at about **Dec 12**, three days inside the hard stop. Running M4's lane A (the brain: `brain/`, `mcp_server/`) as a second session beside M3's phone app, which shares no files with it, puts the beta at about **Dec 6**. The second is recommended.
+- **Everything after M3 moves with it.** Done strictly in sequence, M3, then M4, then M5 and M6, would put the beta near **Dec 12**; adding chat (below) in sequence would pass the Dec 15 hard stop. So the plan **depends on parallel lanes**: M4's lane A (the brain: `brain/`, `mcp_server/`) beside M3's phone app, which shares no files with it, and **M4b, the chat, as a third lane** once lane A's tool server exists. That puts the beta at about **Dec 8**. If a lane slips, use the cuts at the end of this page; the chat itself is not on the cut list.
 - **These dates assume work on most days**, as on Nov 14 and 15. At weekends only, M3 alone runs into December and the hard stop needs the cuts at the end of this page.
 - **M3's shape changed:** timed jobs are Cloud Run jobs in a morning chain, not `daily.yml` and `weekly.yml` on GitHub (ADRs 0025, 0028); sign-in is a 6-digit email code, not a magic link (decided Nov 6); the app's host is proposed as Cloudflare Workers static assets instead of Pages, because Cloudflare now says to start new projects there.
+- **Chat moved forward** (Adam, 2026-11-15: "the earlier that we can get the chat in, the better"): it's now M4b, right after the pieces it needs exist (see "The buddy"), instead of a later idea.
 - **M4's streak** ("by 8 a.m. five days in a row") moves from Nov 15–19 to the first five mornings after M4 ships.
 
 **What changed in v0.5 (Nov 6):**
@@ -40,17 +41,18 @@ Nov 7  ─ M3 Phone app + delivery                       ┐ critical path
        │   rollout, API, phone app, push, backups       │ Nov 15 → about Nov 23 (m3-plan.md)
 Nov 18 ║ M4 lane A, the brain (beside M3's phone app)   │
 Nov 24 ─ M4 Daily report + registry (streak: its first five mornings, about Nov 26–30)
-Nov 26 ─ M5 Watchlist · signals · lock-in v2  (during the streak)
+Nov 25 ║ M4b Chat v0, the buddy (third lane; needs lane A's tool server and the live app)
+Nov 26 ─ M5 Watchlist · signals · lock-in v2  (during the streak; its take storage is shared with the chat)
 Nov 29 ─ M6 Grading + timeline graphs                  │
-Dec 6  ─ ◆ FRIENDS BETA (M7) ──────────────────────────┘  (hard stop Dec 15)
-Dec 7  ─ M8 Multi-agent orchestration ─────────────── about five weeks
+Dec 8  ─ ◆ FRIENDS BETA (M7) ──────────────────────────┘  (hard stop Dec 15)
+Dec 9  ─ M8 Multi-agent orchestration ─────────────── about five weeks
 Dec    ─ P9 Trade tracker + trade graphs · categories leagues
 Jan    ─ P10 Iterate on evidence ──────────────────── Mar 15
 Mar 15 ─ ◆ Season ends ─ P11 Case study
 Apr–Sep 2027 ─ P12 Offseason: Yahoo, sign-up, pricing ─ fall 2027 launch
 ```
 
-**Without the parallel lane:** M4 Nov 24–30, M5 Dec 1–3, M6 Dec 4–9, beta about Dec 12.
+**Without the parallel lanes** the same work in sequence runs past Dec 15, so one of the lanes has to hold or something on the cut list goes. M4 alone, in sequence, would be Nov 24–30, M5 Dec 1–3, M6 Dec 4–9.
 
 ---
 
@@ -201,13 +203,36 @@ The lanes as built and planned (the first version of this table had a magic link
 
 **Where this stands in the docs before today:** the pieces for it were designed in (ADR 0003 and 0020: one read-only tool server and a fast read path "for the future chat"; a Chat tab marked "later" in the app layout), but chat itself was listed under "not in version 1", to ship only if the report card supported it. That is superseded: it is now a goal. What is **not** yet designed is how the chat remembers what he says.
 
-**Proposal (waiting on Adam's OK):** chat is a milestone of its own, and it reuses everything M3 to M6 already build.
-- **It needs, and gets, the same foundations:** the collected data and the engine (done), the call log, the API and phone app (M3), the read-only tool server and the AI brain (M4), and takes and the watchlist (M5). Chat is a second front door onto the same brain, not a second system.
-- **Memory = his opinions as takes.** When he says "I think Player X is going to break out", the chat proposes a take (player, direction, how long, how sure) and he confirms it. Code then saves it. This keeps two existing rules: tools stay read-only, so the AI never writes to the record by itself (ADR 0003), and saved opinions are never edited, only superseded, so they can be graded later (ADR 0013). Casual remarks that aren't confirmed takes can go into a plain notes memory that the chat may read but that is never graded.
-- **The loop = the grading.** His takes and the app's calls are graded the same way (M6). The chat can then say honestly "your last four takes on rookies were right, your calls on bigs were wrong", and the brain's prompts can be tuned against graded history.
-- **First version, for Adam only:** after M4 and M5. Text chat in the app, reading the day's facts, his takes and the call history, able to propose takes. Voice, proactive messages ("you should look at this") and shared chats for friends come later.
-- **Two things to design on purpose:** the buddy must not just agree with him (a built-in skeptic voice, which is the Skeptic and Your Voice agents of M8, pulled forward in simple form); and every message costs money and time, so it needs a monthly spend cap and probably an always-warm service (ADR 0020 deferred that decision to "when chat ships").
-- **Timeline effect:** chat v0 fits between M5 and the beta only if the other pieces hold their dates; otherwise it follows the beta. Adam decides which.
+**Placement, as early as it logically can go (Adam, 2026-11-15: "the earlier that we can get the chat in, the better... that's the interactive portion"; the dates are a proposal):** chat v0 is **M4b**, a third lane that starts the day its three prerequisites exist, about **Nov 25**, and runs about five days. It reuses everything M3 to M5 build and adds little of its own.
+
+| It needs | From | Ready about |
+|---|---|---|
+| The API and the live phone app (a Chat tab, a chat route that streams its reply) | M3 parts 3 and 4 | Nov 23 |
+| The AI gateway and the read-only tool server (the chat reads facts through the same tools the reports' brain uses) | M4 lane A | Nov 24 |
+| A place to save his opinions as takes, and the confirm step | M5's take storage, built first and shared | Nov 25 |
+| The Claude and LangSmith keys in the cloud, and a monthly spend cap | A short set-up step before M4 | Nov 18 |
+
+Chat v0 does **not** wait for M5's signals, the daily report's AI writing, grading or the beta. Those proceed in their own lanes.
+
+**Memory = his opinions as takes.** When he says "I think Player X is going to break out", the chat proposes a take (player, direction, how long, how sure) and he confirms it. Code then saves it. This keeps two existing rules: tools stay read-only, so the AI never writes to the record by itself (ADR 0003), and saved opinions are never edited, only superseded, so they can be graded later (ADR 0013). Casual remarks that aren't confirmed takes go into a plain notes memory that the chat may read and that is never graded.
+
+**The loop = the grading.** His takes and the app's calls are graded the same way (M6). The chat can then say honestly "your last four takes on rookies were right, your calls on bigs were wrong", and the brain's prompts can be tuned against graded history.
+
+**Chat v0 is for Adam only:** text in the app; reads the day's facts, his takes and the call history; can propose takes; can explain any card in a report. **Later:** proactive messages ("look at this"), voice, chats for friends, and the full panel of specialist AIs (M8).
+
+**Two things designed in from the start:** the buddy must not just agree with him (a built-in skeptic voice, the Skeptic and Your Voice agents of M8 pulled forward in simple form); and every message costs money and time, so it has a monthly spend cap, and the always-warm service ADR 0020 deferred "until chat ships" is decided during this milestone.
+
+**Done when:** from the phone, Adam can ask about a player or a move and get an answer built only from facts the system holds, say an opinion, confirm it, and see it appear as a take that the next day's chat remembers.
+
+## Direction: reports shaped by each user (stated 2026-11-15, not scheduled)
+
+Adam wants the daily and weekly reports to be **customizable per person**: a friend's report can look different from his, and each user can say what they do and don't want to see. The interface should be **editable and dynamic**, not one fixed page. **This is a direction, not part of M3 to M7.**
+
+What keeps the door open, so it isn't rebuilt later:
+- **Reports are already lists of cards, not pages.** A card has a kind (a move, a lock-or-pass, a recap, a matchup) and its data; the app draws whatever cards arrive. The phone app (M3 part 4) must keep drawing from that list generically, and a card kind it doesn't recognize must still show as a plain card.
+- **Customizing means choosing among blocks the code computes**, never an AI making up numbers: which kinds of cards, in what order, with what thresholds. A genuinely new block is new code. This keeps the rule that code computes every number.
+- **The chat is the natural way to ask for it** ("show me this, drop that"), saved as a per-user preference after he confirms it, the same way opinions become takes.
+- **Where it would land:** after the beta shows what friends actually want to change. It needs per-user settings stored in the database (a migration), the reports jobs reading them (so each user's report is built to their preferences), and an editing screen or the chat. Not before M7.
 
 ## M6 — Grading and timeline graphs · about Nov 29–Dec 4, or Dec 4–9
 
@@ -221,7 +246,7 @@ The lanes as built and planned (the first version of this table had a magic link
 
 ---
 
-## M7 — Friends beta · from about Dec 6, or Dec 12
+## M7 — Friends beta · from about Dec 8
 
 | Work |
 |---|
@@ -284,6 +309,6 @@ M1 snapshots + per-stat projections ─► M2 scoring ─► M3 phone path ─�
                                                      M4 lane A (the brain) ──┘ (parallel)
 ```
 
-**To pull the beta earlier** (v0.6 already assumes the first two for the Dec 6 date): run M4's lane A beside M3's phone app (they share no files), start M5's take-entry form during M4's streak week, and accept the first cut below.
+**To pull the beta earlier** (v0.6 already assumes the first two, and a third lane for the chat, for the Dec 8 date): run M4's lane A beside M3's phone app (they share no files), start M5's take-entry form during M4's streak week, and accept the first cut below.
 
 If the beta date is at risk, cut in this order (keeping the Dec 15 hard stop): (1) PWA polish, keeping plain cards; (2) lock-in v2 moves to the first beta week (v1 already shipped in M2); (3) the timeline graph ships as a plain line, with event markers added the next week; (4) the beta starts with the Sleeper league only. **Never cut:** daily snapshots, the registry, the tip-off guard, tracing or the nightly backup. Without them the season produces no evidence and the graphs have no history.
