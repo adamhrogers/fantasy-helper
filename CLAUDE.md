@@ -22,7 +22,7 @@ uv run fh migrate                         # bring DATABASE_URL's schema to head 
 uv run fh report open [weekly]            # show the latest report saved in the database
 uv run fh serve                           # the phone app's API (Cloud Run runs this; needs DATABASE_URL and FH_SUPABASE_URL)
 uv run fh openapi > web/openapi.json      # the API's committed schema (a test fails when it drifts)
-uv run fh run daily [--dry-run] [--open]  # ingest, lock-or-pass calls (logged), daily report page
+uv run fh run daily [--dry-run] [--open]  # ingest, lock-or-pass calls (logged), recap cards, daily report page
 uv run fh run weekly [--open]             # ingest, weekly overview per league (FactSheets, calls)
 uv run fh fixtures record                 # re-record redacted fixtures (then update contract test counts)
 scripts/snapshot-schedule.sh status       # snapshot schedule state and logs

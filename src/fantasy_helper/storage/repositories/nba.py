@@ -313,15 +313,22 @@ def projected_players(session: Session, snapshot_ids: Sequence[UUID]) -> set[UUI
     )
 
 
-def latest_injury_status(session: Session, player_ids: Iterable[UUID]) -> dict[UUID, str]:
-    """Each player's most recent injury status, from whichever provider reported last."""
+def latest_injury_status(
+    session: Session, player_ids: Iterable[UUID], *, as_of: datetime | None = None
+) -> dict[UUID, str]:
+    """Each player's most recent injury status, from whichever provider reported last. With
+    `as_of`, the status as it stood then (what was known before a game, not after it)."""
     ids = list(player_ids)
     if not ids:
         return {}
+    query = select(InjuryObservationRow.player_id, InjuryObservationRow.status).where(
+        InjuryObservationRow.player_id.in_(ids)
+    )
+    if as_of is not None:
+        query = query.where(InjuryObservationRow.observed_at <= as_of)
     rows = session.execute(
-        select(InjuryObservationRow.player_id, InjuryObservationRow.status)
-        .where(InjuryObservationRow.player_id.in_(ids))
-        .order_by(InjuryObservationRow.player_id, InjuryObservationRow.observed_at.desc())
-        .ext(distinct_on(InjuryObservationRow.player_id))
+        query.order_by(InjuryObservationRow.player_id, InjuryObservationRow.observed_at.desc()).ext(
+            distinct_on(InjuryObservationRow.player_id)
+        )
     )
     return {pid: status for pid, status in rows}

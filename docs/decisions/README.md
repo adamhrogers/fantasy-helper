@@ -43,6 +43,7 @@ Git keeps every version of every ADR (`git log -p docs/decisions/0011-*.md`), an
 | [0028](0028-the-morning-is-a-chain.md) | The morning is a chain: snapshot, then daily, then weekly | Accepted · 2026-11-15 |
 | [0029](0029-the-phone-apps-api.md) | The phone app's API: a service that checks every token itself, with its own account and secrets | Accepted · 2026-11-16 |
 | [0032](0032-a-database-login-that-can-only-look.md) | A database login that can only look: `fh_readonly`, `fh sql`, and the setup that keeps its password out of sight | Accepted · 2026-11-16 |
+| [0033](0033-the-daily-report-says-what-happened-in-every-league.md) | The daily report says what happened in every league, in that league's own scoring | Accepted · 2026-11-16 |
 
 ## Template
 

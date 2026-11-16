@@ -59,7 +59,8 @@ def daily(
     ] = False,
     require_today: REQUIRE_SNAPSHOT_TODAY = False,
 ) -> None:
-    """Ingest, decide lock or pass for every open starter, log each call, build the report."""
+    """Ingest, then last night's recap for every league and, in lock-in leagues, lock or pass for
+    every open starter (each call logged); build the report."""
     settings = get_settings()
     clock = SystemClock()
     started = clock.now()
@@ -165,12 +166,23 @@ def _print(result: DailyResult, path: Path | None) -> None:
         if lg.failure is not None:
             typer.echo(f"✗ {lg.league.name!r}: {lg.failure.describe}")
             continue
-        typer.echo(
-            f"✓ {lg.league.name!r}: {lg.calls} lock-or-pass calls ({lg.new_calls} newly logged)"
+        if lg.recap_skipped and lg.report is None:
+            typer.echo(
+                f"- {lg.league.name!r}: no report (settings, the schedule or your team aren't "
+                "loaded yet)"
+            )
+            continue
+        calls = (
+            f"{lg.calls} lock-or-pass calls ({lg.new_calls} newly logged), " if lg.lock_in else ""
         )
+        typer.echo(f"✓ {lg.league.name!r}: {calls}{lg.recap_cards} recap cards")
+        if lg.recap_failure is not None:
+            typer.echo(f"  ⚠ recap cards failed: {lg.recap_failure.describe}")
+        if lg.recap_skipped:
+            typer.echo("  ⚠ recap skipped: settings, the schedule or your team aren't loaded yet")
         for card in lg.report.cards if lg.report else ():
             typer.echo(f"    · {card.title}")
-    typer.echo(f"report: {path}" if path else "no lock-in leagues: no report")
+    typer.echo(f"report: {path}" if path else "no report")
 
 
 @app.command("weekly")

@@ -23,8 +23,12 @@ from fantasy_helper.domain.recommendations import (
     OutcomeWindow,
     Recommendation,
 )
-from fantasy_helper.domain.reports import ReportKind
-from fantasy_helper.pipeline.daily import run_daily
+from fantasy_helper.domain.reports import Card, CardKind, ReportKind
+from fantasy_helper.domain.runs import FailureKind
+from fantasy_helper.facts.daily import load_daily
+from fantasy_helper.facts.lock_in import MissingFactsError
+from fantasy_helper.pipeline import daily as daily_pipeline
+from fantasy_helper.pipeline.daily import daily_summary, run_daily
 from fantasy_helper.pipeline.lock_calls import ENGINE_PRODUCER
 from fantasy_helper.pipeline.weekly import run_weekly
 from fantasy_helper.registry.calls import TipOffPassedError, log_call
@@ -106,15 +110,17 @@ def test_calls_are_logged_before_tip_off_or_not_at_all(session: Session) -> None
 
 def test_the_daily_run_logs_each_call_once(session: Session, tmp_path: Path) -> None:
     owner = setup_owner(session)
-    sleeper = next(
-        lg for lg in leagues.list_for_user(session, owner.id) if lg.platform is Platform.SLEEPER
-    )
-    leagues.upsert(session, sleeper.model_copy(update={"my_team_external_id": "1"}))
+    for lg in leagues.list_for_user(session, owner.id):
+        team = "1" if lg.platform is Platform.SLEEPER else "13"
+        leagues.upsert(session, lg.model_copy(update={"my_team_external_id": team}))
     store = seed_snapshots(tmp_path / "raw")
     client = _http.make_client(transport=httpx.MockTransport(serve_fixtures))
 
     result = run_daily(session, client, store=store, user=owner, key=KEY, clock=FixedClock())
-    (daily,) = result.leagues  # only the lock-in league gets lock-or-pass calls
+    assert len(result.leagues) == 3  # every league gets a daily report now, not only lock-in
+    assert all(lg.failure is None for lg in result.leagues), [lg.failure for lg in result.leagues]
+    (daily,) = [lg for lg in result.leagues if lg.lock_in]  # only this one gets lock-or-pass calls
+    assert daily.league.platform is Platform.SLEEPER
     assert daily.failure is None
     assert daily.report is not None
     assert daily.report.engine_only
@@ -122,6 +128,21 @@ def test_the_daily_run_logs_each_call_once(session: Session, tmp_path: Path) -> 
         daily.calls > 0
     )  # the recorded week has open decisions, so the rerun check means something
     assert daily.new_calls == daily.calls == count(session, RecommendationRow.id)
+    assert [lg.calls for lg in result.leagues if not lg.lock_in] == [0, 0]
+
+    # The lock cards are what they were: one per logged call, first, then the lock-in recap; the
+    # "what happened" cards come after them.
+    kinds = [c.kind for c in daily.report.cards]
+    locks = kinds.count(CardKind.LOCK_OR_PASS)
+    assert locks == daily.calls
+    assert kinds[:locks] == [CardKind.LOCK_OR_PASS] * locks
+    assert daily.report.cards[locks].id == "lock-in-recap"
+    assert any(c.id.startswith("daily-") for c in daily.report.cards[locks + 1 :])
+    assert daily.recap_cards > 0
+    for other in (lg for lg in result.leagues if not lg.lock_in):
+        assert other.report is not None
+        assert CardKind.LOCK_OR_PASS not in {c.kind for c in other.report.cards}
+        assert other.recap_cards == len(other.report.cards)  # all of it is the recap
 
     # The box score check ran: the recorded Sleeper weeks compare (the ESPN fixtures' rosters
     # carry no stats, so there's nothing settled to compare there).
@@ -129,23 +150,28 @@ def test_the_daily_run_logs_each_call_once(session: Session, tmp_path: Path) -> 
     assert sleeper_check.method == "one game a week"
     assert sleeper_check.agreement.total > 0
 
-    # The report is saved with its calls, and reads back exactly as it was built.
-    (stored,) = saved_reports.for_user(session, owner.id, ReportKind.DAILY)
-    assert stored.cards == daily.report.cards
-    assert stored.for_date == daily.report.for_date
-    saved_id = stored.id
+    # Each league's report is saved with its calls, and reads back exactly as it was built.
+    stored = saved_reports.for_user(session, owner.id, ReportKind.DAILY)
+    assert {r.league_id for r in stored} == {lg.league.id for lg in result.leagues}
+    stored_sleeper = next(r for r in stored if r.league_id == daily.league.id)
+    assert stored_sleeper.cards == daily.report.cards
+    assert stored_sleeper.for_date == daily.report.for_date
+    saved_ids = {r.league_id: r.id for r in stored}
 
     again = run_daily(session, client, store=store, user=owner, key=KEY, clock=FixedClock())
-    assert again.leagues[0].new_calls == 0  # a rerun logs nothing new
-    assert again.leagues[0].calls == daily.calls
+    (daily_again,) = [lg for lg in again.leagues if lg.lock_in]
+    assert daily_again.new_calls == 0  # a rerun logs nothing new
+    assert daily_again.calls == daily.calls
     assert count(session, RecommendationRow.id) == daily.calls
-    # A rerun replaces the day's report: still one row, still the first id, and the report the
-    # run hands on (to the push, the summary) carries that stored id, not a fresh random one.
-    assert count(session, ReportRow.id) == 1
-    assert saved_reports.for_user(session, owner.id, ReportKind.DAILY)[0].id == saved_id
-    assert daily.report.id == saved_id
-    assert again.leagues[0].report is not None
-    assert again.leagues[0].report.id == saved_id
+    # A rerun replaces the day's report: still one row per league, still the first ids, and the
+    # report the run hands on (to the push, the summary) carries that stored id, not a new one.
+    assert count(session, ReportRow.id) == 3
+    stored_again = saved_reports.for_user(session, owner.id, ReportKind.DAILY)
+    assert {r.league_id: r.id for r in stored_again} == saved_ids
+    assert all(
+        lg.report is not None and lg.report.id == saved_ids[lg.league.id] for lg in again.leagues
+    )
+    assert daily.report.id == saved_ids[daily.league.id]
 
 
 def test_the_weekly_run_builds_every_league_and_stores_its_facts(
@@ -234,3 +260,162 @@ def test_a_failed_lineup_fetch_never_fails_the_league(session: Session, tmp_path
     run_ingest(session, client, store=store, user=owner, key=KEY, clock=FixedClock())  # schedule
     report = run_ingest(session, client, store=store, user=owner, key=KEY, clock=FixedClock())
     assert all(lg.failure is None for lg in report.leagues)
+
+
+def run_all(session: Session, tmp_path: Path) -> daily_pipeline.DailyResult:
+    owner = setup_owner(session)
+    for lg in leagues.list_for_user(session, owner.id):
+        team = "1" if lg.platform is Platform.SLEEPER else "13"
+        leagues.upsert(session, lg.model_copy(update={"my_team_external_id": team}))
+    store = seed_snapshots(tmp_path / "raw")
+    client = _http.make_client(transport=httpx.MockTransport(serve_fixtures))
+    return run_daily(session, client, store=store, user=owner, key=KEY, clock=FixedClock())
+
+
+def own_problems(result: daily_pipeline.DailyResult, attempts: int) -> list[str]:
+    """The daily run's own lines (the fixtures' ingest and box-score notes are not under test)."""
+    _, problems = daily_summary(result, attempts)
+    return [
+        p for p in problems if p.startswith(("recap cards", "the daily recap", "lock-in calls"))
+    ]
+
+
+def test_a_broken_recap_never_costs_the_lock_calls(
+    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = load_daily
+
+    def flaky(session: Session, league, **kwargs):  # type: ignore[no-untyped-def]
+        if league.platform is Platform.SLEEPER:
+            raise httpx.ConnectError("down")  # a failure a retry could fix
+        return real(session, league, **kwargs)
+
+    monkeypatch.setattr("fantasy_helper.pipeline.daily.load_daily", flaky)
+    result = run_all(session, tmp_path)
+    (lock,) = [lg for lg in result.leagues if lg.lock_in]
+    assert lock.failure is None  # the league's report is fine
+    assert lock.recap_failure is FailureKind.NETWORK
+    assert lock.calls > 0
+    assert lock.report is not None
+    kinds = [c.kind for c in lock.report.cards]
+    assert kinds.count(CardKind.LOCK_OR_PASS) == lock.calls  # the lock cards are all there
+    assert not any(c.id.startswith("daily-") for c in lock.report.cards)  # and no recap
+    assert count(session, RecommendationRow.id) == lock.calls
+    assert result.retryable_failures() == 1  # a retry could build the recap
+    assert own_problems(result, attempts=3) == [
+        "recap cards failed for 1 Sleeper league (the lock calls are saved): couldn't connect, "
+        "after 3 attempts"
+    ]
+    for other in (lg for lg in result.leagues if not lg.lock_in):
+        assert other.recap_failure is None  # the other leagues are unaffected
+        assert other.report is not None
+
+
+def test_a_broken_lock_part_still_gives_the_recap_and_says_the_locks_are_missing(
+    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(daily_pipeline, "_lock_in_cards", broken)
+    result = run_all(session, tmp_path)
+    (lock,) = [lg for lg in result.leagues if lg.lock_in]
+    assert lock.failure is FailureKind.BUG
+    assert (lock.calls, lock.new_calls) == (0, 0)
+    assert lock.report is not None  # saved: the recap is still worth reading
+    ids = [c.id for c in lock.report.cards]
+    assert ids[0] == "lock-in-unavailable"  # never mistaken for "nothing to decide"
+    assert any(i.startswith("daily-") for i in ids[1:])
+    assert count(session, RecommendationRow.id) == 0
+    (problem,) = own_problems(result, attempts=1)
+    assert problem.startswith("lock-in calls failed for 1 Sleeper league: a bug in our code")
+
+
+def test_a_league_whose_recap_breaks_has_no_report_and_the_others_still_do(
+    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = load_daily
+
+    def flaky(session: Session, league, **kwargs):  # type: ignore[no-untyped-def]
+        if league.name == "Points":
+            raise RuntimeError("boom")
+        return real(session, league, **kwargs)
+
+    monkeypatch.setattr("fantasy_helper.pipeline.daily.load_daily", flaky)
+    result = run_all(session, tmp_path)
+    broken = next(lg for lg in result.leagues if lg.league.name == "Points")
+    assert broken.failure is FailureKind.BUG
+    assert broken.report is None
+    assert count(session, ReportRow.id) == 2  # the other two leagues
+    assert len(result.reports) == 2
+    assert own_problems(result, attempts=1) == [
+        "the daily recap failed for 1 ESPN league: a bug in our code; not retried (retrying "
+        "can't fix it)"
+    ]
+
+
+def test_a_league_missing_its_own_facts_is_skipped_with_a_warning_not_failed_or_retried(
+    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = load_daily
+
+    def gap(session: Session, league, **kwargs):  # type: ignore[no-untyped-def]
+        if league.name == "Points":
+            raise MissingFactsError("the league has no team marked as mine")
+        return real(session, league, **kwargs)
+
+    monkeypatch.setattr("fantasy_helper.pipeline.daily.load_daily", gap)
+    result = run_all(session, tmp_path)
+    skipped = next(lg for lg in result.leagues if lg.league.name == "Points")
+    # A gap that no retry can fill: not a failure (it would fail every morning, forever, and ask
+    # to be retried), and no report to save.
+    assert skipped.failure is None
+    assert skipped.recap_failure is None
+    assert skipped.recap_skipped
+    assert skipped.report is None
+    assert result.retryable_failures() == 0
+    assert count(session, ReportRow.id) == 2  # the other two leagues have theirs
+    problems = own_problems(result, attempts=3)
+    assert problems == [
+        "the daily recap was skipped for 1 league: settings, the schedule or your team aren't "
+        "loaded yet (nothing to retry: check `fh league add` and that the schedule is loaded)"
+    ]
+    others = [lg for lg in result.leagues if lg is not skipped]
+    assert all(lg.failure is None and not lg.recap_skipped for lg in others)
+
+
+def test_a_skipped_recap_beside_lock_calls_still_saves_them(
+    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = load_daily
+
+    def gap(session: Session, league, **kwargs):  # type: ignore[no-untyped-def]
+        if league.platform is Platform.SLEEPER:
+            raise MissingFactsError("settings, schedule or my team aren't loaded yet")
+        return real(session, league, **kwargs)
+
+    monkeypatch.setattr("fantasy_helper.pipeline.daily.load_daily", gap)
+    result = run_all(session, tmp_path)
+    (lock,) = [lg for lg in result.leagues if lg.lock_in]
+    assert lock.failure is None
+    assert lock.recap_skipped
+    assert lock.calls > 0
+    assert lock.report is not None  # the lock cards are the report
+    assert not any(c.id.startswith("daily-") for c in lock.report.cards)
+    assert result.retryable_failures() == 0
+
+
+def test_a_card_that_wont_build_is_a_bug_even_when_the_error_looks_like_a_data_problem(
+    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def too_long(_sheet: object) -> list[Card]:
+        # A pydantic ValidationError, which the classifier reads as "the source's format changed".
+        return [Card(id="x", kind=CardKind.RECAP, title="t" * 500, body="b")]
+
+    monkeypatch.setattr("fantasy_helper.pipeline.daily.recap_cards", too_long)
+    result = run_all(session, tmp_path)
+    assert {lg.failure for lg in result.leagues if not lg.lock_in} == {FailureKind.BUG}
+    (lock,) = [lg for lg in result.leagues if lg.lock_in]
+    assert lock.recap_failure is FailureKind.BUG  # beside its saved lock calls: a warning
+    assert lock.failure is None
+    assert result.retryable_failures() == 0  # our code is broken: a retry can't fix it

@@ -118,3 +118,16 @@ def with_external_id(session: Session, source: str) -> set[UUID]:
             select(PlayerExternalIdRow.player_id).where(PlayerExternalIdRow.source == source)
         )
     )
+
+
+def resolve_external(session: Session, source: str, external_ids: list[str]) -> dict[str, UUID]:
+    """That platform's player IDs -> canonical players, for the IDs the crosswalk knows."""
+    if not external_ids:
+        return {}
+    rows = session.execute(
+        select(PlayerExternalIdRow.external_id, PlayerExternalIdRow.player_id).where(
+            PlayerExternalIdRow.source == source,
+            PlayerExternalIdRow.external_id.in_(external_ids),
+        )
+    )
+    return {ext: pid for ext, pid in rows}

@@ -255,15 +255,31 @@ def scoring_period_of(day: date, opening_night: date) -> int:
     return (day - opening_night).days + 1
 
 
+def _category_name(stat_id: int) -> str | None:
+    """The name a league's category carries (as `map_rules` names it), for a stat ID."""
+    if stat_id in STATS:
+        return STATS[stat_id][0]
+    if stat_id in RATIOS:
+        return RATIOS[stat_id][0]
+    return None
+
+
 def map_matchups(data: Any) -> list[MatchupRecord]:
     """Every matchup of the season (views mMatchupScore + mScoreboard)."""
 
     def side(raw: dict[str, Any]) -> MatchupSide:
+        by_stat = (raw.get("cumulativeScore") or {}).get("scoreByStat") or {}
         return MatchupSide(
             team_external_id=str(raw["teamId"]),
             total_points=raw.get("totalPoints"),
             points_by_period={
                 int(k): float(v) for k, v in (raw.get("pointsByScoringPeriod") or {}).items()
+            },
+            category_scores={
+                name: float(entry["score"])
+                for stat_id, entry in by_stat.items()
+                if (name := _category_name(int(stat_id))) is not None
+                and entry.get("score") is not None
             },
         )
 

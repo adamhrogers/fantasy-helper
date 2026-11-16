@@ -6,6 +6,7 @@ player to play every game. So the latest injury status decides: OUT or SUSPENDED
 """
 
 from collections.abc import Iterable
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -17,10 +18,13 @@ from fantasy_helper.storage.repositories import nba
 SITTING = frozenset({InjuryStatus.OUT.value, InjuryStatus.SUSPENDED.value})
 
 
-def sitting(session: Session, player_ids: Iterable[UUID]) -> set[UUID]:
-    """Players whose latest injury status, from any provider, is OUT or SUSPENDED."""
-    return {pid for pid, status in nba.latest_injury_status(session, player_ids).items()
-            if status in SITTING}  # fmt: skip
+def sitting(
+    session: Session, player_ids: Iterable[UUID], *, as_of: datetime | None = None
+) -> set[UUID]:
+    """Players whose latest injury status, from any provider, is OUT or SUSPENDED (as it stood
+    at `as_of`, when given)."""
+    statuses = nba.latest_injury_status(session, player_ids, as_of=as_of)
+    return {pid for pid, status in statuses.items() if status in SITTING}
 
 
 def season_fallback(
