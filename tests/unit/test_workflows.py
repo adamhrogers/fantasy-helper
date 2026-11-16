@@ -113,14 +113,18 @@ def test_only_mains_newest_commit_deploys_and_daily() -> None:
 
 def test_deployed_secrets_match_the_setup_script_and_the_settings() -> None:
     """A secret named in one place and not the others would leave a job without a setting."""
-    mounted = dict(re.findall(r"(\w+)=(fh-[\w-]+):latest", DEPLOY.read_text()))
+    mounted = re.findall(r"(\w+)=(fh-[\w-]+):latest", DEPLOY.read_text())
     aliases = {field.alias for field in Settings.model_fields.values()}
-    assert set(mounted) <= aliases
-    in_setup = set(_bash_array(SETUP, "SNAPSHOT_SECRETS")) | set(
-        _bash_array(SETUP, "DATABASE_SECRETS")
+    assert {setting for setting, _ in mounted} <= aliases
+    in_setup = (
+        set(_bash_array(SETUP, "SNAPSHOT_SECRETS"))
+        | set(_bash_array(SETUP, "DATABASE_SECRETS"))
+        | set(_bash_array(SETUP, "API_SECRETS"))
     )
-    assert set(mounted.values()) == in_setup
-    assert set(mounted.values()) == set(_bash_array(ROOT / "scripts" / "gcp-secrets.sh", "NAMES"))
+    assert {secret for _, secret in mounted} == in_setup
+    assert {secret for _, secret in mounted} == set(
+        _bash_array(ROOT / "scripts" / "gcp-secrets.sh", "NAMES")
+    )
 
 
 def _jobs_conf() -> list[tuple[str, str, int, str]]:
@@ -201,6 +205,47 @@ def test_the_snapshot_jobs_never_get_the_database_or_the_key() -> None:
         '    quiet gcloud secrets add-iam-policy-binding "$secret" \\\n'
         '      --member "serviceAccount:$SA_JOBS"'
     ) in setup
+
+
+def test_the_api_has_its_own_account_and_only_its_own_secrets() -> None:
+    """The API checks sign-ins and reads reports. It must never be able to decrypt a league login
+    or reach the raw store, so it gets no encryption key and no R2 secret."""
+    text = DEPLOY.read_text()
+    api_secrets = text.split("API_SECRETS: >-\n", 1)[1].split("\n", 1)[0]
+    assert re.findall(r"(\w+)=", api_secrets) == [
+        "DATABASE_URL",
+        "FH_SUPABASE_URL",
+        "FH_APP_ORIGINS",
+    ]
+    for forbidden in ("ENCRYPTION", "R2", "HEALTHCHECKS", "NTFY", "fh-database-url"):
+        assert forbidden not in api_secrets
+    setup = SETUP.read_text()
+    api = _bash_array(SETUP, "API_SECRETS")
+    assert api == ["fh-api-database-url", "fh-supabase-url", "fh-app-origins"]
+    # Only fh-api reads the API's secrets; the report jobs and the snapshot jobs never do.
+    for account in ("SA_REPORTS", "SA_JOBS"):
+        assert f'--member "serviceAccount:${account}"' in setup
+    assert (
+        'for secret in "${API_SECRETS[@]}"; do\n'
+        '    quiet gcloud secrets add-iam-policy-binding "$secret" \\\n'
+        '      --member "serviceAccount:$SA_API"'
+    ) in setup
+    assert 'for secret in "${SNAPSHOT_SECRETS[@]}" "${DATABASE_SECRETS[@]}"; do' in setup
+    assert "fh-api-database-url" not in " ".join(_bash_array(SETUP, "DATABASE_SECRETS"))
+
+
+def test_the_api_moves_after_the_migration_and_nothing_makes_it_public_but_the_owner() -> None:
+    """The service must never run ahead of its schema, and public access is the owner's one-time
+    grant (the deployer can't change IAM), so the deploy never asks for it."""
+    text = DEPLOY.read_text()
+    execute = text.index("gcloud run jobs execute migrate")
+    assert execute < text.index("gcloud run deploy api") > text.index("deploy weekly")
+    api_call = text[text.index("gcloud run deploy api") :]
+    assert '--service-account "$API_SA"' in api_call
+    assert "--args serve" in api_call
+    assert "--min-instances 0 --max-instances 2" in api_call
+    assert "allow-unauthenticated" not in text
+    assert "--member allUsers --role roles/run.invoker" in SETUP.read_text()
 
 
 def test_the_job_table_is_what_cloud_scheduler_and_healthchecks_both_read() -> None:

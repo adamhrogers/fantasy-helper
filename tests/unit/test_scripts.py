@@ -154,6 +154,130 @@ def test_the_secrets_script_refuses_the_wrong_database_url_and_key(tmp_path: Pat
     assert "pw@" not in ok.stdout + ok.stderr
 
 
+def test_the_secrets_script_checks_the_apis_three_values(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "gcloud").write_text("#!/bin/sh\nexit 0\n")
+    (bin_dir / "gcloud").chmod(0o755)
+    env = {"PATH": f"{bin_dir}:/usr/bin:/bin"}
+    host = "aws-0-us-east-1.pooler.supabase.com"
+    session = f"postgresql://postgres.abc:pw@{host}:5432/postgres"
+    transaction = f"postgresql://postgres.abc:pw@{host}:6543/postgres"
+    # The mirror of the jobs' secret: the API needs the transaction pooler.
+    done = run("gcp-secrets.sh", "fh-api-database-url", stdin=session + "\n", env=env)
+    assert done.returncode == 1
+    assert "needs the transaction pooler" in done.stderr
+    assert "pw@" not in done.stdout + done.stderr
+    done = run("gcp-secrets.sh", "fh-api-database-url", stdin=transaction + "\n", env=env)
+    assert done.returncode == 0, done.stderr
+    for bad in ("http://abc.supabase.co", "https://abc.supabase.co/auth", "https://example.com"):
+        done = run("gcp-secrets.sh", "fh-supabase-url", stdin=bad + "\n", env=env)
+        assert done.returncode == 1, bad
+    ok = run("gcp-secrets.sh", "fh-supabase-url", stdin="https://abc.supabase.co\n", env=env)
+    assert ok.returncode == 0, ok.stderr
+    for bad in ("http://app.example.test", "https://app.example.test/x", "app.example.test"):
+        done = run("gcp-secrets.sh", "fh-app-origins", stdin=bad + "\n", env=env)
+        assert done.returncode == 1, bad
+    for good in ("https://not-set.invalid", "https://a.example.test,https://b.example.test"):
+        ok = run("gcp-secrets.sh", "fh-app-origins", stdin=good + "\n", env=env)
+        assert ok.returncode == 0, ok.stderr
+
+
+@pytest.fixture
+def fake_api(tmp_path: Path) -> dict[str, str]:
+    """A `curl` that plays the API and Supabase, and a `gcloud` that serves the project URL. The
+    token and the code are recorded wherever the script puts them, so a test can look for leaks."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "gcloud").write_text("#!/bin/sh\nprintf 'https://abcref.supabase.co'\n")
+    (bin_dir / "curl").write_text(
+        """#!/bin/sh
+url=""; header=""; data=""; args="$*"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -H) case "$2" in @*) header="$(cat "${2#@}")" ;; *) header="$2" ;; esac; shift ;;
+    -d) data="$2"; shift ;;
+    --data-binary) data="$(cat "${2#@}")"; shift ;;
+    -X|-w|--max-time) shift ;;
+    http*) url="$1" ;;
+  esac
+  shift
+done
+printf '%s\\n' "$args" >> "$FAKE_DIR/argv.txt"
+reply() { printf '%s\\n%s' "$1" "$2"; }
+case "$url" in
+  */healthz) reply '{"status": "ok"}' 200 ;;
+  */auth/v1/otp)
+    case "$data" in
+      *example.invalid*) reply '{"msg": "Signups not allowed for otp"}' "${FAKE_SIGNUPS:-422}" ;;
+      *) reply '{}' 200 ;;
+    esac ;;
+  */auth/v1/verify)
+    case "$data" in
+      *123456*) reply '{"access_token": "tok-secret-value"}' 200 ;;
+      *) reply '{"msg": "bad code"}' 403 ;;
+    esac ;;
+  */v1/me)
+    case "$header" in
+      *tok-secret-value*) reply '{"name": "A", "timezone": "UTC", "leagues": [{}, {}, {}]}' 200 ;;
+      *) reply '{"detail": "sign in again"}' 401 ;;
+    esac ;;
+  */v1/reports/*)
+    case "$header" in
+      *tok-secret-value*) reply '{"for_date": "2026-11-16", "reports": [{}, {}]}' 200 ;;
+      *) reply '{}' 401 ;;
+    esac ;;
+  */v1/push/public-key) reply '{}' 503 ;;
+  *) reply '{}' 404 ;;
+esac
+"""
+    )
+    for tool in ("gcloud", "curl"):
+        (bin_dir / tool).chmod(0o755)
+    return {"PATH": f"{bin_dir}:/usr/bin:/bin", "FAKE_DIR": str(tmp_path)}
+
+
+API_ANSWERS = "me@example.test\nsb_publishable_key_value\n123456\n"
+
+
+def test_the_api_smoke_script_passes_and_prints_only_statuses_and_counts(
+    fake_api: dict[str, str],
+) -> None:
+    done = run("api-smoke.sh", "https://api.example.test", stdin=API_ANSWERS, env=fake_api)
+    assert done.returncode == 0, done.stderr
+    assert "All checks passed." in done.stdout
+    assert "(sign-ups refused)" in done.stdout
+    assert "leagues: 3" in done.stdout
+    assert "date: 2026-11-16, reports: 2" in done.stdout
+    # Nothing secret is printed, and nothing secret is in any curl command line.
+    seen = done.stdout + done.stderr + (Path(fake_api["FAKE_DIR"]) / "argv.txt").read_text()
+    for secret in ("tok-secret-value", "123456"):
+        assert secret not in seen
+
+
+def test_the_api_smoke_script_fails_when_sign_ups_are_on_or_the_code_is_wrong(
+    fake_api: dict[str, str],
+) -> None:
+    on = run(
+        "api-smoke.sh", "https://api.example.test", stdin=API_ANSWERS,
+        env={**fake_api, "FAKE_SIGNUPS": "200"},
+    )  # fmt: skip
+    assert on.returncode == 1
+    assert "sign-ups may be ON" in on.stderr
+    wrong = run(
+        "api-smoke.sh", "https://api.example.test",
+        stdin="me@example.test\nsb_publishable_key_value\n000000\n", env=fake_api,
+    )  # fmt: skip
+    assert wrong.returncode == 1
+    assert "no token came back" in wrong.stderr
+
+
+def test_the_api_smoke_script_needs_an_https_address() -> None:
+    done = run("api-smoke.sh", "http://api.example.test")
+    assert done.returncode == 2
+    assert "usage: scripts/api-smoke.sh https://" in done.stderr
+
+
 def test_every_script_is_executable_and_parses_under_the_macs_bash() -> None:
     """macOS ships bash 3.2: no associative arrays, no mapfile (the scripts run on the laptop)."""
     for script in sorted(SCRIPTS.glob("*.sh")):
