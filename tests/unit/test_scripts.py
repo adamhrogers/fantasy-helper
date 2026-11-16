@@ -212,6 +212,11 @@ case "$url" in
       *example.invalid*) reply '{"msg": "Signups not allowed for otp"}' "${FAKE_SIGNUPS:-422}" ;;
       *) reply '{}' 200 ;;
     esac ;;
+  */auth/v1/token*)
+    case "$data" in
+      *correct-password*) reply '{"access_token": "tok-secret-value"}' 200 ;;
+      *) reply '{"msg": "Invalid login credentials"}' 400 ;;
+    esac ;;
   */auth/v1/verify)
     case "$data" in
       *123456*) reply '{"access_token": "tok-secret-value"}' 200 ;;
@@ -237,13 +242,15 @@ esac
     return {"PATH": f"{bin_dir}:/usr/bin:/bin", "FAKE_DIR": str(tmp_path)}
 
 
-API_ANSWERS = "me@example.test\nsb_publishable_key_value\n123456\n"
+PASSWORD_ANSWERS = "me@example.test\nsb_publishable_key_value\ncorrect-password\n"  # noqa: S105 (a fake, for a fake server)
+CODE_ANSWERS = "me@example.test\nsb_publishable_key_value\n\n123456\n"  # Enter = use the code
 
 
+@pytest.mark.parametrize("answers", [PASSWORD_ANSWERS, CODE_ANSWERS])
 def test_the_api_smoke_script_passes_and_prints_only_statuses_and_counts(
-    fake_api: dict[str, str],
+    fake_api: dict[str, str], answers: str
 ) -> None:
-    done = run("api-smoke.sh", "https://api.example.test", stdin=API_ANSWERS, env=fake_api)
+    done = run("api-smoke.sh", "https://api.example.test", stdin=answers, env=fake_api)
     assert done.returncode == 0, done.stderr
     assert "All checks passed." in done.stdout
     assert "(sign-ups refused)" in done.stdout
@@ -251,25 +258,31 @@ def test_the_api_smoke_script_passes_and_prints_only_statuses_and_counts(
     assert "date: 2026-11-16, reports: 2" in done.stdout
     # Nothing secret is printed, and nothing secret is in any curl command line.
     seen = done.stdout + done.stderr + (Path(fake_api["FAKE_DIR"]) / "argv.txt").read_text()
-    for secret in ("tok-secret-value", "123456"):
+    for secret in ("tok-secret-value", "123456", "correct-password"):
         assert secret not in seen
 
 
-def test_the_api_smoke_script_fails_when_sign_ups_are_on_or_the_code_is_wrong(
+def test_the_api_smoke_script_fails_when_sign_ups_are_on_or_the_sign_in_is_wrong(
     fake_api: dict[str, str],
 ) -> None:
     on = run(
-        "api-smoke.sh", "https://api.example.test", stdin=API_ANSWERS,
+        "api-smoke.sh", "https://api.example.test", stdin=PASSWORD_ANSWERS,
         env={**fake_api, "FAKE_SIGNUPS": "200"},
     )  # fmt: skip
     assert on.returncode == 1
     assert "sign-ups may be ON" in on.stderr
-    wrong = run(
+    wrong_password = run(
         "api-smoke.sh", "https://api.example.test",
-        stdin="me@example.test\nsb_publishable_key_value\n000000\n", env=fake_api,
+        stdin="me@example.test\nsb_publishable_key_value\nwrong\n", env=fake_api,
     )  # fmt: skip
-    assert wrong.returncode == 1
-    assert "no token came back" in wrong.stderr
+    assert wrong_password.returncode == 1
+    assert "no token came back" in wrong_password.stderr
+    wrong_code = run(
+        "api-smoke.sh", "https://api.example.test",
+        stdin="me@example.test\nsb_publishable_key_value\n\n000000\n", env=fake_api,
+    )  # fmt: skip
+    assert wrong_code.returncode == 1
+    assert "no token came back" in wrong_code.stderr
 
 
 def test_the_api_smoke_script_needs_an_https_address() -> None:

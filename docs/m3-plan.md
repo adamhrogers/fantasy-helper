@@ -124,7 +124,7 @@ Phase 0  part 2 rollout ──► Phase 1  end the overlap          (rollout; da
 
 ## Phase 2 (part 3): the API
 
-**Goal:** `https://<the api>/v1/reports/daily` returns this morning's saved report to Adam's signed-in token, and to nobody else. Branch `m3-part3-api`. **Status 2026-11-16:** built; the steps below became [runbooks/phone-app.md](runbooks/phone-app.md), which Adam follows.
+**Goal:** `https://<the api>/v1/reports/daily` returns this morning's saved report to Adam's signed-in token, and to nobody else. Branch `m3-part3-api`. **Status 2026-11-16:** built; the steps below became [runbooks/phone-app.md](runbooks/phone-app.md), which Adam follows. **Changed the same day:** Adam signs in with an email and a password (no email service, no template edit, no code); the emailed code and its custom sender move to the beta's setup. The "Auth email template" step below no longer applies.
 
 ### What Adam does (about 15 minutes; a new runbook `docs/runbooks/phone-app.md` holds the steps)
 

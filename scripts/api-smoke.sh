@@ -7,9 +7,10 @@
 #
 # You are asked for three things: your sign-in email, Supabase's publishable key (the
 # sb_publishable_... one; the app ships it, but it stays out of the repo, so it comes from
-# Bitwarden at a hidden prompt) and, partway through, the 6-digit code Supabase emails you (hidden
-# too). Nothing is written to disk: the token lives in this script's memory, reaches curl through
-# a pipe and never appears in a command line.
+# Bitwarden at a hidden prompt) and your Supabase password (hidden). Press Enter at the password
+# prompt to sign in with a 6-digit emailed code instead (the way friends will at the beta; it needs
+# a custom email sender in Supabase). Nothing is written to disk: the token lives in this script's
+# memory, reaches curl through a pipe and never appears in a command line.
 #
 # Exits 1 if anything is wrong. What "right" is: 200s with your token, 401 without one, and
 # "sign-ups refused" for an email that isn't yours.
@@ -77,38 +78,48 @@ else
 fi
 
 echo "Your sign-in"
-http POST "$SUPABASE_URL/auth/v1/otp" "${KEY[@]}" "${JSON[@]}" \
-  -d "$(E="$email" python3 -c 'import json, os; print(json.dumps({"email": os.environ["E"], "create_user": False}))')"
-if expect "a code is sent to you" 200; then
-  read -rsp "The 6-digit code from the email: " code
-  echo
-  http POST "$SUPABASE_URL/auth/v1/verify" "${KEY[@]}" "${JSON[@]}" --data-binary @<(
-    E="$email" T="$code" python3 -c 'import json, os; print(json.dumps({"type": "email", "email": os.environ["E"], "token": os.environ["T"]}))'
+TOKEN=""
+read -rsp "Your Supabase password (from Bitwarden; just press Enter to get an emailed code instead): " password
+echo
+if [[ -n "$password" ]]; then
+  http POST "$SUPABASE_URL/auth/v1/token?grant_type=password" "${KEY[@]}" "${JSON[@]}" --data-binary @<(
+    E="$email" P="$password" python3 -c 'import json, os; print(json.dumps({"email": os.environ["E"], "password": os.environ["P"]}))'
   )
-  unset code
-  expect "the code is accepted" 200 || true
+  unset password
+  expect "your password is accepted" 200 || true
   TOKEN="$(field 'd["access_token"]')"
-  if [[ -n "$TOKEN" && "$TOKEN" != "?" ]]; then
-    auth() { # auth PATH: a GET with your token, passed through a pipe so no command line holds it
-      http GET "$API$1" -H @<(printf 'Authorization: Bearer %s\n' "$TOKEN")
-    }
-    echo "With your token"
-    auth /v1/me
-    if expect "GET /v1/me" 200; then echo "      leagues: $(field 'len(d["leagues"])')"; fi
-    for kind in daily weekly; do
-      auth "/v1/reports/$kind"
-      if expect "GET /v1/reports/$kind" 200; then
-        echo "      date: $(field 'd["for_date"]'), reports: $(field 'len(d["reports"])')"
-      fi
-    done
-    auth /v1/push/public-key
-    expect "GET /v1/push/public-key (503 until push is set up)" 200 503 || true
-  else
-    echo "  ✗ no token came back, so the signed-in calls were skipped" >&2
-    failures=$((failures + 1))
-  fi
 else
-  echo "  ✗ skipped the signed-in calls: no code was sent (is $email set up under Authentication, Users?)" >&2
+  http POST "$SUPABASE_URL/auth/v1/otp" "${KEY[@]}" "${JSON[@]}" \
+    -d "$(E="$email" python3 -c 'import json, os; print(json.dumps({"email": os.environ["E"], "create_user": False}))')"
+  if expect "a code is sent to you" 200; then
+    read -rsp "The 6-digit code from the email: " code
+    echo
+    http POST "$SUPABASE_URL/auth/v1/verify" "${KEY[@]}" "${JSON[@]}" --data-binary @<(
+      E="$email" T="$code" python3 -c 'import json, os; print(json.dumps({"type": "email", "email": os.environ["E"], "token": os.environ["T"]}))'
+    )
+    unset code
+    expect "the code is accepted" 200 || true
+    TOKEN="$(field 'd["access_token"]')"
+  fi
+fi
+if [[ -n "$TOKEN" && "$TOKEN" != "?" ]]; then
+  auth() { # auth PATH: a GET with your token, passed through a pipe so no command line holds it
+    http GET "$API$1" -H @<(printf 'Authorization: Bearer %s\n' "$TOKEN")
+  }
+  echo "With your token"
+  auth /v1/me
+  if expect "GET /v1/me" 200; then echo "      leagues: $(field 'len(d["leagues"])')"; fi
+  for kind in daily weekly; do
+    auth "/v1/reports/$kind"
+    if expect "GET /v1/reports/$kind" 200; then
+      echo "      date: $(field 'd["for_date"]'), reports: $(field 'len(d["reports"])')"
+    fi
+  done
+  auth /v1/push/public-key
+  expect "GET /v1/push/public-key (503 until push is set up)" 200 503 || true
+else
+  echo "  ✗ no token came back, so the signed-in calls were skipped (is $email set up under Authentication, Users?)" >&2
+  failures=$((failures + 1))
 fi
 unset key
 

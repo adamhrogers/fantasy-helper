@@ -11,6 +11,7 @@
 - **CORS is an allow-list** read from `FH_APP_ORIGINS`. Until the app has an address the secret holds `https://not-set.invalid`, because a secret with no value can't be mounted. Tokens travel in the `Authorization` header, never in a cookie, so cross-site request forgery has nothing to ride on.
 - **The schema is committed.** `fh openapi` prints it, `web/openapi.json` holds it, and a test fails when they differ, the same idea as `alembic check`. The phone app's typed client is generated from that file.
 - **The service moves last in the deploy,** after the migration, so it never runs ahead of its schema (ADR 0027).
+- **Adam signs in with an email and a password; the emailed 6-digit code is for the beta.** Both give the same kind of token, so the API doesn't care. (Updated 2026-11-16: the code needs a custom email sender and an edited template in Supabase, which is a lot of setup for one user. Friends can't be handed a password, so the beta uses the code, and the sender is part of the beta's setup.)
 - **No docs, no OpenAPI route, no access log.** Nothing about the API is browsable from outside, and uvicorn's access log would carry every URL.
 
 ## Why
