@@ -317,6 +317,13 @@ The dates in roadmap v0.5 assumed M3 would end on 2026-11-12. It won't end befor
 | 6 | Google Cloud's project ID and number show in the public deploy logs (GitHub prints environment variables; the repo itself doesn't hold them) | Accept: they identify, they don't grant, and deploys are tied to this repo, branch and workflow. To hide them anyway, store them as `prod` secrets instead of variables | Any time |
 | 7 | Where the smarter weekly planner goes (roadmap, "Direction: a smarter weekly planner") | **Decided 2026-11-16 (Adam): start now.** The smallest piece is built (PR 21: the report says who each day's count left out and why); the day-by-day planning stays beside M4 | Done for the first piece |
 
+## Decisions waiting on Adam, added 2026-11-16
+
+| # | Decision | Recommended | Needed by |
+|---|---|---|---|
+| 8 | Where the daily "what happened" cards go (roadmap, "Direction: a daily report that says what happened in each league") | Engine-only cards (league standouts, pickups, his team against projections, his day's points against his opponent's) as a lane beside Phases 3 to 5, before M4's brain | Before M4 starts |
+| 9 | Move the one-tap "I locked / I passed" button from M5 to right after the app's first deploy | Yes: without it, a lock card can recommend a player already locked | Before Phase 4 |
+
 ## Outside facts (checked 2026-11-15)
 
 Read from each vendor's own documentation on that date. Re-read the one a phase leans on before building.
