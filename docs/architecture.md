@@ -1,6 +1,8 @@
 # Fantasy Helper — Technical Architecture
 
-**Status:** Draft v0.3 · **Date:** 2026-11-06 (v0.2: 2026-10-19) · **Source:** *Fantasy Basketball Helper: Product Spec* (Oct 15, 2026, 25 pp.)
+**Status:** Draft v0.4 · **Date:** 2026-11-15 (v0.3: 2026-11-06; v0.2: 2026-10-19) · **Source:** *Fantasy Basketball Helper: Product Spec* (Oct 15, 2026, 25 pp.)
+
+**Changes in v0.4 (2026-11-15):** brought in line with what M3 built and decided: timed jobs are Cloud Run jobs in a morning chain (§10, ADRs 0025, 0028), production secrets live in Google Secret Manager (§12.1, ADR 0027), sign-in is a 6-digit email code checked against Supabase's public keys (§9), and the app's host on Cloudflare is open between Pages and Workers static assets ([m3-plan.md](m3-plan.md)).
 
 **Changes in v0.3 (2026-11-06):** a read path built for low latency: pre-computed read models, few batched tools, in-process MCP, one region (§5.4, ADR 0020). A storage budget that keeps Postgres inside the free tier, with every season archived to R2 for future years and nightly backups of the irreplaceable tables (§5.5, ADR 0021). Sleeper lock-in moves to M2, inside an engine-only daily report (roadmap v0.5).
 
@@ -297,10 +299,10 @@ expected value on day d  =  realized so far       (actual box scores, in league 
 
 ## 9. Delivery
 
-- **PWA** on Cloudflare Pages. Tabs: Today, This Week, Watchlist, then Scorecard (M6) and Chat (later). Swipeable decision cards, one decision per card, each with its reason. Thumbs up or down on every card.
+- **PWA** on Cloudflare (Pages in ADR 0009; Workers static assets is proposed for M3 part 4, because Cloudflare now says to start new projects there). Tabs: Today, This Week, Watchlist, then Scorecard (M6) and Chat (later). Swipeable decision cards, one decision per card, each with its reason. Thumbs up or down on every card.
 - **Web Push** with VAPID keys (pywebpush). iOS needs the app **added to the Home Screen** (iOS 16.4+), so beta onboarding includes that step.
 - **App API, a gap in the spec:** Cloudflare Pages serves static files, but the PWA has to write takes, feedback and push subscriptions, and friends need auth. **Recommendation:** FastAPI on **Google Cloud Run** (free tier, scales to zero, cold start of a second or two). It's the same vendor the spec already names as the fallback for the nightly job, so one container image serves both the API and the jobs.
-- **Auth:** **Supabase Auth from M3**, the first milestone with a phone app. Sign-in is by magic link and invite-only, and the API verifies the JWT. Adam is user one, and friends join by invite at the beta, so there's no temporary auth to replace later. The PWA never talks to the database directly, which keeps the API as the single enforcement point.
+- **Auth:** **Supabase Auth from M3**, the first milestone with a phone app. Sign-in is by a 6-digit email code (a tapped magic link would open Safari, not the app on the Home Screen) and invite-only. The API verifies each token itself, against Supabase's public keys, and ties it to our own user row. Adam is user one, and friends join by invite at the beta, so there's no temporary auth to replace later. The PWA never talks to the database directly, which keeps the API as the single enforcement point.
 - **Timeline graphs:** take, call and trade detail pages chart their `evaluation_points` (§8.1) with Recharts. The horizon is shaded, events are marked, and the final grade sits at the window's end.
 - **Run events (ops):** every run reports started, its steps, and how it ended (quiet when it went well, loud when it failed), plus stale sources, expired ESPN cookies and a late report (at 7:45 if it hasn't shipped). They go to Adam through **ntfy.sh** on a private, randomly named topic, independent of product push, so a broken PWA can't hide its own outage. They're about runs only; "report ready" and lock reminders are product push. They never contain secrets or league data. See [runbooks/run-events.md](runbooks/run-events.md).
 
@@ -334,7 +336,7 @@ The path follows the spec, with one change of timing.
 | Stage | Pipeline | Database | Raw store | PWA | API |
 |---|---|---|---|---|---|
 | **M0–M2** | Laptop: launchd runs `fh snapshot` twice a day; `fh ingest` by hand (ADR 0017) | **Supabase** Postgres (dev project) | Local disk | — | — |
-| **M3 → beta** | Cloud Run Jobs + Cloud Scheduler (ADR 0025); GitHub Actions for CI and deploys | **Supabase** Postgres (prod project, `us-east-1`) + Supabase Auth | Cloudflare R2 (raw, archive, backups) | Cloudflare Pages | Cloud Run (`us-east4`) |
+| **M3 → beta** | Cloud Run Jobs + Cloud Scheduler (ADR 0025); GitHub Actions for CI and deploys | **Supabase** Postgres (prod project, `us-east-1`) + Supabase Auth | Cloudflare R2 (raw, archive, backups) | Cloudflare (Pages or Workers static assets) | Cloud Run (`us-east4`) |
 | **Paid launch** | Revisit everything | | | | |
 
 **No SQLite stage (a change from the spec).** The spec starts on SQLite and moves to hosted infrastructure before the beta. Two things favor starting on Postgres instead. Leagues and encrypted credentials live in the database from M1 (§12.1), and GitHub Actions runners don't keep files between runs, so scheduled jobs need a hosted database anyway. Starting on Supabase removes a migration from the busiest stretch of the build. **Supabase over Neon**, because it bundles Auth. The free tier allows two projects (dev and prod), and its 7-day idle pause can't trigger while a job runs every night.
@@ -353,7 +355,7 @@ Nothing sensitive is ever in the code or in git. There are three kinds of config
 
 | Kind | Examples | Where it lives | Why |
 |---|---|---|---|
-| **System secrets** (the app's own keys) | Anthropic and LangSmith keys, database URL, the encryption key, VAPID push key | A secret manager: GitHub Secrets for jobs, Google Secret Manager for the API, and a gitignored `.env` on the laptop | These can't live in the database: the database password can't be stored inside the database, and the key that encrypts credentials can't sit next to them |
+| **System secrets** (the app's own keys) | Anthropic and LangSmith keys, database URL, the encryption key, VAPID push key | Google Secret Manager for the Cloud Run jobs and the API (ADRs 0025, 0027), GitHub's `prod` environment only for what still runs there, and a gitignored `.env` on the laptop for dev (prod has no `.env`: `scripts/fh-prod.sh` reads its secrets into one process) | These can't live in the database: the database password can't be stored inside the database, and the key that encrypts credentials can't sit next to them |
 | **User and league data** | Users, friends, leagues, league IDs, watchlists, takes | The database, scoped by `user_id`, behind sign-in | It differs per user and is added through the app (`fh league add` from M1, the onboarding screen from M7) |
 | **Platform credentials** | ESPN `espn_s2` and `SWID` cookies, later Yahoo OAuth tokens | The database, **encrypted** with the system encryption key (AES-GCM) | A database leak alone exposes nothing usable |
 
@@ -373,7 +375,7 @@ Nothing sensitive is ever in the code or in git. There are three kinds of config
 
 - **Python 3.12** with uv, **Ruff** (lint and format), **mypy** (strict on `domain`, `engine`, `facts`), **pytest** with recorded fixtures, **hypothesis** property tests for the engine math (for example, scoring is linear in the weights and the value of waiting never increases as games run out), and **import-linter** layer contracts.
 - Test tiers: `unit`, `contract` (each adapter against recorded responses), `golden` (hand-calculated scoring), `integration` (a full pipeline run on fixtures and Postgres).
-- CI: `ci.yml` (lint, types, tests, contracts, secret scan), `web.yml` (typecheck, build), `evals.yml` (regression replay). Cron workflows `daily.yml` and `weekly.yml` arrive with M3, and `grade.yml` with M6.
+- CI: `ci.yml` (lint, types, tests, contracts, secret scan), `container.yml` (the image builds, starts and migrates an empty database), `deploy.yml` (builds the image and deploys the Cloud Run jobs from `main`, migrating in between), `web.yml` (typecheck, build; M3 part 4), `evals.yml` (regression replay). Timed work runs as Cloud Run jobs started by Cloud Scheduler and chained (ADRs 0025, 0028), not as cron workflows; the nightly grade job joins them in M6.
 - **Decision log:** `docs/decisions/NNNN-title.md` (what, why, what was rejected), one per architecture choice. The decisions in this document become ADRs 0001–00NN in M0.
 - **Working rules** from the spec are written into `CLAUDE.md`, so AI-assisted sessions follow them too.
 

@@ -1,8 +1,15 @@
 # Fantasy Helper — Phased Roadmap
 
-**Status:** v0.5, 2026-11-06 · companion to [architecture.md](architecture.md)
+**Status:** v0.6, 2026-11-15 (dates proposed, waiting on Adam) · companion to [architecture.md](architecture.md)
 
-**Friends beta: Nov 29 (planned Nov 15, then Nov 22). Hard stop: Dec 15.** Each milestone ends with something Adam uses the next morning and an automated check that proves it works. Lanes (A, B, …) inside a milestone have no dependencies on each other, so they can run as parallel sub-agents or sessions once you approve.
+**Friends beta: about Dec 6 with M4's brain work in parallel, about Dec 12 without (planned Nov 15, then Nov 22, then Nov 29). Hard stop: Dec 15.** Each milestone ends with something Adam uses the next morning and an automated check that proves it works. Lanes (A, B, …) inside a milestone have no dependencies on each other, so they can run as parallel sub-agents or sessions once you approve.
+
+**What changed in v0.6 (Nov 15):**
+- **M3 is about ten days behind v0.5.** It was planned for Nov 7–12 beside M2. Part 1 shipped on Nov 7, then a week went to accounts and to finding that GitHub's scheduler ran every job hours late, which moved all timed jobs to Cloud Run (ADR 0025, Nov 14). Part 2 merged on Nov 15. The API, the phone app, push and backups remain, and are planned step by step in [m3-plan.md](m3-plan.md). M3 is now expected to end about **Nov 23**.
+- **Everything after M3 moves with it.** In sequence that puts the beta at about **Dec 12**, three days inside the hard stop. Running M4's lane A (the brain: `brain/`, `mcp_server/`) as a second session beside M3's phone app, which shares no files with it, puts the beta at about **Dec 6**. The second is recommended.
+- **These dates assume work on most days**, as on Nov 14 and 15. At weekends only, M3 alone runs into December and the hard stop needs the cuts at the end of this page.
+- **M3's shape changed:** timed jobs are Cloud Run jobs in a morning chain, not `daily.yml` and `weekly.yml` on GitHub (ADRs 0025, 0028); sign-in is a 6-digit email code, not a magic link (decided Nov 6); the app's host is proposed as Cloudflare Workers static assets instead of Pages, because Cloudflare now says to start new projects there.
+- **M4's streak** ("by 8 a.m. five days in a row") moves from Nov 15–19 to the first five mornings after M4 ships.
 
 **What changed in v0.5 (Nov 6):**
 - **Sleeper lock-in moves from M5 to M2,** so Adam uses it in his live league from about Nov 11 instead of about Nov 23. It needs no AI, only M2's scoring and distributions. It arrives as lock-or-pass cards in an **engine-only daily report**, not a separate command. The registry's core (append-only table, tip-off guard) moves with it, because every call is logged. Lock-in v2 stays in M5.
@@ -27,18 +34,23 @@
 ```
 Oct 25 ─ M0 Foundation ─────────────────────────────── done Nov 6 (NBA tip-off was Oct 20)
 Nov 6  ─ M1 Data spike ─────────────────────────────── done Nov 6; snapshots since Nov 6
-Nov 7  ─ M2 Scoring, weekly overview, lock-in          ┐ critical path
-       ║ M3 Phone app + delivery  (in parallel with M2) │
-Nov 13 ─ M4 Daily report + registry (5-day streak Nov 15–19)
-Nov 20 ─ M5 Watchlist · signals · lock-in v2           │
-Nov 23 ─ M6 Grading + timeline graphs                  │
-Nov 29 ─ ◆ FRIENDS BETA (M7) ──────────────────────────┘  (hard stop Dec 15)
-Nov 30 ─ M8 Multi-agent orchestration ─────────────── Dec 31
+Nov 6  ─ M2 Scoring, weekly overview, lock-in ───────── done Nov 6
+Nov 7  ─ M3 Phone app + delivery                       ┐ critical path
+       │   parts 1–2 (cloud snapshots, cloud reports)   │ merged Nov 7–15
+       │   rollout, API, phone app, push, backups       │ Nov 15 → about Nov 23 (m3-plan.md)
+Nov 18 ║ M4 lane A, the brain (beside M3's phone app)   │
+Nov 24 ─ M4 Daily report + registry (streak: its first five mornings, about Nov 26–30)
+Nov 26 ─ M5 Watchlist · signals · lock-in v2  (during the streak)
+Nov 29 ─ M6 Grading + timeline graphs                  │
+Dec 6  ─ ◆ FRIENDS BETA (M7) ──────────────────────────┘  (hard stop Dec 15)
+Dec 7  ─ M8 Multi-agent orchestration ─────────────── about five weeks
 Dec    ─ P9 Trade tracker + trade graphs · categories leagues
-Jan 1  ─ P10 Iterate on evidence ──────────────────── Mar 15
+Jan    ─ P10 Iterate on evidence ──────────────────── Mar 15
 Mar 15 ─ ◆ Season ends ─ P11 Case study
 Apr–Sep 2027 ─ P12 Offseason: Yahoo, sign-up, pricing ─ fall 2027 launch
 ```
+
+**Without the parallel lane:** M4 Nov 24–30, M5 Dec 1–3, M6 Dec 4–9, beta about Dec 12.
 
 ---
 
@@ -86,11 +98,11 @@ Apr–Sep 2027 ─ P12 Offseason: Yahoo, sign-up, pricing ─ fall 2027 launch
 
 ---
 
-## M2 — Scoring, weekly overview and Sleeper lock-in · Nov 7–12
+## M2 — Scoring, weekly overview and Sleeper lock-in · Nov 6 (done; planned Nov 7–12)
 
 **Goal:** the first useful outputs, built entirely by code with no AI. That means the weekly overview, plus an **engine-only daily report** whose first cards are Sleeper **lock-or-pass** calls (moved from M5 in v0.5). Adam uses lock-in in his live league from about Nov 11.
 
-**Status (2026-11-06): done.** PR #3, reviewed (15 findings, all fixed), ready to merge.
+**Status (2026-11-06): done.** PR #3, reviewed (15 findings, all fixed) and merged.
 - **Built:**
   - box scores (one truth for every league, ADR 0022) and scoring, verified against both platforms
   - lock-in v1 with the registry
@@ -125,25 +137,27 @@ These steps depend on each other, so they're ordered. B and C run in parallel at
 
 ---
 
-## M3 — Phone app and delivery · Nov 7–12 (in parallel with M2)
+## M3 — Phone app and delivery · Nov 7 to about Nov 23 (planned Nov 7–12)
 
 **Goal:** prove the whole path from scheduled job to sign-in to push before any LLM work starts.
 
-**Status (Nov 7):** in five parts (session-handoff §7). Because scheduled workflows run only from `main`, M3 merges part by part.
+**Status (Nov 15):** in five parts (session-handoff §7). Parts 1 and 2 are merged; part 2's rollout is half done; parts 3 to 5 are planned in [m3-plan.md](m3-plan.md). Because the deploy runs only from `main`, M3 merges part by part.
 - **Part 1, cloud snapshots: merged and live** (PR #4, ADR 0023). The raw store is on R2, and the snapshot job runs on GitHub Actions on Eastern time. The laptop keeps saving to its own disk as an independent backup until the part 5 watchdog is live ([runbooks/cloud-snapshots.md](runbooks/cloud-snapshots.md)).
 - **Dependabot: merged** (PR #5, ADR 0024). Dependency updates merge themselves once CI passes.
-- **Adam's accounts:** sections 1–4 done (GitHub `prod`, Supabase prod, the prod key and topic, R2), and 5 (Google Cloud) on 2026-11-14; 6 (Healthchecks) is next. Inventory: [runbooks/accounts-and-secrets.md](runbooks/accounts-and-secrets.md).
+- **Adam's accounts:** every one M3 needs exists (GitHub `prod`, Supabase prod, the prod key and topic, R2 on 2026-11-07; Google Cloud and Healthchecks on 2026-11-14). Inventory: [runbooks/accounts-and-secrets.md](runbooks/accounts-and-secrets.md).
 - **Found 2026-11-14:** GitHub's scheduler started every cloud snapshot hours late for a week (none dropped). Timed jobs need another trigger before part 2's scheduled runs are useful (session-handoff §7).
 - **Decided 2026-11-14 (ADR 0025):** timed jobs move to Cloud Run Jobs started by Cloud Scheduler, watched by Healthchecks ([runbooks/scheduled-jobs.md](runbooks/scheduled-jobs.md)).
 - **Snapshots on Cloud Run: live** since 2026-11-14 (PRs #12, #14), tested end to end, Healthchecks schedules set. The laptop retires after four on-time runs in a row, counting from 2026-11-15 06:17.
-- **Part 2 (2026-11-15, PR open):** reports saved in a `reports` table; `migrate`, `daily` and `weekly` as Cloud Run jobs, with the morning a chain (snapshot, then daily, then weekly, each starting only when the one before is complete, ADR 0028); a run lock; the prod database migrated by the deploy; `scripts/fh-prod.sh`; Healthchecks schedules set by script. ADRs 0026, 0027 and 0028, [runbooks/prod-database.md](runbooks/prod-database.md).
-- **Next:** roll out part 2, then part 3 (the API and sign-in).
+- **Part 2: merged 2026-11-15** (PR #16). Reports saved in a `reports` table; `migrate`, `daily` and `weekly` as Cloud Run jobs, with the morning a chain (snapshot, then daily, then weekly, each starting only when the one before is complete, ADR 0028); a run lock; the prod database migrated by the deploy; `scripts/fh-prod.sh`; Healthchecks schedules set by script. ADRs 0026, 0027 and 0028, [runbooks/prod-database.md](runbooks/prod-database.md). The deploy migrated prod to 0006 and wired the chain. **Rollout:** leagues, history and the first chained morning are still to do.
+- **Next:** finish part 2's rollout (before 06:17 Eastern on 2026-11-16, when the chain first starts on its own), end the snapshot overlap, then part 3 (the API and sign-in), part 4 (the phone app) and part 5 (push, backups, the exit test). All of it, in order: [m3-plan.md](m3-plan.md).
+
+The lanes as built and planned (the first version of this table had a magic link, Cloudflare Pages and GitHub cron workflows):
 
 | Lane | Work |
 |---|---|
-| A — API + auth | FastAPI on Cloud Run in **`us-east4`** with one pooled database engine per process, **Supabase Auth** (magic link; Adam is user one), reports and push-subscription routes, Supabase prod project in **`us-east-1`** (ADR 0020) |
-| B — PWA | Vite + React shell, sign-in, Today and This Week tabs rendering `ReportDocument` cards (the daily lock-or-pass cards and the weekly overview), Web Push (VAPID), Cloudflare Pages, iOS Home Screen install |
-| C — Scheduling + ops | `daily.yml` and `weekly.yml` on GitHub Actions; the raw store moves to R2; a **nightly backup** of the tables that can't be rebuilt to R2 (ADR 0021); **run events via ntfy** (started, steps and success quietly; failed or missing run, stale source, expired cookies, late report and database size loudly; docs/runbooks/run-events.md) |
+| A — API + auth | FastAPI on Cloud Run in **`us-east4`** with one pooled database engine per process, **Supabase Auth** (a 6-digit email code; Adam is user one; the API checks each token against Supabase's public keys), reports and push-subscription routes, Supabase prod project in **`us-east-1`** (ADR 0020) |
+| B — PWA | Vite + React shell, sign-in, Today and This Week tabs rendering `ReportDocument` cards (the daily lock-or-pass cards and the weekly overview), Web Push (VAPID), hosted on Cloudflare (Workers static assets proposed, Pages in ADR 0009), iOS Home Screen install |
+| C — Scheduling + ops | **Built:** timed jobs on Cloud Run, started by Cloud Scheduler and chained (ADRs 0025, 0028); the raw store on R2; **run events via ntfy**; the missed-run and late-report watchdog (Healthchecks); the database size warning. **Left:** a **nightly backup** of the tables that can't be rebuilt (ADR 0021), a lock on the raw history, the exit test |
 
 **Done when:**
 - A scheduled run, with the laptop closed, pushes the daily report and the weekly overview to Adam's phone, and they open after sign-in.
@@ -154,32 +168,34 @@ These steps depend on each other, so they're ordered. B and C run in parallel at
 
 ---
 
-## M4 — Daily report and registry · Nov 13–19
+## M4 — Daily report and registry · about Nov 24–30 (lane A can start Nov 18, beside M3)
 
 **Goal:** a daily report on Adam's phone every morning, with every call logged.
+
+**Before the first model call:** the cloud jobs need the Claude key and the LangSmith key in Secret Manager (they have neither today), and a spend limit on the Claude key in the Console.
 
 | Lane | Work |
 |---|---|
 | A — Brain baseline | LLM gateway, `baseline` graph (one Claude model), structured `ReportDraft`, guardrails (schema, numeric grounding, candidate set), graceful degradation to the engine-only report, prompt manifest, MCP server v1 (read-only, few batched tools, in-process; ADR 0020) |
 | B — Registry + daily pipeline | The registry from M2 extended to every call type, with follow detection. The engine-only daily pipeline from M2 gains the brain, preflight checks and news adapter v1. |
 
-**Done when** (spec): the report reaches Adam's phone by 8 a.m. five days in a row (Nov 15–19), and every call in it is in the registry. **Plus:** every LLM call has a LangSmith trace ID on its registry row, and the run log shows cost per report.
+**Done when** (spec): the report reaches Adam's phone by 8 a.m. five days in a row (its first five mornings, about Nov 26–30), and every call in it is in the registry. **Plus:** every LLM call has a LangSmith trace ID on its registry row, and the run log shows cost per report.
 
 ---
 
-## M5 — Watchlist, belief signals, lock-in v2 · Nov 20–22
+## M5 — Watchlist, belief signals, lock-in v2 · about Nov 26–28 (during M4's streak), or Dec 1–3
 
 | Lane | Work |
 |---|---|
 | A — Takes | API and PWA form: player search, direction, horizon, conviction, one-line take, in under 10 seconds on a phone |
 | B — Signals | `engine/signals.py`, signal cards in the daily report, registry call types `pick_up_signal` and `buy_low` |
-| C — Lock-in v2 | Version 1 shipped in M2. Version 2 adds: decisions across the whole roster (bench a player after a pass so a bench player's game counts), matchup-aware risk (chase variance when behind), an **evening alert** from the 17:30 snapshot when a player is ruled out before his last game, and the one-tap "I locked / passed" button in the PWA: Sleeper doesn't reliably show locks mid-week, so this is how the app learns them |
+| C — Lock-in v2 | Version 1 shipped in M2. Version 2 adds: decisions across the whole roster (bench a player after a pass so a bench player's game counts), matchup-aware risk (chase variance when behind), an **evening alert** from the 17:17 snapshot when a player is ruled out before his last game, and the one-tap "I locked / passed" button in the PWA: Sleeper doesn't reliably show locks mid-week, so this is how the app learns them |
 
 **Done when** (spec): signals and lock calls appear in the report and in the registry. **Plus:** the lock-in v2 property tests are green.
 
 ---
 
-## M6 — Grading and timeline graphs · Nov 23–28
+## M6 — Grading and timeline graphs · about Nov 29–Dec 4, or Dec 4–9
 
 | Lane | Work |
 |---|---|
@@ -191,7 +207,7 @@ These steps depend on each other, so they're ordered. B and C run in parallel at
 
 ---
 
-## M7 — Friends beta · from Nov 29
+## M7 — Friends beta · from about Dec 6, or Dec 12
 
 | Work |
 |---|
@@ -204,7 +220,7 @@ These steps depend on each other, so they're ordered. B and C run in parallel at
 
 ---
 
-## M8 — Multi-agent orchestration · Nov 30–Dec 31
+## M8 — Multi-agent orchestration · from the beta, about five weeks (was Nov 30–Dec 31)
 
 **Goal:** prove or disprove that the council beats one model.
 
@@ -250,10 +266,10 @@ Users' league data never lives in the repo, so the friends beta doesn't force it
 ## Critical path and the levers if it slips
 
 ```
-M1 snapshots + per-stat projections ─► M2 scoring ─► M4 daily report ─► M6 grading ─► Nov 29 beta
-                                       M3 phone path ──┘ (parallel)
+M1 snapshots + per-stat projections ─► M2 scoring ─► M3 phone path ─► M4 daily report ─► M6 grading ─► beta
+                                                     M4 lane A (the brain) ──┘ (parallel)
 ```
 
-**To pull the beta earlier:** run M2 and M3 as parallel sessions (they share no files), start M5's take-entry form during M4's streak week, and accept the first cut below.
+**To pull the beta earlier** (v0.6 already assumes the first two for the Dec 6 date): run M4's lane A beside M3's phone app (they share no files), start M5's take-entry form during M4's streak week, and accept the first cut below.
 
 If the beta date is at risk, cut in this order (keeping the Dec 15 hard stop): (1) PWA polish, keeping plain cards; (2) lock-in v2 moves to the first beta week (v1 already shipped in M2); (3) the timeline graph ships as a plain line, with event markers added the next week; (4) the beta starts with the Sleeper league only. **Never cut:** daily snapshots, the registry, the tip-off guard, tracing or the nightly backup. Without them the season produces no evidence and the graphs have no history.

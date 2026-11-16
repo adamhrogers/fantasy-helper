@@ -22,20 +22,22 @@ If `daily` hasn't reported by **07:45** (`weekly`: 08:00), Healthchecks alerts t
 
 ## First-time rollout
 
-- [ ] **1. Claude, before merging:** from the PR's branch, add the new pieces. It only adds: the `fh-reports` account, two empty secrets, three placeholder jobs (`migrate`, `daily`, `weekly`), and the chain's permissions (`fh-jobs` may start `daily`, `fh-reports` may start `weekly`, nothing broader). The deployer can't create jobs, so they have to exist before the first deploy.
+**Where it stands (2026-11-15):** steps 1 to 3 and 8 are done. Steps 4 to 7 and 9 should happen the same day: the first scheduled snapshot on the new image runs at **06:17 Eastern on 2026-11-16** and starts `daily` on its own. If prod still has no user by then, `daily` stops with "no user yet" and Healthchecks sends a "down" alert. Nothing is written, so it's a false alarm, but it's avoidable. The order and the traps: [m3-plan.md](../m3-plan.md), Phase 0.
+
+- [x] **1. Claude, before merging** (done 2026-11-15; the job policies show `fh-jobs` may start `daily` and `fh-reports` may start `weekly`)**:** from the PR's branch, add the new pieces. It only adds: the `fh-reports` account, two empty secrets, three placeholder jobs (`migrate`, `daily`, `weekly`), and the chain's permissions (`fh-jobs` may start `daily`, `fh-reports` may start `weekly`, nothing broader). The deployer can't create jobs, so they have to exist before the first deploy.
 
 ```bash
 scripts/gcp-setup.sh infra
 ```
 
-- [ ] **2. Adam: two secret values** (2 min). Paste each from Bitwarden at the hidden prompt. The database one is Supabase's **session pooler** string (port 5432, not 6543). The encryption key is the prod one that GitHub's `prod` environment already holds:
+- [x] **2. Adam: two secret values** (done 2026-11-15; each has one enabled version). Paste each from Bitwarden at the hidden prompt. The database one is Supabase's **session pooler** string (port 5432, not 6543). The encryption key is the prod one that GitHub's `prod` environment already holds:
 
 ```bash
 scripts/gcp-secrets.sh fh-database-url fh-encryption-key
 ```
 
-- [ ] **3. Merge the PR.** The deploy builds the image, updates the snapshot jobs, then **migrates the prod database** (0001 to 0006: its first migration) and waits for it, then updates `daily` and `weekly`. Claude watches it. If it stops at the migration, the report jobs still run their old image and nothing is half-done.
-- [ ] **4. Check prod's database** (Claude, via your login): the doctor names the Supabase region and says whether the migrations are at head:
+- [x] **3. Merge the PR** (done 2026-11-15 at 09:27 Eastern; the deploy took 95 seconds, the deployer's job-level role was enough to run `migrate` and wait for it, and the job's log says `migrated an empty database to 0006`)**.** The deploy builds the image, updates the snapshot jobs, then **migrates the prod database** (0001 to 0006: its first migration) and waits for it, then updates `daily` and `weekly`. Claude watches it. If it stops at the migration, the report jobs still run their old image and nothing is half-done.
+- [ ] **4. Check prod's database** (Adam; the migration is already confirmed by the job's log, so this adds the region. On 2026-11-15 the app's permission check stopped Claude's session from reading prod secrets, so it's your command unless you allow it): the doctor names the Supabase region and says whether the migrations are at head. Expect `migrations at head (0006), Supabase us-east-1`:
 
 ```bash
 scripts/fh-prod.sh doctor
@@ -61,23 +63,31 @@ scripts/fh-prod.sh league add espn OTHER_LEAGUE_ID
 scripts/fh-prod.sh league add sleeper LEAGUE_ID --username YOUR_SLEEPER_NAME
 ```
 
-- [ ] **6. Claude: load the history from R2 into prod.** One `ingest` run, started as the `daily` job with its command replaced. It reads every snapshot since 2026-11-06 (about 1,900 files) and loads them. Claude checks the counts against dev afterwards. Then one `daily` and one `weekly` run:
+- [ ] **6. Claude: load the history from R2 into prod, then run the chain once.** First one `ingest` run, started as the `daily` job with its command replaced. It reads every snapshot since 2026-11-06 (about 1,900 files) and loads them. Claude checks the counts against dev afterwards:
 
 ```bash
 gcloud run jobs execute daily --region us-east4 --args=ingest --wait
 ```
 
+  If the history load hits the 30-minute limit, Claude runs it again with a longer limit for that one run (add `--task-timeout=60m`). Ingest is one transaction: a run that's cut off saves nothing, so the second run starts from the beginning, and it's safe to repeat.
+
+  Then start the **morning snapshot** by hand, not `daily`. `daily` and `weekly` wait for a completion marker from today, and the 06:17 snapshot on rollout day ran the image from before the merge, which wrote none: `daily` started directly would wait 7 minutes and fail with "this morning's snapshot isn't saved yet". The snapshot saves a fresh set (Sleeper's player list is reused), writes the marker, and starts `daily`, which starts `weekly`. It's also the first live test of the hand-over:
+
 ```bash
-gcloud run jobs execute daily --region us-east4 --wait
+gcloud run jobs execute snapshot-morning --region us-east4 --wait
+```
+
+  Check that the chain ran: one succeeded run each.
+
+```bash
+gcloud run jobs executions list --job daily --region us-east4 --limit 3
 ```
 
 ```bash
-gcloud run jobs execute weekly --region us-east4 --wait
+gcloud run jobs executions list --job weekly --region us-east4 --limit 3
 ```
 
-  If the history load hits the 30-minute limit, Claude runs it again with a longer limit for that one run (add `--task-timeout=60m` to the first command): ingest is safe to repeat and picks up where it stopped.
-
-  Running `daily` by hand also starts `weekly` when it finishes (the chain's environment is on the job), so the last command is only needed if that hand-over didn't happen.
+  If the phone says "couldn't start daily", see the table at the end. A run started after some of the day's games have tipped logs fewer calls than a morning run: a call is only logged while the player's next tip is still ahead.
 
 - [ ] **7. Adam: open the report the cloud built:**
 
@@ -91,19 +101,19 @@ scripts/fh-prod.sh report open
 scripts/fh-prod.sh report open weekly
 ```
 
-- [ ] **8. Claude: confirm the schedules.** Only the two snapshots are on a clock; this also removes any schedule a chained job has, because one would start it whether or not the snapshot was complete:
+- [x] **8. Claude: confirm the schedules** (checked 2026-11-15 by listing them: exactly two entries, `snapshot-morning` at 06:17 and `snapshot-evening` at 17:17, `America/New_York`, both enabled; `daily` and `weekly` have none, so there was nothing to remove)**.** Only the two snapshots are on a clock; this also removes any schedule a chained job has, because one would start it whether or not the snapshot was complete:
 
 ```bash
 scripts/gcp-setup.sh schedule
 ```
 
-- [ ] **9. Adam: the Healthchecks schedules, by script** (3 min, and the last time you type a schedule into their website). In Healthchecks, open your project → **Settings → API Access → Create API key (read-write)**, save it in Bitwarden, then run the script and paste the key at the hidden prompt. It sets all four checks (cron line, time zone `America/New_York`, grace) from `scripts/jobs.conf`, and it fixes the two snapshot checks that were saved in UTC on 2026-11-14:
+- [ ] **9. Adam: the Healthchecks schedules, by script** (3 min, and the last time you type a schedule into their website; do it on rollout day, because until it runs the two snapshot checks keep the UTC schedules that raised the false alert). In Healthchecks, open your project → **Settings → API Access → Create API key (read-write)**, save it in Bitwarden, then run the script and paste the key at the hidden prompt. It sets all four checks (cron line, time zone `America/New_York`, grace) from `scripts/jobs.conf`, and it fixes the two snapshot checks that were saved in UTC on 2026-11-14:
 
 ```bash
 scripts/healthchecks-setup.sh
 ```
 
-- [ ] **10. Clean up:** nothing in GitHub uses the database URL or the encryption key now (the report jobs read them from Secret Manager). Remove them from GitHub's `prod` environment, so each secret lives in as few places as possible:
+- [ ] **10. Clean up, after one clean scheduled morning:** nothing in GitHub uses the database URL or the encryption key now (the report jobs read them from Secret Manager; checked 2026-11-15, no workflow names either). Remove them from GitHub's `prod` environment, so each secret lives in as few places as possible:
 
 ```bash
 gh secret delete DATABASE_URL --env prod
@@ -117,7 +127,7 @@ gh secret delete FH_ENCRYPTION_KEY --env prod
 
 ## Day to day
 
-Nothing to do. Every morning at 06:17, 06:45 and 07:00 the jobs run, and the phone hears about problems. To read this morning's report before the phone app exists:
+Nothing to do. Every morning the 06:17 snapshot runs and hands over to `daily`, which hands over to `weekly`, and the phone hears about problems. To read this morning's report before the phone app exists:
 
 ```bash
 scripts/fh-prod.sh report open
@@ -154,7 +164,7 @@ Same as rollout step 5. For a beta friend (M7) the app will do this with their o
 | **Healthchecks: `daily` is down** (about 07:45) | The report isn't built | Open the job's log. Usually one of the rows below |
 | **"Daily report not started: the snapshot is incomplete"**, then `daily` down at 07:45 | One dataset failed, or was saved but looked wrong. The chain stopped on purpose: no report from partial data | The snapshot's alert says which. Once the source is back, re-run the snapshot, which re-fetches what failed and, if everything now passes, restarts the chain: `gcloud run jobs execute snapshot-morning --region us-east4 --wait` |
 | **"couldn't start daily"** (or `weekly`) | The snapshot (or daily run) finished and saved everything, but the next job wouldn't start | Start it by hand: `gcloud run jobs execute daily --region us-east4 --wait`. If it keeps happening, check `scripts/gcp-setup.sh show` lists the chain and `fh-jobs` / `fh-reports` still have their start permission |
-| **"no complete morning snapshot yet"** from `daily` or `weekly` | Started by hand (or a retry) before the morning snapshot finished, or it was incomplete | Wait for the snapshot, or re-run it (above). To run anyway on what's saved, start the job with its command replaced: `gcloud run jobs execute daily --region us-east4 --args=run,daily --wait` |
+| **"this morning's snapshot isn't saved yet"** from `daily` or `weekly` (the log says "no complete morning snapshot yet") | Started by hand (or a retry) before the morning snapshot finished, or it was incomplete, or today's snapshot ran an image from before the completion marker existed (rollout day) | Wait for the snapshot, or re-run it (above): that's the better fix, because it restarts the whole chain. To run anyway on what's saved, start the job with its command replaced: `gcloud run jobs execute daily --region us-east4 --args=run,daily --wait`. That `daily` run still hands over to `weekly`, which waits for the same marker and fails without it |
 | **"access denied (expired cookies?)"** for an ESPN league | ESPN cookies expired | `scripts/fh-prod.sh league add espn LEAGUE_ID --new-cookies`, then run `daily` by hand |
 | **"the database was unreachable"** after 3 attempts | Supabase paused or down, or the URL's password changed | `scripts/fh-prod.sh doctor`. A new password means a new value: `scripts/gcp-secrets.sh fh-database-url` |
 | **A deploy that failed at "Deploy the jobs, migrating the database in between"** | The migration failed. The report jobs still run their old image | Read the step's log, fix forward with a new migration, merge it |
