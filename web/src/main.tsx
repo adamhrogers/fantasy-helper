@@ -4,6 +4,7 @@ import { App } from './App';
 import { createApi } from './api/client';
 import { supabaseAuth } from './auth/supabase';
 import { ConfigProblem } from './components/Notices';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { readConfig } from './config';
 import { startServiceWorker } from './pwa';
 import './styles.css';
@@ -17,7 +18,9 @@ if (result.ok) {
   const api = createApi({ baseUrl: config.apiUrl, getToken: () => auth.accessToken() });
   root.render(
     <StrictMode>
-      <App auth={auth} api={api} codeSignIn={config.codeSignIn} />
+      <ErrorBoundary>
+        <App auth={auth} api={api} codeSignIn={config.codeSignIn} />
+      </ErrorBoundary>
     </StrictMode>,
   );
   startServiceWorker();

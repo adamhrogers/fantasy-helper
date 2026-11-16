@@ -46,7 +46,9 @@ export function useDashboard(api: Api): Dashboard {
     setMe((before) => merge(before, meResult));
     setDaily((before) => merge(before, dailyResult));
     setWeekly((before) => merge(before, weeklyResult));
-    lastLoad.current = Date.now();
+    // Only a load that fully worked counts as fresh: after a failed one, coming back to the app
+    // tries again at once.
+    if ([meResult, dailyResult, weeklyResult].every((result) => result.ok)) lastLoad.current = Date.now();
     setRefreshing(false);
   }, []);
 

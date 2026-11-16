@@ -15,5 +15,5 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true
   },
-  "include": ["vite.config.ts", "build-id.ts", "build-id.test.ts"]
+  "include": ["vite.config.ts", "build-id.ts", "build-id.test.ts", "headers.ts", "headers.test.ts"]
 }

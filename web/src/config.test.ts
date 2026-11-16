@@ -45,3 +45,18 @@ describe('readConfig', () => {
     expect(other.ok && other.config.codeSignIn).toBe(false);
   });
 });
+
+describe('a secret key never ships', () => {
+  it('refuses the new secret keys', () => {
+    const result = readConfig({ ...GOOD, VITE_SUPABASE_PUBLISHABLE_KEY: 'sb_secret_abc123' });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.problems[0]).toContain('SECRET');
+  });
+
+  it('refuses an old-style token whose role is service_role, and accepts an anon one', () => {
+    const token = (role: string) =>
+      `x.${btoa(JSON.stringify({ role })).replace(/=+$/, '')}.y`;
+    expect(readConfig({ ...GOOD, VITE_SUPABASE_PUBLISHABLE_KEY: token('service_role') }).ok).toBe(false);
+    expect(readConfig({ ...GOOD, VITE_SUPABASE_PUBLISHABLE_KEY: token('anon') }).ok).toBe(true);
+  });
+});

@@ -369,7 +369,7 @@ def test_the_web_workflow_checks_the_phone_app_and_holds_nothing_secret() -> Non
     assert "\npermissions:\n  contents: read\n" in text
     # Not a required check, like container.yml, so the ruleset and the auto-merge guard (which
     # name ci.yml's jobs) are unaffected.
-    assert "Web" not in AUTO_MERGE.read_text()
+    assert "Types, lint, tests, build" not in AUTO_MERGE.read_text()
 
 
 def test_the_phone_app_is_a_workers_static_assets_site_with_a_pinned_node() -> None:

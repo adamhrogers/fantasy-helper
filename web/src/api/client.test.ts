@@ -55,3 +55,17 @@ describe('the API client', () => {
     expect(await client.me()).toMatchObject({ ok: false, error: { kind: 'network' } });
   });
 });
+
+describe('when the sign-in service can’t be reached to get a token', () => {
+  it('says the server couldn’t be reached, rather than throwing or saying the sign-in expired', async () => {
+    const api = createApi({
+      baseUrl: 'https://api.example.test',
+      getToken: async () => {
+        throw new Error('offline');
+      },
+      fetch: vi.fn(),
+    });
+    const result = await api.me();
+    expect(result).toMatchObject({ ok: false, error: { kind: 'network' } });
+  });
+});

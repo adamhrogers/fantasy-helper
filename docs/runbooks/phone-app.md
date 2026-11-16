@@ -99,7 +99,7 @@ gcloud run services describe api --region us-east4 --format 'value(status.url)'
 
 - `VITE_API_URL`: that address, like `https://api-xxxxx-uk.a.run.app`.
 - `VITE_SUPABASE_URL`: the project URL, `https://<ref>.supabase.co` (the same value as the `fh-supabase-url` secret).
-- `VITE_SUPABASE_PUBLISHABLE_KEY`: Supabase → Project Settings → **API Keys** → the **publishable** key, `sb_publishable_...` (you used it for the smoke check). **Never** the secret key (`sb_secret_...`) or a `service_role` key: those must never reach a browser.
+- `VITE_SUPABASE_PUBLISHABLE_KEY`: Supabase → Project Settings → **API Keys** → the **publishable** key, `sb_publishable_...` (you used it for the smoke check). **Never** the secret key (`sb_secret_...`) or a `service_role` key: those must never reach a browser. (The app refuses to start, with a screen saying so, if it is given one.)
 
 Keep the three together in Bitwarden. You'll paste them into Cloudflare in step 3.
 
@@ -121,7 +121,7 @@ In the Cloudflare dashboard (the account that holds your R2 bucket): **Workers &
 
 Cloudflare's default npm is 10, which can't install this app's test tools. `web/package.json` pins the npm that can (`packageManager`), and the build reads it. If the log says it used another npm, tell Claude.
 
-Optional, under Settings → Build: **Build watch paths** `web/*`, so a push that doesn't touch the app doesn't rebuild it. Cloudflare also builds other branches by default (a preview each); that is harmless, and **Branch control** turns it off if it annoys you.
+Optional, under Settings → Build: **Build watch paths** `web/*`, so a push that doesn't touch the app doesn't rebuild it. Cloudflare also builds other branches by default (a preview each). That is **not** harmless: a branch's build runs its dependencies' install scripts, and Dependabot opens such branches before anyone has reviewed them (the hold only stops the merge, not the build). So under **Branch control**, turn off non-production branch builds, so only `main` builds.
 
 When the build finishes, the Worker's page shows its address, `https://fantasy-helper.<your-subdomain>.workers.dev`. Open it. **Right looks like:** a sign-in screen. Signing in will say it can't reach the server until step 4.
 

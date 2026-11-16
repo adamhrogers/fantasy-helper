@@ -51,7 +51,10 @@ jobs:
       - name: Leave updates to the deploy path and the phone app for a person
         id: deploy_path
         run: |
-          held="$(gh pr diff "$PR_URL" --name-only | grep -E '^(\.github/workflows/deploy\.yml|Dockerfile|\.dockerignore)$|^web/' || true)"
+          # Two steps on purpose: if `gh` itself fails, this step fails and nothing merges. Only
+          # grep's "no match" is allowed to be empty.
+          files="$(gh pr diff "$PR_URL" --name-only)"
+          held="$(printf '%s\n' "$files" | grep -E '^(\.github/workflows/deploy\.yml|Dockerfile|\.dockerignore)$|^web/' || true)"
           if [ -n "$held" ]; then
             echo "::notice::this PR changes the deploy path or the phone app, so it stays open for a person to review: $(echo "$held" | head -3 | tr '\n' ' ')"
             echo "hold=true" >> "$GITHUB_OUTPUT"

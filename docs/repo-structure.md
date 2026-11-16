@@ -126,7 +126,8 @@ fantasy-helper/
 │   ├── openapi.json                  # the API's committed schema (`fh openapi`); `npm run gen:api` makes src/api/schema.d.ts from it
 │   ├── build-id.ts                   # the footer's build code: a hash of the app's sources, not the commit
 │   ├── .env.example                  # VITE_API_URL · VITE_SUPABASE_URL · VITE_SUPABASE_PUBLISHABLE_KEY · VITE_SIGN_IN_WITH_CODE
-│   ├── public/                       # _headers (CSP by pattern, cache rules) · icons · favicon; scripts/make_icons.py draws them
+│   ├── headers.template              # the _headers file's template; the build fills in the API's and Supabase's exact addresses (headers.ts)
+│   ├── public/                       # icons · favicon; scripts/make_icons.py draws them
 │   └── src/
 │       ├── main.tsx · App.tsx        # shell, tabs (/today, /week), freshness banner, sign-out, update bar
 │       ├── config.ts · route.ts      # the three build variables, checked · the two paths

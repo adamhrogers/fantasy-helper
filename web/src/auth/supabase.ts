@@ -37,7 +37,11 @@ export function supabaseAuth(url: string, publishableKey: string): AuthClient {
       return () => data.subscription.unsubscribe();
     },
     async accessToken() {
-      const { data } = await client.auth.getSession();
+      const { data, error } = await client.auth.getSession();
+      // A token that ran out and couldn't be refreshed because the service was unreachable is not
+      // a dead sign-in: reject, so the caller says "couldn't reach the server" and keeps the
+      // session (a null here would sign the person out for being offline).
+      if (error && (isAuthRetryableFetchError(error) || error.status === 0)) throw error;
       return data.session?.access_token ?? null;
     },
     async signInWithPassword(email, password) {
@@ -53,7 +57,9 @@ export function supabaseAuth(url: string, publishableKey: string): AuthClient {
       return result(error);
     },
     async signOut() {
-      await client.auth.signOut();
+      // This device only (and no network needed, so it works offline): Supabase's default ends the
+      // person's sessions on every device.
+      await client.auth.signOut({ scope: 'local' });
     },
   };
 }

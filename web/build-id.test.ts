@@ -21,6 +21,8 @@ beforeEach(() => {
   write('index.html', 'html');
   write('vite.config.ts', 'config');
   write('package-lock.json', '{}');
+  write('headers.template', 'headers');
+  write('headers.ts', 'headers code');
 });
 
 afterEach(() => rmSync(root, { recursive: true, force: true }));
@@ -44,6 +46,12 @@ describe('buildId', () => {
     expect(afterLock).not.toBe(before);
     write('public/favicon.svg', 'new icon');
     expect(buildId(root)).not.toBe(afterLock);
+  });
+
+  it('changes when a build variable changes, and not for the same ones in another order', () => {
+    const before = buildId(root, { VITE_A: '1', VITE_B: '2' });
+    expect(buildId(root, { VITE_B: '2', VITE_A: '1' })).toBe(before);
+    expect(buildId(root, { VITE_A: '1', VITE_B: 'changed' })).not.toBe(before);
   });
 
   it('does not change for tests or their fixtures, which never ship', () => {

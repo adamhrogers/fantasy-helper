@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
-const SINGLE_FILES = ['index.html', 'vite.config.ts', 'package-lock.json'];
+const SINGLE_FILES = ['index.html', 'vite.config.ts', 'package-lock.json', 'headers.template', 'headers.ts'];
 const FOLDERS = ['src', 'public'];
 /** Tests and their fixtures never reach the bundle, so they don't change the id. */
 const NOT_SHIPPED = /(\.test\.[cm]?[jt]sx?$|[\\/]test-[^\\/]*$)/;
@@ -20,7 +20,8 @@ function filesIn(dir: string): string[] {
     });
 }
 
-export function buildId(root: string): string {
+/** `variables` are the build variables: changing one changes the bundle, so it changes the id. */
+export function buildId(root: string, variables: Record<string, string> = {}): string {
   const paths = [
     ...FOLDERS.flatMap((folder) => filesIn(join(root, folder))).filter((p) => !NOT_SHIPPED.test(p)),
     ...SINGLE_FILES.map((file) => join(root, file)),
@@ -28,6 +29,9 @@ export function buildId(root: string): string {
   const hash = createHash('sha256');
   for (const path of paths) {
     hash.update(relative(root, path)).update('\0').update(readFileSync(path)).update('\0');
+  }
+  for (const name of Object.keys(variables).sort()) {
+    hash.update(name).update('=').update(variables[name] ?? '').update('\0');
   }
   return hash.digest('hex').slice(0, 7);
 }

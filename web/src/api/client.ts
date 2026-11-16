@@ -46,7 +46,13 @@ export function createApi({ baseUrl, getToken, fetch: fetchImpl }: ApiOptions): 
   async function call<T>(
     run: (headers: Record<string, string>) => Promise<{ data?: T; response: Response }>,
   ): Promise<ApiResult<T>> {
-    const token = await getToken();
+    let token: string | null;
+    try {
+      token = await getToken();
+    } catch {
+      // The sign-in service couldn't be reached to refresh the token: not the same as signed out.
+      return failure('network', 'Couldn’t reach the server. Check your connection and try again.');
+    }
     if (!token) return failure('unauthorized', 'Your sign-in expired.');
     try {
       const { data, response } = await run({ Authorization: `Bearer ${token}` });

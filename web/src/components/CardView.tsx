@@ -3,7 +3,9 @@ import type { Card } from '../api/types';
 // A small label for the kinds the app knows. A kind it doesn't know (the API may add some before
 // this app is updated) renders as a plain card: same title, body and reason, no label. Rendering
 // stays generic on purpose: a report is its cards, and nothing here depends on which cards exist.
-const KIND_LABELS: Record<string, string> = {
+// Typed against the API's own list of kinds (generated from its schema), so a kind added or renamed
+// there shows up here as a type error instead of an unlabeled card.
+const KIND_LABELS: Record<Card['kind'], string> = {
   move: 'Move',
   lock_or_pass: 'Lock or pass',
   signal: 'Signal',
@@ -16,7 +18,7 @@ const KIND_LABELS: Record<string, string> = {
 };
 
 export function kindLabel(kind: string): string | null {
-  return Object.hasOwn(KIND_LABELS, kind) ? (KIND_LABELS[kind] ?? null) : null;
+  return Object.hasOwn(KIND_LABELS, kind) ? KIND_LABELS[kind as Card['kind']] : null;
 }
 
 export function CardView({ card }: { card: Card }) {

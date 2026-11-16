@@ -23,8 +23,8 @@ export function ConfigProblem({ problems }: { problems: string[] }) {
   return (
     <ProblemScreen title="This build isn’t set up">
       <p>
-        The app was built without: <strong>{problems.join(', ')}</strong>. Set them as the Worker&rsquo;s
-        build variables in Cloudflare and build again (docs/runbooks/phone-app.md).
+        These build variables are missing or wrong: <strong>{problems.join(', ')}</strong>. Set them as the
+        Worker&rsquo;s build variables in Cloudflare and build again (docs/runbooks/phone-app.md).
       </p>
     </ProblemScreen>
   );

@@ -1,7 +1,7 @@
 // Checks on the files Cloudflare serves and the service worker, which only run in a browser on
 // the deployed address: these pin the properties that matter, so a change can't lose them quietly.
 import { describe, expect, it } from 'vitest';
-import headers from '../public/_headers?raw';
+import headers from '../headers.template?raw';
 import config from '../vite.config.ts?raw';
 import worker from './sw.ts?raw';
 
@@ -24,20 +24,21 @@ describe('the service worker', () => {
 });
 
 describe('the headers Cloudflare sends', () => {
-  it('lets only this app’s own files run, and only the API and Supabase be called', () => {
+  it('lets only this app’s own files run, and only the two addresses the build supplies be called', () => {
     const csp = /Content-Security-Policy: (.*)/.exec(headers)?.[1] ?? '';
     expect(csp).toContain("default-src 'self'");
     expect(csp).toContain("script-src 'self'");
     expect(csp).not.toContain('unsafe-inline');
     expect(csp).not.toContain('unsafe-eval');
-    expect(csp).toContain("connect-src 'self' https://*.run.app https://*.supabase.co");
+    expect(csp).toContain("connect-src 'self' {{CONNECT_ORIGINS}};");
     expect(csp).toContain("frame-ancestors 'none'");
     expect(csp).toContain("object-src 'none'");
   });
 
-  it('never names a project or an address: the patterns are the only addresses in the file', () => {
-    const addresses = headers.match(/https?:\/\/\S+/g) ?? [];
-    expect(addresses.map((a) => a.replace(/[;,]$/, ''))).toEqual(['https://*.run.app', 'https://*.supabase.co']);
+  it('names no project, address or wildcard host: the build fills the two addresses in', () => {
+    expect(headers.match(/https?:\/\/\S+/g) ?? []).toEqual([]);
+    expect(headers).not.toContain('*.run.app');
+    expect(headers).not.toContain('*.supabase.co');
   });
 
   it('checks the service worker on every open, and keeps hashed files for a year', () => {
