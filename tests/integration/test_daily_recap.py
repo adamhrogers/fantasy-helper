@@ -558,12 +558,49 @@ def test_a_lock_in_league_shows_game_scores_and_the_platforms_own_score(session:
 
     card = {c.id: c for c in recap_cards(s)}["daily-matchup"]
     assert card.title == "Week 1 vs Rivals: Sleeper shows 123.5 to 98.0"
-    assert "worth 68.0 in this league's scoring" in card.body
+    assert "added up to 68.0 in this league's scoring" in card.body
+    assert "game scores before locks, not your score" in card.body
     assert "only a locked game counts" in card.body
     assert "Sleeper's own score for week 1 so far: you 123.5, Rivals 98.0." in card.body
     assert "can't see locks" in (card.reason or "")
+    assert "not a comparable total" in (card.reason or "")
+    assert card.data["day_points_are"] == "game scores before locks, not a total"
     # The other blocks are the same as in any league.
     assert "daily-standouts" in {c.id for c in recap_cards(s)}
+
+
+def test_a_lock_in_leagues_game_scores_use_last_nights_lineup_not_todays_roster(
+    session: Session,
+) -> None:
+    world = build_world(session, platform=Platform.SLEEPER, lock_in=True)
+    ids = world.players
+    # This morning's roster (stored the day after): A was traded to the other team, C (bench
+    # last night) moved into a starting slot, and the opponent's D was dropped.
+    league_data.replace_roster(session, world.league.id, date(2026, 11, 5), [
+        (RosterEntryRecord(team_external_id="2", player=key("A"), slot="UTIL"), ids["A"]),
+        (RosterEntryRecord(team_external_id="1", player=key("C"), slot="UTIL"), ids["C"]),
+        (RosterEntryRecord(team_external_id="1", player=key("B"), slot="UTIL"), ids["B"]),
+    ])  # fmt: skip
+    m = sheet(session, world).matchup
+    assert m is not None
+    # Still last night's starters: A 54 and B 14 (not C's 40, on the bench then); D's 22.
+    assert (m.me.day_points, m.them.day_points) == (68.0, 22.0)
+
+
+def test_a_lock_in_leagues_game_scores_are_unknown_without_last_nights_lineup(
+    session: Session,
+) -> None:
+    world = build_world(session, platform=Platform.SLEEPER, lock_in=True, lineups_on=(MON, TUE))
+    # Only this morning's roster is stored: it must not stand in for last night's.
+    league_data.replace_roster(session, world.league.id, date(2026, 11, 5), [
+        (RosterEntryRecord(team_external_id="1", player=key("A"), slot="UTIL"), world.players["A"]),
+    ])  # fmt: skip
+    s = sheet(session, world)
+    assert s.matchup is not None
+    assert (s.matchup.me.day_points, s.matchup.them.day_points) == (None, None)
+    card = {c.id: c for c in recap_cards(s)}["daily-matchup"]
+    assert "lineups weren't saved" in card.body
+    assert "added up to" not in card.body  # unknown is not shown as a number
 
 
 # ------------------------------------------------------------------------- the rest
@@ -589,22 +626,45 @@ def test_a_week_that_began_before_this_one_has_no_matchup_card(session: Session)
     assert "daily-standouts" in {c.id for c in recap_cards(s)}  # the rest is unaffected
 
 
-def test_a_pickup_before_the_window_isnt_listed(session: Session) -> None:
-    world = build_world(session)
-    # Added 8 days before last night: outside the 7-day window.
+def add_pickup(session: Session, world: World, at: datetime) -> None:
+    """Team 3's add of the player who is on no team's lineup until then, made at `at`."""
     league_data.upsert_transactions(
         session, world.league.id,
         [TransactionRecord(
             external_id="t1", kind=TransactionKind.FREE_AGENT, status=TransactionStatus.EXECUTED,
-            team_external_id="3", proposed_at=WED_START - timedelta(days=7, hours=1),
-            scoring_period=1,
+            team_external_id="3", proposed_at=at, scoring_period=1,
             items=(TransactionItem(
                 player=PlayerKey(source=IdSource.ESPN, external_id=world.pickup_id),
                 action=ItemAction.ADD, to_team="3",
             ),),
         )],
     )  # fmt: skip
+
+
+def test_a_pickup_before_the_window_isnt_listed(session: Session) -> None:
+    world = build_world(session)
+    add_pickup(session, world, WED_START - timedelta(days=7, hours=1))  # outside the 7-day window
     assert sheet(session, world).pickups == ()
+    add_pickup(session, world, WED_START - timedelta(days=6))  # the window's first moment
+    assert len(sheet(session, world).pickups) == 1
+
+
+def test_an_add_made_after_the_game_day_is_not_a_pickup_that_did_well_last_night(
+    session: Session,
+) -> None:
+    world = build_world(session)
+    end_of_game_day = WED_START + timedelta(days=1)  # midnight Eastern after Wednesday: 05:00 UTC
+    add_pickup(session, world, end_of_game_day - timedelta(minutes=1))  # 23:59 on the game day
+    (pick,) = sheet(session, world).pickups
+    assert pick.added_day == "2026-11-04"
+    add_pickup(session, world, end_of_game_day)  # the stroke of the next day
+    assert sheet(session, world).pickups == ()
+    add_pickup(session, world, NOW)  # this morning, when the report is built
+    assert sheet(session, world).pickups == ()
+    # The player's night is still in the league's standouts and the rest of the cards.
+    assert (
+        "Player H" in {c.id: c for c in recap_cards(sheet(session, world))}["daily-standouts"].body
+    )
 
 
 WED_START = datetime(2026, 11, 4, 5, 0, tzinfo=UTC)  # midnight Eastern
@@ -628,3 +688,73 @@ def test_the_lineup_fetch_always_covers_last_night_even_on_the_first_day_of_a_we
     assert days(date(2026, 11, 2)) == []
     # Each day comes with the ESPN scoring period it belongs to (opening night is period 1).
     assert _finished_days(session, 2027, date(2026, 11, 9)) == [(date(2026, 11, 8), 7)]
+
+
+def test_owners_are_never_taken_from_todays_roster_when_last_nights_lineup_is_missing(
+    session: Session,
+) -> None:
+    world = build_world(session, lineups_on=(MON, TUE))  # last night's lineup was never stored
+    ids = world.players
+    # This morning's roster is there, and has moved people around since the game.
+    league_data.replace_roster(session, world.league.id, date(2026, 11, 5), [
+        (RosterEntryRecord(team_external_id="3", player=key("D"), slot="UTIL"), ids["D"]),
+        (RosterEntryRecord(team_external_id="2", player=key("A"), slot="UTIL"), ids["A"]),
+    ])  # fmt: skip
+    s = sheet(session, world)
+    assert not s.lineup_known
+    assert all(p.owner is None and p.slot is None for p in s.performances)
+    assert s.mine == []
+    cards = {c.id: c for c in recap_cards(s)}
+    # The owner-based cards are gone: his team (nobody is his), the misses and the sat-out (which
+    # need a roster). The league-wide ones stay, without a claim about who owns whom.
+    assert "daily-my-team" not in cards
+    body = cards["daily-standouts"].body
+    for owner in ("yours", "Rivals", "Third Team", "free agent"):
+        assert owner not in body
+    assert "Player G 66.0" in body
+    assert "weren't saved" in (cards["daily-standouts"].reason or "")
+    surprises = cards["daily-surprises"]
+    assert "Worse than expected" not in surprises.body
+    assert "Expected to play, didn't" not in surprises.body
+    shown = cards["daily-standouts"].data["standouts"]
+    assert isinstance(shown, list)
+    assert all(isinstance(e, dict) and e["owner"] is None for e in shown)
+    # The matchup still says plainly that it can't count the day.
+    assert "lineups weren't saved" in cards["daily-matchup"].body
+
+
+def test_last_nights_games_are_looked_up_once(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = build_world(session)
+    calls: list[tuple[date, date]] = []
+    real = nba.games_between
+
+    def counting(session: Session, season: int, start: date, end: date):  # type: ignore[no-untyped-def]
+        calls.append((start, end))
+        return real(session, season, start, end)
+
+    monkeypatch.setattr(nba, "games_between", counting)
+    sheet(session, world)
+    assert calls.count((WED, WED)) == 1  # the night's own games: one query
+    assert calls.count((MON, WED)) == 1  # the week's, for the matchup
+
+
+def test_each_days_lineup_is_read_once_for_both_teams(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = build_world(session)
+    asked: list[date] = []
+    real = league_data.roster_on
+
+    def counting(session: Session, league_id: UUID, as_of: date):  # type: ignore[no-untyped-def]
+        asked.append(as_of)
+        return real(session, league_id, as_of)
+
+    monkeypatch.setattr(league_data, "roster_on", counting)
+    m = sheet(session, world).matchup
+    assert m is not None
+    assert (m.me.week_points, m.them.week_points) == (150.0, 133.0)  # and still the same totals
+    # One read per day for the matchup (not one per team per day or per total), plus the
+    # game day's once more for who owned whom.
+    assert sorted(asked) == [MON, TUE, WED, WED]

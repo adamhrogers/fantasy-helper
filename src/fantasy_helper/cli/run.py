@@ -166,12 +166,20 @@ def _print(result: DailyResult, path: Path | None) -> None:
         if lg.failure is not None:
             typer.echo(f"✗ {lg.league.name!r}: {lg.failure.describe}")
             continue
+        if lg.recap_skipped and lg.report is None:
+            typer.echo(
+                f"- {lg.league.name!r}: no report (settings, the schedule or your team aren't "
+                "loaded yet)"
+            )
+            continue
         calls = (
             f"{lg.calls} lock-or-pass calls ({lg.new_calls} newly logged), " if lg.lock_in else ""
         )
         typer.echo(f"✓ {lg.league.name!r}: {calls}{lg.recap_cards} recap cards")
         if lg.recap_failure is not None:
             typer.echo(f"  ⚠ recap cards failed: {lg.recap_failure.describe}")
+        if lg.recap_skipped:
+            typer.echo("  ⚠ recap skipped: settings, the schedule or your team aren't loaded yet")
         for card in lg.report.cards if lg.report else ():
             typer.echo(f"    · {card.title}")
     typer.echo(f"report: {path}" if path else "no report")

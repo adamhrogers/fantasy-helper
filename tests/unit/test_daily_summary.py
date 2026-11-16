@@ -102,3 +102,20 @@ def test_a_league_that_failed_in_ingest_is_not_reported_twice() -> None:
     result = DailyResult(ingest, [LeagueDaily(broken, failure=FailureKind.AUTH)])
     _, problems = daily_summary(result, attempts=1)
     assert len([p for p in problems if "failed" in p]) == 1  # ingest's line, not another here
+
+
+def test_a_skipped_recap_is_a_counted_warning_that_no_retry_is_asked_for() -> None:
+    result = DailyResult(IngestReport())
+    skipped = LeagueDaily(league(Platform.ESPN, "Hidden"), recap_skipped=True)
+    result.leagues = [
+        skipped,
+        built(Platform.ESPN, "Fine", 3),
+        LeagueDaily(league(Platform.ESPN, "B"), recap_skipped=True),
+    ]
+    detail, problems = daily_summary(result, attempts=3)
+    assert problems == [
+        "the daily recap was skipped for 2 leagues: settings, the schedule or your team aren't "
+        "loaded yet (nothing to retry: check `fh league add` and that the schedule is loaded)"
+    ]
+    assert result.retryable_failures() == 0
+    assert "Hidden" not in detail + " ".join(problems)

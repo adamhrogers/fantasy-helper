@@ -28,6 +28,7 @@ from fantasy_helper.domain.league import (
 )
 from fantasy_helper.domain.stats import StatLine
 from fantasy_helper.engine.distributions import (
+    PRIOR_GAMES,
     GameDistribution,
     blended_mean,
     game_distribution,
@@ -167,8 +168,10 @@ def expected_game(
     observed = sample_sd(history)
     if observed is None:
         return GameDistribution(mean, prior_sd)
-    # The data has weight n and the prior 5 games' worth, as for points (distributions.PRIOR_GAMES).
-    return GameDistribution(mean, math.sqrt((n * observed**2 + 5.0 * prior_sd**2) / (n + 5.0)))
+    # The data has weight n and the prior PRIOR_GAMES' worth, as for points.
+    return GameDistribution(
+        mean, math.sqrt((n * observed**2 + PRIOR_GAMES * prior_sd**2) / (n + PRIOR_GAMES))
+    )
 
 
 # ------------------------------------------------------------------- who did what
@@ -350,7 +353,8 @@ def compare_totals(
     keys = [k for k in reported if k in ours]
     gaps = []
     for k in keys:
-        limit = tolerance if isinstance(tolerance, float) else tolerance.get(k, DAY_TOLERANCE)
+        # A number (int or float) is one tolerance for every key; a mapping is one per key.
+        limit = tolerance.get(k, DAY_TOLERANCE) if isinstance(tolerance, Mapping) else tolerance
         if abs(ours[k] - reported[k]) > limit:
             gaps.append(round(ours[k] - reported[k], 3))
     return Agreement(len(keys) - len(gaps), len(keys), tuple(gaps))

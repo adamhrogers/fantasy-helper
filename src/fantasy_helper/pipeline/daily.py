@@ -31,7 +31,7 @@ from fantasy_helper.domain.users import User
 from fantasy_helper.engine.lock_in import decide
 from fantasy_helper.engine.reconcile import Agreement
 from fantasy_helper.facts.daily import load_daily
-from fantasy_helper.facts.lock_in import StarterWeek, load_lock_in
+from fantasy_helper.facts.lock_in import MissingFactsError, StarterWeek, load_lock_in
 from fantasy_helper.observability.events import RunEvents
 from fantasy_helper.observability.logs import get_logger
 from fantasy_helper.pipeline.ingest import (
@@ -66,6 +66,10 @@ class LeagueDaily:
     # The recap cards couldn't be built but the report was still saved with its lock cards:
     # a warning, and a retry if a retry can fix it.
     recap_failure: FailureKind | None = None
+    # The recap was skipped because the league's own facts aren't there (settings, the schedule or
+    # a team marked as his). That is a gap in the data, not a failure: nothing broke, a retry
+    # can't fill it, so it is a warning with what to do, never a failed or retried run.
+    recap_skipped: bool = False
     recap_cards: int = 0
     # Our totals for last night and the matchup against the platform's own, both teams.
     day_check: Agreement = field(default_factory=lambda: Agreement(0, 0))
@@ -168,23 +172,29 @@ def _league_daily(
                 "lock_in_league_failed", platform=league.platform.value, kind=out.failure.value
             )
             cards.append(lock_in_unavailable())
+    sheet = None
     try:
         with session.begin_nested():
             sheet = load_daily(session, league, now=now, box_scores=box_scores)
-            recap = recap_cards(sheet)
-        cards += recap
-        out.recap_cards = len(recap)
-        if sheet.matchup is not None:
-            out.day_check = sheet.matchup.checked
+    except MissingFactsError:
+        out.recap_skipped = True
+        log.warning("recap_skipped", platform=league.platform.value, reason="facts_missing")
     except Exception as exc:
-        kind = classify_exception(exc)
-        log.error("recap_failed", platform=league.platform.value, kind=kind.value)
-        if lock_in and out.failure is None:
-            out.recap_failure = kind  # the lock cards still make a report
-        elif out.failure is None:
-            out.failure = kind  # the recap is this league's whole report
-    if out.failure is not None and out.recap_cards == 0:
-        return out  # nothing worth saving: the league failed outright
+        _recap_broke(out, league, classify_exception(exc), lock_in)
+    if sheet is not None:
+        # Building the cards is our own code on facts already loaded, so a failure here is a bug
+        # whatever the exception looks like (never "the source changed its format").
+        try:
+            recap = recap_cards(sheet)
+        except Exception:
+            _recap_broke(out, league, FailureKind.BUG, lock_in)
+        else:
+            cards += recap
+            out.recap_cards = len(recap)
+            if sheet.matchup is not None:
+                out.day_check = sheet.matchup.checked
+    if not cards or (out.failure is not None and out.recap_cards == 0):
+        return out  # nothing worth saving: no calls and no recap (it failed, or was skipped)
     try:
         with session.begin_nested():
             report = daily_report(
@@ -201,6 +211,16 @@ def _league_daily(
         out.failure = out.failure or classify_exception(exc)
         log.error("daily_report_not_saved", platform=league.platform.value, kind=out.failure.value)
     return out
+
+
+def _recap_broke(out: LeagueDaily, league: League, kind: FailureKind, lock_in: bool) -> None:
+    """A recap that couldn't be built. Beside saved lock calls it is a warning (and a retry if a
+    retry can help); as a league's whole report it fails the league."""
+    log.error("recap_failed", platform=league.platform.value, kind=kind.value)
+    if lock_in and out.failure is None:
+        out.recap_failure = kind  # the lock cards still make a report
+    elif out.failure is None:
+        out.failure = kind  # the recap is this league's whole report
 
 
 def open_decisions(starters: Sequence[StarterWeek]) -> list[StarterWeek]:
@@ -300,6 +320,13 @@ def daily_summary(result: DailyResult, attempts: int) -> tuple[str, list[str]]:
         problems.append(
             f"recap cards failed for {n} {platform} league{'s' if n > 1 else ''} (the lock calls "
             f"are saved): {outcome(kind, attempts)}"
+        )
+    skipped = sum(1 for lg in result.leagues if lg.recap_skipped)
+    if skipped:
+        problems.append(
+            f"the daily recap was skipped for {skipped} league{'s' if skipped > 1 else ''}: "
+            "settings, the schedule or your team aren't loaded yet (nothing to retry: check "
+            "`fh league add` and that the schedule is loaded)"
         )
     off = [lg for lg in result.leagues if lg.day_check.matched < lg.day_check.total]
     if off:

@@ -14,6 +14,7 @@ from fantasy_helper.domain.league import (
     ScoringType,
 )
 from fantasy_helper.domain.stats import Stat, StatLine
+from fantasy_helper.engine import distributions, recap
 from fantasy_helper.engine.distributions import GameDistribution
 from fantasy_helper.engine.recap import (
     GameValue,
@@ -174,6 +175,28 @@ def test_expected_game_for_categories_uses_the_index_and_an_absolute_spread() ->
 
 
 # ------------------------------------------------------------------- who did what
+
+
+def test_the_categories_spread_weighs_the_prior_by_the_distributions_prior_games(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    value = GameValue.for_league(CATEGORIES, LINES)
+    history = [1.0, 3.0, 5.0, 7.0]  # n = 4, sample sd = sqrt(20 / 3)
+    observed = math.sqrt(20 / 3)
+
+    def spread() -> float:
+        got = expected_game(LINES[3], value, history=history, prior_cv=0.3, prior_sd=3.0)
+        assert got is not None
+        return got.sd
+
+    n, prior = len(history), 3.0
+    weight = distributions.PRIOR_GAMES
+    assert spread() == pytest.approx(
+        math.sqrt((n * observed**2 + weight * prior**2) / (n + weight))
+    )
+    # It is the shared constant, not a copy of its value: changing it moves the spread.
+    monkeypatch.setattr(recap, "PRIOR_GAMES", 50.0)
+    assert spread() == pytest.approx(math.sqrt((n * observed**2 + 50.0 * prior**2) / (n + 50.0)))
 
 
 def test_standouts_are_the_best_played_games_ties_by_name() -> None:
@@ -356,6 +379,24 @@ def test_a_ratio_category_uses_its_own_tight_tolerance() -> None:
     assert compare_totals(ours, {"PTS": 100.4, "FG%": 0.4815}, tolerance=tolerance).total == 2
     assert compare_totals(ours, {"PTS": 100.4, "FG%": 0.4815}, tolerance=tolerance).matched == 2
     assert compare_totals(ours, {"PTS": 100.4, "FG%": 0.483}, tolerance=tolerance).matched == 1
+
+
+def test_a_whole_number_tolerance_is_one_tolerance_for_every_key() -> None:
+    ours = {"me_day": 100.0, "them_day": 90.0}
+    reported = {"me_day": 101.5, "them_day": 90.0}
+    # An int used to be mistaken for a mapping and raise; it means the same as the float.
+    assert compare_totals(ours, reported, tolerance=2).matched == 2
+    assert compare_totals(ours, reported, tolerance=1).matched == 1
+    assert compare_totals(ours, reported, tolerance=1).gaps == (-1.5,)
+    assert compare_totals(ours, reported, tolerance=2) == compare_totals(
+        ours, reported, tolerance=2.0
+    )
+
+
+def test_a_per_key_tolerance_falls_back_to_the_day_tolerance_for_a_key_it_leaves_out() -> None:
+    ours = {"PTS": 100.0, "REB": 40.0}
+    reported = {"PTS": 100.4, "REB": 40.4}
+    assert compare_totals(ours, reported, tolerance={"PTS": 0.1}).matched == 1  # REB: 0.4 <= 0.5
 
 
 @given(totals=st.dictionaries(st.text(min_size=1, max_size=4), st.floats(0, 1000), max_size=8))

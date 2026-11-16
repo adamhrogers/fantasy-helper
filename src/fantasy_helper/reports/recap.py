@@ -97,6 +97,19 @@ def _who(sheet: DailySheet, owner: str | None) -> str:
     return sheet.team_names.get(owner, f"team {owner}").strip()
 
 
+def _owner(sheet: DailySheet, owner: str | None) -> str | None:
+    """Whose player he was last night, or None when that isn't known: with no lineup stored for
+    the day, nobody's ownership is shown (today's roster would credit traded or dropped players
+    to the wrong team)."""
+    return _who(sheet, owner) if sheet.lineup_known else None
+
+
+def _paren(*parts: str | None) -> str:
+    """ " (a, b)" from the parts that are there; nothing when none is."""
+    kept = [p for p in parts if p]
+    return f" ({', '.join(kept)})" if kept else ""
+
+
 def _lead(a: float, b: float, name: str) -> str:
     gap = abs(a - b)
     if gap < 0.05:
@@ -118,7 +131,7 @@ def _entry(sheet: DailySheet, p: Performance) -> dict[str, JsonValue]:
         "played": p.played,
         "expected": _round(p.expected.mean) if p.expected and p.expected_to_play else None,
         "z": _round(p.z),
-        "owner": _who(sheet, p.owner),
+        "owner": _owner(sheet, p.owner),
         "slot": p.slot,
         "line": {str(k): round(v, 2) for k, v in p.line.items()},
     }
@@ -126,11 +139,17 @@ def _entry(sheet: DailySheet, p: Performance) -> dict[str, JsonValue]:
 
 def _scoring_note(sheet: DailySheet) -> str:
     if sheet.value.is_points:
-        return "Valued in this league's own scoring."
-    return (
-        "This league has no points, so each game is valued as how far its categories sit from a "
-        "typical game this season, in standard deviations, turnovers counting against."
-    )
+        note = "Valued in this league's own scoring."
+    else:
+        note = (
+            "This league has no points, so each game is valued as how far its categories sit from "
+            "a typical game this season, in standard deviations, turnovers counting against."
+        )
+    if not sheet.lineup_known:
+        note += (
+            " Who owned each player isn't shown: the league's lineups for last night weren't saved."
+        )
+    return note
 
 
 # --------------------------------------------------------------------------- no games
@@ -173,6 +192,12 @@ def _matchup_card(sheet: DailySheet) -> Card | None:
             "me": _side_data(m.me),
             "them": _side_data(m.them),
             "checked": {"matched": m.checked.matched, "total": m.checked.total},
+            # A lock-in league's day figure is a game score before locks, never a total.
+            "day_points_are": (
+                "game scores before locks, not a total"
+                if m.mode is MatchupMode.LOCK_IN
+                else "the lineup's total"
+            ),
         },
     )
 
@@ -276,13 +301,18 @@ def _lock_in_matchup(m: MatchupDay, platform: str) -> tuple[str, str, str]:
     me, them = m.me, m.them
     reason = (
         "In a lock-in league each starter counts one locked game a week, and the app can't see "
-        "locks, so it doesn't add games up. The platform's score is its own number."
+        "locks, so it doesn't add games up into a score. The game scores are last night's games "
+        "for the starters in each team's lineup that day, before locks: not a comparable total. "
+        f"{platform}'s score is its own number."
     )
-    body = (
-        f"Your starters' games last night were worth {me.day_points or 0.0:.1f} in this league's "
-        f"scoring; {them.name}'s were worth {them.day_points or 0.0:.1f} (game scores, before "
-        "locks: only a locked game counts)."
-    )
+    if me.day_points is None or them.day_points is None:
+        body = "Last night's lineups weren't saved, so last night's games can't be added up."
+    else:
+        body = (
+            f"Your starters' games last night added up to {me.day_points:.1f} in this league's "
+            f"scoring; {them.name}'s to {them.day_points:.1f}. That is game scores before locks, "
+            "not your score: only a locked game counts."
+        )
     if me.reported_week is not None and them.reported_week is not None:
         body += (
             f" {platform}'s own score for week {m.week}{'' if m.final else ' so far'}: you "
@@ -375,10 +405,8 @@ def _standouts_card(sheet: DailySheet) -> Card | None:
         return None
     rows = []
     for p in top:
-        stat_line = _line(sheet, p)
         rows.append(
-            f"{p.name} {_val(sheet, p.value)} ({stat_line + ', ' if stat_line else ''}"
-            f"{_who(sheet, p.owner)})"
+            f"{p.name} {_val(sheet, p.value)}" + _paren(_line(sheet, p), _owner(sheet, p.owner))
         )
     first = top[0]
     return Card(
@@ -458,7 +486,7 @@ def _surprises_card(sheet: DailySheet) -> Card | None:
     if sat:
         parts.append(
             "Expected to play, didn't: "
-            + ", ".join(f"{p.name} ({_who(sheet, p.owner)})" for p in sat)
+            + ", ".join(f"{p.name}{_paren(_owner(sheet, p.owner))}" for p in sat)
             + "."
         )
     return Card(
@@ -482,8 +510,8 @@ def _surprises_card(sheet: DailySheet) -> Card | None:
 
 def _surprise_rows(sheet: DailySheet, perfs: Iterable[Performance]) -> str:
     return "; ".join(
-        f"{p.name} {_val(sheet, p.value)} against {_val(sheet, p.expected.mean)} expected "
-        f"({_who(sheet, p.owner)})"
+        f"{p.name} {_val(sheet, p.value)} against {_val(sheet, p.expected.mean)} expected"
+        + _paren(_owner(sheet, p.owner))
         for p in perfs
         if p.expected is not None
     )

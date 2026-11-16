@@ -205,3 +205,64 @@ def test_the_matchup_card_names_the_platform_its_totals_were_checked_against(
     body = by_id(recap_cards(s))["daily-matchup"].body
     name = "ESPN" if platform is Platform.ESPN else "Sleeper"
     assert f"Our totals differ from {name}'s own in 1 of 4" in body
+
+
+def test_with_no_lineup_stored_no_owner_is_named_and_the_card_says_why() -> None:
+    s = replace(
+        sheet((
+            perf("Mine", 60.0, owner=ME, slot="UTIL", expected=(30.0, 5.0)),
+            perf("Theirs", 50.0, owner=THEM, slot="UTIL", expected=(30.0, 5.0)),
+            perf("Nobodys", 45.0),
+        )),
+        lineup_known=False,
+    )  # fmt: skip
+    cards = by_id(recap_cards(s))
+    standouts = cards["daily-standouts"]
+    assert standouts.body == "The best games of Wed Nov 4: Mine 60.0; Theirs 50.0; Nobodys 45.0."
+    assert "weren't saved" in (standouts.reason or "")
+    assert "weren't saved" in (cards["daily-surprises"].reason or "")
+    assert "free agent" not in standouts.body + cards["daily-surprises"].body
+    assert "Rivals" not in cards["daily-surprises"].body
+    owners = [e["owner"] for e in cards["daily-standouts"].data["standouts"]]  # type: ignore[union-attr,index,call-overload]
+    assert owners == [None, None, None]
+
+
+def test_with_a_lineup_stored_owners_are_named_as_before() -> None:
+    s = sheet((perf("Mine", 60.0, owner=ME, slot="UTIL"), perf("Nobodys", 45.0)))
+    body = by_id(recap_cards(s))["daily-standouts"].body
+    assert body == "The best games of Wed Nov 4: Mine 60.0 (yours); Nobodys 45.0 (free agent)."
+
+
+def lock_in(
+    me: float | None, them: float | None, reported: tuple[float, float] | None
+) -> MatchupDay:
+    mine = reported[0] if reported else None
+    theirs = reported[1] if reported else None
+    return MatchupDay(
+        MatchupMode.LOCK_IN, 1, False,
+        Side(team=ME, name="My Team", day_points=me, reported_week=mine),
+        Side(team=THEM, name="Rivals", day_points=them, reported_week=theirs),
+        Agreement(0, 0),
+    )  # fmt: skip
+
+
+def test_a_lock_in_figure_is_labelled_as_game_scores_not_a_total() -> None:
+    card = by_id(recap_cards(sheet((), matchup=lock_in(68.0, 22.0, (123.5, 98.0)))))[
+        "daily-matchup"
+    ]
+    assert "added up to 68.0" in card.body
+    assert "game scores before locks, not your score" in card.body
+    assert "not a comparable total" in (card.reason or "")
+    assert card.data["day_points_are"] == "game scores before locks, not a total"
+    assert card.title == "Week 1 vs Rivals: ESPN shows 123.5 to 98.0"
+
+
+def test_a_lock_in_card_with_unknown_game_scores_says_so_and_keeps_the_platforms_score() -> None:
+    card = by_id(recap_cards(sheet((), matchup=lock_in(None, 22.0, (123.5, 98.0)))))[
+        "daily-matchup"
+    ]
+    assert "lineups weren't saved" in card.body
+    assert "added up to" not in card.body
+    assert "ESPN's own score for week 1 so far: you 123.5, Rivals 98.0." in card.body
+    plain = by_id(recap_cards(sheet((), matchup=lock_in(None, None, None))))["daily-matchup"]
+    assert plain.title == "Week 1 vs Rivals: last night's games"

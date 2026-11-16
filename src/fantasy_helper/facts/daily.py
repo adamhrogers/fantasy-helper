@@ -146,7 +146,6 @@ def load_daily(
     week = matchup_week_of(opening, game_day)
     week_start, week_end = matchup_week_bounds(opening, week)
     names = league_data.team_names(session, league.id)
-    games = nba.games_between(session, league.season, game_day, game_day)
 
     rows = box_scores if box_scores is not None else nba.box_scores(session, league.season)
     before = [r for r in rows if r.played and r.game_date < game_day]
@@ -170,12 +169,12 @@ def load_daily(
         snapshot_ids = tuple(s for s in snapshots.values() if s)
         book = ProjectionBook(session, snapshots, ids, sitting(session, ids, as_of=first_tip))
         profiles = players.profiles(session, ids)
+        # Who owned whom comes only from the lineup stored for that day. Today's roster is no
+        # stand-in: a player traded or dropped since would be credited to the wrong team. With no
+        # lineup stored, every player is shown without an owner.
         day_roster = league_data.roster_on(session, league.id, game_day)
         lineup_known = bool(day_roster)
-        roster = {
-            pid: (team, slot)
-            for team, pid, slot in (day_roster or league_data.latest_rosters(session, league.id))
-        }
+        roster = {pid: (team, slot) for team, pid, slot in day_roster}
         prior_cv = league_cv(list(history.values()))
         prior_sd = league_sd(list(history.values()))
         for r in night:
@@ -218,7 +217,10 @@ def _pickups(
     session: Session, league: League, game_day: date, performances: Sequence[Performance]
 ) -> tuple[Pickup, ...]:
     since = datetime.combine(game_day - timedelta(days=PICKUP_DAYS - 1), time(0), NBA_TIMEZONE)
-    adds = league_data.recent_adds(session, league.id, since)
+    # Only adds made by the end of the game day (Eastern): a player added the next morning wasn't
+    # a pickup that did well last night.
+    until = datetime.combine(game_day + timedelta(days=1), time(0), NBA_TIMEZONE)
+    adds = league_data.recent_adds(session, league.id, since, until)
     by_source: dict[str, list[str]] = defaultdict(list)
     for add in adds:
         by_source[add.source].append(add.external_id)
@@ -289,17 +291,27 @@ def _lock_in_matchup(
     teams: tuple[str, str],
     names: dict[str, str],
 ) -> MatchupDay:
+    """Last night's game scores for each team's starters, before locks: not a total (only a locked
+    game counts, and the app can't see locks). The starters are the lineup stored for that day,
+    never today's roster; with none stored the figure is unknown, not zero."""
     scores = {
         r.player_id: value.of(stat_line(r)) for r in rows if r.played and r.game_date == game_day
     }
-    starters: dict[str, list[tuple[UUID, str]]] = defaultdict(list)
-    for team, pid, slot in league_data.latest_rosters(session, league.id):
-        starters[team].append((pid, slot))
+    stored_lineup = league_data.roster_on(session, league.id, game_day)
+    stored = {team for team, _, _ in stored_lineup}
+    on_day: dict[str, list[UUID]] = defaultdict(list)
+    for team, pid, slot in stored_lineup:
+        if slot not in NON_STARTING_SLOTS:  # bench and injured reserve don't count
+            on_day[team].append(pid)
 
     def side(team: str) -> Side:
         return Side(
             team=team, name=names.get(team, team).strip(),
-            day_points=lineup_total(starters.get(team, []), scores),
+            day_points=(
+                round(sum(scores.get(pid, 0.0) for pid in on_day[team]), 2)
+                if team in stored
+                else None
+            ),
             reported_week=league_data.reported_matchup_points(session, league.id, week, team),
         )  # fmt: skip
 
@@ -325,28 +337,33 @@ def _lineup_matchup(
 ) -> MatchupDay:
     points = value.is_points
     categories = rules.scoring.categories
-    days = sorted({day for _, _, day, _, _ in nba.games_between(
-        session, league.season, week_start, game_day
-    )})  # fmt: skip
+    days = sorted(
+        {day for _, _, day, _, _ in nba.games_between(session, league.season, week_start, game_day)}
+        | {game_day}
+    )
     in_week = [r for r in rows if r.played and week_start <= r.game_date <= game_day]
     lines: dict[date, dict[UUID, StatLine]] = defaultdict(dict)
     for r in in_week:
         lines[r.game_date][r.player_id] = stat_line(r)
     values = {day: {pid: value.of(line) for pid, line in by.items()} for day, by in lines.items()}
-    lineups = {day: league_data.roster_on(session, league.id, day) for day in days}
 
-    def starters(team: str, day: date) -> list[tuple[UUID, str]] | None:
-        found = [(pid, slot) for t, pid, slot in lineups[day] if t == team]
-        return found or None  # None: no lineup stored for that day
-
-    def day_lines(team: str, day: date) -> list[StatLine] | None:
-        lineup = starters(team, day)
-        if lineup is None:
-            return None
-        return [
-            lines[day][pid] for pid, slot in lineup
-            if slot not in NON_STARTING_SLOTS and pid in lines[day]
-        ]  # fmt: skip
+    # Each team's lineup for each day, and what it scored, worked out once and read by `side`.
+    # None: no lineup was stored for that day (its total is unknown, not zero).
+    day_total: dict[tuple[str, date], float | None] = {}
+    day_lines: dict[tuple[str, date], list[StatLine] | None] = {}
+    for day in days:
+        on_day = league_data.roster_on(session, league.id, day)
+        for team in teams:
+            found = [(pid, slot) for t, pid, slot in on_day if t == team]
+            if not found:
+                day_total[team, day] = day_lines[team, day] = None
+                continue
+            day_total[team, day] = lineup_total(found, values.get(day, {}))
+            day_lines[team, day] = [
+                lines[day][pid]
+                for pid, slot in found
+                if slot not in NON_STARTING_SLOTS and pid in lines[day]
+            ]
 
     ours: dict[str, float] = {}
     reported: dict[str, float] = {}
@@ -355,13 +372,11 @@ def _lineup_matchup(
     def side(team: str, who: str) -> Side:
         name = names.get(team, team).strip()
         if points:
-            lineup = starters(team, game_day)
-            day_total = None if lineup is None else lineup_total(lineup, values.get(game_day, {}))
-            totals = [
-                None if (lu := starters(team, d)) is None else lineup_total(lu, values.get(d, {}))
-                for d in days
-            ]
-            week_total = None if None in totals else round(sum(t for t in totals if t), 2)
+            today_total = day_total[team, game_day]
+            totals = [day_total[team, d] for d in days]
+            week_total = (
+                None if None in totals else round(sum(t for t in totals if t is not None), 2)
+            )
             by_period = (
                 league_data.reported_team_points(session, league.id, week, team)
                 if league.platform is Platform.ESPN
@@ -374,17 +389,17 @@ def _lineup_matchup(
                 else None
             )
             for key, ours_value, theirs in (
-                (f"{who}:day", day_total, rep_day),
+                (f"{who}:day", today_total, rep_day),
                 (f"{who}:week", week_total, rep_week),
             ):
                 if ours_value is not None and theirs is not None:
                     ours[key], reported[key] = ours_value, theirs
             return Side(
-                team=team, name=name, day_points=day_total, week_points=week_total,
+                team=team, name=name, day_points=today_total, week_points=week_total,
                 reported_day=rep_day, reported_week=rep_week,
             )  # fmt: skip
-        today_lines = day_lines(team, game_day)
-        per_day = [day_lines(team, d) for d in days]
+        today_lines = day_lines[team, game_day]
+        per_day = [day_lines[team, d] for d in days]
         week_cats = (
             None
             if None in per_day

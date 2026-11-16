@@ -395,18 +395,20 @@ class Add:
     kind: str  # "free_agent" or "waiver"
 
 
-def recent_adds(session: Session, league_id: UUID, since: datetime) -> list[Add]:
-    """Completed free-agent and waiver adds by any team since a moment, oldest first."""
-    rows = session.scalars(
-        select(TransactionRow)
-        .where(
-            TransactionRow.league_id == league_id,
-            TransactionRow.kind.in_(["free_agent", "waiver"]),
-            TransactionRow.status == "executed",
-            TransactionRow.proposed_at >= since,
-        )
-        .order_by(TransactionRow.proposed_at)
+def recent_adds(
+    session: Session, league_id: UUID, since: datetime, until: datetime | None = None
+) -> list[Add]:
+    """Completed free-agent and waiver adds by any team from `since` (inclusive) up to `until`
+    (exclusive, when given), oldest first."""
+    query = select(TransactionRow).where(
+        TransactionRow.league_id == league_id,
+        TransactionRow.kind.in_(["free_agent", "waiver"]),
+        TransactionRow.status == "executed",
+        TransactionRow.proposed_at >= since,
     )
+    if until is not None:
+        query = query.where(TransactionRow.proposed_at < until)
+    rows = session.scalars(query.order_by(TransactionRow.proposed_at))
     out = []
     for t in rows:
         for item in t.items:

@@ -23,9 +23,10 @@ from fantasy_helper.domain.recommendations import (
     OutcomeWindow,
     Recommendation,
 )
-from fantasy_helper.domain.reports import CardKind, ReportKind
+from fantasy_helper.domain.reports import Card, CardKind, ReportKind
 from fantasy_helper.domain.runs import FailureKind
 from fantasy_helper.facts.daily import load_daily
+from fantasy_helper.facts.lock_in import MissingFactsError
 from fantasy_helper.pipeline import daily as daily_pipeline
 from fantasy_helper.pipeline.daily import daily_summary, run_daily
 from fantasy_helper.pipeline.lock_calls import ENGINE_PRODUCER
@@ -351,3 +352,70 @@ def test_a_league_whose_recap_breaks_has_no_report_and_the_others_still_do(
         "the daily recap failed for 1 ESPN league: a bug in our code; not retried (retrying "
         "can't fix it)"
     ]
+
+
+def test_a_league_missing_its_own_facts_is_skipped_with_a_warning_not_failed_or_retried(
+    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = load_daily
+
+    def gap(session: Session, league, **kwargs):  # type: ignore[no-untyped-def]
+        if league.name == "Points":
+            raise MissingFactsError("the league has no team marked as mine")
+        return real(session, league, **kwargs)
+
+    monkeypatch.setattr("fantasy_helper.pipeline.daily.load_daily", gap)
+    result = run_all(session, tmp_path)
+    skipped = next(lg for lg in result.leagues if lg.league.name == "Points")
+    # A gap that no retry can fill: not a failure (it would fail every morning, forever, and ask
+    # to be retried), and no report to save.
+    assert skipped.failure is None
+    assert skipped.recap_failure is None
+    assert skipped.recap_skipped
+    assert skipped.report is None
+    assert result.retryable_failures() == 0
+    assert count(session, ReportRow.id) == 2  # the other two leagues have theirs
+    problems = own_problems(result, attempts=3)
+    assert problems == [
+        "the daily recap was skipped for 1 league: settings, the schedule or your team aren't "
+        "loaded yet (nothing to retry: check `fh league add` and that the schedule is loaded)"
+    ]
+    others = [lg for lg in result.leagues if lg is not skipped]
+    assert all(lg.failure is None and not lg.recap_skipped for lg in others)
+
+
+def test_a_skipped_recap_beside_lock_calls_still_saves_them(
+    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = load_daily
+
+    def gap(session: Session, league, **kwargs):  # type: ignore[no-untyped-def]
+        if league.platform is Platform.SLEEPER:
+            raise MissingFactsError("settings, schedule or my team aren't loaded yet")
+        return real(session, league, **kwargs)
+
+    monkeypatch.setattr("fantasy_helper.pipeline.daily.load_daily", gap)
+    result = run_all(session, tmp_path)
+    (lock,) = [lg for lg in result.leagues if lg.lock_in]
+    assert lock.failure is None
+    assert lock.recap_skipped
+    assert lock.calls > 0
+    assert lock.report is not None  # the lock cards are the report
+    assert not any(c.id.startswith("daily-") for c in lock.report.cards)
+    assert result.retryable_failures() == 0
+
+
+def test_a_card_that_wont_build_is_a_bug_even_when_the_error_looks_like_a_data_problem(
+    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def too_long(_sheet: object) -> list[Card]:
+        # A pydantic ValidationError, which the classifier reads as "the source's format changed".
+        return [Card(id="x", kind=CardKind.RECAP, title="t" * 500, body="b")]
+
+    monkeypatch.setattr("fantasy_helper.pipeline.daily.recap_cards", too_long)
+    result = run_all(session, tmp_path)
+    assert {lg.failure for lg in result.leagues if not lg.lock_in} == {FailureKind.BUG}
+    (lock,) = [lg for lg in result.leagues if lg.lock_in]
+    assert lock.recap_failure is FailureKind.BUG  # beside its saved lock calls: a warning
+    assert lock.failure is None
+    assert result.retryable_failures() == 0  # our code is broken: a retry can't fix it
