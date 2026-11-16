@@ -37,4 +37,6 @@ The overlap means no day depends on an untested path: ESPN and Sleeper have neve
 
 **Update, 2026-11-14: the scheduled snapshots move to Cloud Run Jobs ([ADR 0025](0025-timed-jobs-on-cloud-run.md)).** GitHub's scheduler started every run hours late for the first week. R2, the raw layout and the overlap rules above stay. The GitHub workflow keeps running, late, as a third copy until the laptop retires; then its schedule goes, and `workflow_dispatch` stays as a manual fallback with its own R2 token.
 
+**Update, 2026-11-16: the GitHub schedule and its UTC gate are removed.** Adam decided to end the overlap after three on-time Cloud Run runs (2026-11-15 06:17 and 17:17, 2026-11-16 06:17), instead of the fourth first planned, because the watchdog was live and a fourth run would have told us little. The workflow keeps only **Run workflow**, as a manual fallback for a day Cloud Run is down. `pipeline/cron.py`, `fh snapshot --cron` and their tests are gone, along with the two-entries-per-set design in "Rejected" above, which only existed because GitHub's cron is UTC. A test keeps a schedule from coming back: a second timer saves the same day twice, hours late, and doubles the projection snapshots in the database. The laptop's launchd jobs are removed the same day.
+
 The cutover steps are in [runbooks/cloud-snapshots.md](../runbooks/cloud-snapshots.md).
