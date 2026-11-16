@@ -23,7 +23,7 @@ Authentication → **Sign In / Providers**: *Allow new users to sign up* is **of
 It only adds: the `fh-api` account, three empty secrets, a placeholder service and the permissions around them.
 
 ```bash
-git fetch && git checkout m3-part3-api
+git fetch && git checkout --detach origin/m3-part3-api
 ```
 
 ```bash
