@@ -2,11 +2,12 @@
 
 For a lock-in league: one lock-or-pass card per open decision, read from the registry entry so
 the card says exactly what was logged, plus a recap. The app can't see locks yet (Sleeper's
-numbers don't show them), so the recap says to skip anyone already locked.
+numbers don't show them), so the recap says to skip anyone already locked. Every league, lock-in
+or not, also gets the "what happened" cards (`reports.recap`), after any decisions.
 """
 
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 from uuid import UUID
 
@@ -16,13 +17,10 @@ from fantasy_helper.domain.reports import Card, CardKind, ReportDocument, Report
 from fantasy_helper.facts.lock_in import LockInSheet, StarterWeek
 
 
-def lock_in_report(
-    sheet: LockInSheet,
-    calls: Sequence[tuple[StarterWeek, Recommendation]],
-    *,
-    user_id: UUID,
-    generated_at: datetime,
-) -> ReportDocument:
+def lock_in_cards(
+    sheet: LockInSheet, calls: Sequence[tuple[StarterWeek, Recommendation]]
+) -> list[Card]:
+    """One lock-or-pass card per call, then the recap; a card saying so if there is nothing."""
     cards = [_lock_card(starter, rec) for starter, rec in calls]
     decided = {starter.player_id for starter, _ in calls}
     recap = _recap(sheet, decided)
@@ -37,14 +35,56 @@ def lock_in_report(
                 body="None of your starters has an unlocked game with games still to come.",
             )
         )
+    return cards
+
+
+def lock_in_unavailable() -> Card:
+    """Shown instead of the lock cards when they couldn't be built, so a missing card is never
+    read as "nothing to decide"."""
+    return Card(
+        id="lock-in-unavailable",
+        kind=CardKind.RECAP,
+        title="Lock-or-pass calls weren't built today",
+        body=(
+            "Something went wrong building today's lock-or-pass calls, so none are shown. "
+            "Check your starters yourself before their next game tips off."
+        ),
+    )
+
+
+def daily_report(
+    *,
+    league_id: UUID,
+    user_id: UUID,
+    for_date: date,
+    generated_at: datetime,
+    cards: Sequence[Card],
+) -> ReportDocument:
+    """One league's daily report: its cards, in order (decisions first, then what happened)."""
     return ReportDocument(
         user_id=user_id,
-        league_id=sheet.league.id,
+        league_id=league_id,
         kind=ReportKind.DAILY,
-        for_date=sheet.for_date,
+        for_date=for_date,
         generated_at=generated_at,
         cards=tuple(cards),
         engine_only=True,
+    )
+
+
+def lock_in_report(
+    sheet: LockInSheet,
+    calls: Sequence[tuple[StarterWeek, Recommendation]],
+    *,
+    user_id: UUID,
+    generated_at: datetime,
+) -> ReportDocument:
+    return daily_report(
+        league_id=sheet.league.id,
+        user_id=user_id,
+        for_date=sheet.for_date,
+        generated_at=generated_at,
+        cards=lock_in_cards(sheet, calls),
     )
 
 

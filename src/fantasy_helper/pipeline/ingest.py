@@ -328,12 +328,16 @@ def _fetch_lineups(
 
 
 def _finished_days(session: Session, season: int, today: date) -> list[tuple[date, int]]:
-    """(day, ESPN scoring period) for each day of the current matchup week before today."""
+    """(day, ESPN scoring period) for each day to fetch a lineup for: every day of the current
+    matchup week before today, and always yesterday. On a Monday that is the Sunday that ended
+    the week before, which the daily report is about (what happened last night, in that week's
+    matchup) and which no other rule would fetch."""
     opening = nba.season_start(session, season)
     if opening is None:  # no schedule yet (the very first ingest)
         return []
     start, _ = matchup_week_bounds(opening, matchup_week_of(opening, today))
-    days = [start + timedelta(days=i) for i in range((today - start).days)]
+    first = max(opening, min(start, today - timedelta(days=1)))
+    days = [first + timedelta(days=i) for i in range((today - first).days)]
     return [(day, espn.scoring_period_of(day, opening)) for day in days]
 
 

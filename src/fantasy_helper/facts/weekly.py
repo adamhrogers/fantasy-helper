@@ -32,13 +32,12 @@ from fantasy_helper.domain.league import (
     Platform,
 )
 from fantasy_helper.domain.player import Position
-from fantasy_helper.domain.projections import ProjectionScope, Provider
-from fantasy_helper.domain.stats import Stat
 from fantasy_helper.engine.distributions import GameDistribution, game_distribution, league_cv
 from fantasy_helper.engine.schedule import PlayerWeek
 from fantasy_helper.engine.scoring import game_points
-from fantasy_helper.facts.availability import season_fallback, sitting
+from fantasy_helper.facts.availability import sitting
 from fantasy_helper.facts.lock_in import MissingFactsError
+from fantasy_helper.facts.projections import ProjectionBook, snapshots_as_of
 from fantasy_helper.storage.repositories import league_data, nba, players
 from fantasy_helper.storage.tables import PlayerGameStatRow, stat_line
 
@@ -146,13 +145,13 @@ def load_weekly(
 
     rosters = league_data.latest_rosters(session, league.id)
     rostered = {pid for _, pid, _ in rosters}
-    snapshots = _snapshots(session, week, now)
+    snapshots = snapshots_as_of(session, week, now)
     pool = players.with_external_id(session, league.platform.value)
     candidates = nba.projected_players(session, [s for s in snapshots.values() if s])
     fa_ids = [pid for pid in candidates if pid in pool and pid not in rostered]
     ids = list(rostered) + fa_ids
     profiles = players.profiles(session, ids)
-    book = _ProjectionBook(session, snapshots, ids, sitting(session, ids))
+    book = ProjectionBook(session, snapshots, ids, sitting(session, ids))
     history, prior_cv, by_day = _scored_history(session, league, rules, box_scores)
 
     def week_player(pid: UUID, slot: str) -> WeekPlayer | None:
@@ -231,51 +230,6 @@ def load_weekly(
         my_banked=my_banked, their_banked=their_banked, my_banked_reported=reported,
         period_mismatch=mismatch,
     )  # fmt: skip
-
-
-def _snapshots(session: Session, week: int, now: datetime) -> dict[str, UUID | None]:
-    return {
-        "sleeper_game": nba.latest_projection_snapshot(
-            session, Provider.SLEEPER, ProjectionScope.WEEK, str(week), now
-        ),
-        "sleeper_season": nba.latest_projection_snapshot(
-            session, Provider.SLEEPER, ProjectionScope.SEASON, None, now
-        ),
-        "espn_season": nba.latest_projection_snapshot(
-            session, Provider.ESPN, ProjectionScope.SEASON, None, now
-        ),
-    }
-
-
-class _ProjectionBook:
-    """Per-game stat lines, best source first."""
-
-    def __init__(
-        self,
-        session: Session,
-        snapshots: dict[str, UUID | None],
-        ids: Sequence[UUID],
-        out: set[UUID],
-    ) -> None:
-        self.out = out
-        self.by_game: dict[UUID, dict[date, dict[Stat, float]]] = defaultdict(dict)
-        self.season: dict[UUID, dict[Stat, float]] = {}
-        if snapshots["sleeper_game"]:
-            for row in nba.projection_rows(session, snapshots["sleeper_game"], ids):
-                if row.game_date is not None:
-                    # An empty per-game row (0 games) means "not expected to play".
-                    self.by_game[row.player_id][row.game_date] = (
-                        {} if row.games == 0 else stat_line(row)
-                    )
-        for key in ("espn_season", "sleeper_season"):  # Sleeper overwrites ESPN where both exist
-            if snapshots[key]:
-                for row in nba.projection_rows(session, snapshots[key], ids):  # type: ignore[arg-type]
-                    self.season[row.player_id] = stat_line(row)
-
-    def for_game(self, player_id: UUID, day: date) -> dict[Stat, float] | None:
-        if day in self.by_game.get(player_id, {}):
-            return self.by_game[player_id][day]
-        return season_fallback(self.season.get(player_id), player_id, self.out)
 
 
 def _scored_history(

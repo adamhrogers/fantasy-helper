@@ -1,6 +1,7 @@
 """Per-league data: settings versions, teams, daily rosters, matchups and transactions."""
 
 import uuid
+from dataclasses import dataclass
 from datetime import date, datetime
 from uuid import UUID
 
@@ -112,6 +113,7 @@ def upsert_matchups(session: Session, league_id: UUID, matchups: list[MatchupRec
                 side: {
                     "points_by_period": {str(k): v for k, v in s.points_by_period.items()},
                     "player_points": s.player_points,
+                    "category_scores": s.category_scores,
                 }
                 for side, s in (("home", m.home), ("away", m.away))
                 if s is not None
@@ -337,3 +339,80 @@ def reported_team_points(
     side = "home" if row.home_team == team_external_id else "away"
     by_day = (row.detail.get(side) or {}).get("points_by_period") or {}
     return {int(k): float(v) for k, v in by_day.items()}
+
+
+def _my_matchup(
+    session: Session, league_id: UUID, period: int, team_external_id: str
+) -> tuple[MatchupRow, str] | None:
+    """The matchup a team plays in one period, and which side of it the team is."""
+    row = session.scalars(
+        select(MatchupRow).where(
+            MatchupRow.league_id == league_id,
+            MatchupRow.period == period,
+            (MatchupRow.home_team == team_external_id) | (MatchupRow.away_team == team_external_id),
+        )
+    ).first()
+    if row is None:
+        return None
+    return row, "home" if row.home_team == team_external_id else "away"
+
+
+def reported_category_scores(
+    session: Session, league_id: UUID, period: int, team_external_id: str
+) -> dict[str, float]:
+    """A team's running total in each category over one matchup period, as the platform counts
+    it (ESPN), keyed by category name. Checks only, never scoring (ADR 0022)."""
+    found = _my_matchup(session, league_id, period, team_external_id)
+    if found is None:
+        return {}
+    row, side = found
+    scores = (row.detail.get(side) or {}).get("category_scores") or {}
+    return {str(k): float(v) for k, v in scores.items()}
+
+
+def reported_matchup_points(
+    session: Session, league_id: UUID, period: int, team_external_id: str
+) -> float | None:
+    """A team's total for one matchup period, as the platform shows it. For a lock-in league
+    this is the only matchup score there is: it depends on locks the app can't see."""
+    found = _my_matchup(session, league_id, period, team_external_id)
+    if found is None:
+        return None
+    row, side = found
+    points = row.home_points if side == "home" else row.away_points
+    return None if points is None else float(points)
+
+
+@dataclass(frozen=True)
+class Add:
+    """One player added by one team through free agency or waivers, with the platform's own
+    player ID (identity resolves it when read)."""
+
+    source: str  # "espn" or "sleeper"
+    external_id: str
+    team_external_id: str
+    proposed_at: datetime
+    kind: str  # "free_agent" or "waiver"
+
+
+def recent_adds(session: Session, league_id: UUID, since: datetime) -> list[Add]:
+    """Completed free-agent and waiver adds by any team since a moment, oldest first."""
+    rows = session.scalars(
+        select(TransactionRow)
+        .where(
+            TransactionRow.league_id == league_id,
+            TransactionRow.kind.in_(["free_agent", "waiver"]),
+            TransactionRow.status == "executed",
+            TransactionRow.proposed_at >= since,
+        )
+        .order_by(TransactionRow.proposed_at)
+    )
+    out = []
+    for t in rows:
+        for item in t.items:
+            team = item.get("to_team") or t.team_external_id
+            if item.get("action") == "add" and team is not None and t.proposed_at is not None:
+                out.append(
+                    Add(item["source"], str(item["external_id"]), str(team), t.proposed_at, t.kind)
+                )
+    return out

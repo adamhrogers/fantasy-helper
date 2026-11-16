@@ -110,15 +110,16 @@ There are three layers, from fastest to slowest:
 - `Daily run started`
 - The three ingest steps: `Daily run: League data fetched`, `Daily run: Public data loaded`, `Daily run: Leagues stored`
 - `Daily run: Box scores checked` ("ESPN season totals 155/155; Sleeper one game a week 405/417."): our box scores and scoring against each platform's own numbers, settled data only (ADR 0022). Below the expected agreement (ESPN 98%, Sleeper 90%), the run ends with a warning.
-- `Daily run: Lock-or-pass calls built` ("8 calls in 1 of 1 lock-in leagues (8 newly logged).")
-- `Daily run: Report built` ("10 cards in 1 reports.")
+- `Daily run: Lock-or-pass calls built` ("8 calls in 1 of 1 lock-in leagues (8 newly logged)."), only when a league is lock-in
+- `Daily run: Recap built` ("11 cards in 3 of 3 leagues. Last night's totals match the platforms' own: 14/14."): the "what happened" cards for every league, in that league's own scoring (ADR 0033). Counts only. Our day totals are checked against ESPN's own daily points (points leagues) and running category totals (categories leagues); a disagreement ends the run with a warning ("last night's totals differ from the platform's own in 1 league (largest 2.0)"). A recap that fails never costs a lock-in league its calls: the run says "recap cards failed for 1 Sleeper league (the lock calls are saved)", and retries if a retry could help.
+- `Daily run: Report built` ("21 cards in 3 reports.")
 - `Daily run: retrying (attempt 2 of 3)` (normal), only when a league or the run failed in a retryable way. The run reruns in full: ingest is idempotent, and a call already logged is never logged again.
 - Then one of:
   - `Daily run succeeded` (quiet): calls, leagues, box scores, database size.
   - `Daily run finished with warnings` (normal).
   - `Daily run failed` (loud; urgent if no report was built): leagues or lock-in calls that failed, by platform and cause.
 
-The report itself, with the lock-or-pass calls, is a local page (`data/reports/<date>/daily.html`) until the phone app (M3) shows it. It never goes through ntfy.
+The report itself, with the lock-or-pass calls and the recap, is a local page (`data/reports/<date>/daily.html`) until the phone app (M3) shows it. It never goes through ntfy.
 
 **Weekly run (`fh run weekly`: every morning in the cloud, started by the daily run, and by hand on the laptop; `--open` opens the overview):**
 - `Weekly run started`

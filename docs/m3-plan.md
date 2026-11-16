@@ -14,6 +14,7 @@ This is the plan for everything between "part 2 is merged" and "M3 is done": six
 | **3** | Part 4: the phone app | Not started |
 | **4** | Part 5a: push ("your report is ready") | Not started |
 | **5** | Part 5b: backups, locks, loose ends, the exit test | Not started |
+| **Lane** | The daily "what happened" cards for every league (decision 8; roadmap direction; ADR 0033), beside Phases 2 to 5, engine only | **Built 2026-11-16** (a PR of its own, no migration; touches no API, app or schema file). The lock button (decision 9) and lock-in v2 are still to do |
 
 Phases 0 and 1 are rollout work, not code. Phases 2 to 5 are one branch and one PR each, merged by Adam, because the deploy runs only from `main`.
 
@@ -321,7 +322,7 @@ The dates in roadmap v0.5 assumed M3 would end on 2026-11-12. It won't end befor
 
 | # | Decision | Recommended | Needed by |
 |---|---|---|---|
-| 8 | Where the daily "what happened" cards go (roadmap, "Direction: a daily report that says what happened in each league") | Engine-only cards (league standouts, pickups, his team against projections, his day's points against his opponent's) as a lane beside Phases 3 to 5, before M4's brain | Before M4 starts |
+| 8 | Where the daily "what happened" cards go (roadmap, "Direction: a daily report that says what happened in each league") | Engine-only cards (league standouts, pickups, his team against projections, his day's points against his opponent's) as a lane beside Phases 3 to 5, before M4's brain | **Decided 2026-11-16 (Adam): yes, as a lane beside Phase 2.** Built the same day: every league's daily report has the cards, checked against the platform's own daily totals (ADR 0033) |
 | 9 | Move the one-tap "I locked / I passed" button from M5 to right after the app's first deploy | Yes: without it, a lock card can recommend a player already locked | Before Phase 4 |
 
 ## Outside facts (checked 2026-11-15)

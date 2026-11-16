@@ -130,6 +130,29 @@ class TestCategoriesLeague:
         assert slot_counts(record.rules)["IR"] == 3
         assert record.rules.acquisition_limits.per_matchup_per_day == 1.0
 
+    def test_matchups_carry_each_categorys_running_score(self) -> None:
+        matchups = mapper.map_matchups(recorded("espn_categories/matchups.json"))
+        scored = [m for m in matchups if m.home.category_scores]
+        assert len(scored) == 15  # the matchups with scores to read: the weeks played so far
+        for matchup in scored:
+            assert matchup.away is not None
+            for side in (matchup.home, matchup.away):
+                scores = side.category_scores
+                # Every category the league scores, under the name `map_rules` gives it.
+                assert {"PTS", "BLK", "STL", "AST", "REB", "TO", "3PM", "FG%", "FT%"} <= set(scores)
+                # A ratio is its makes over its attempts: ESPN's own numbers agree.
+                assert scores["FG%"] == pytest.approx(scores["FGM"] / scores["FGA"], abs=1e-6)
+                assert scores["FT%"] == pytest.approx(scores["FTM"] / scores["FTA"], abs=1e-6)
+
+    def test_a_points_leagues_scores_are_raw_stat_totals_with_no_ratios(self) -> None:
+        # ESPN sends the same running totals for a points league (the stats behind its points);
+        # the daily recap only reads them for a categories league, where they are the score.
+        matchups = mapper.map_matchups(recorded("espn_points/matchups.json"))
+        scored = [m for m in matchups if m.home.category_scores]
+        assert scored
+        assert all("PTS" in m.home.category_scores for m in scored)
+        assert not any("FG%" in m.home.category_scores for m in scored)
+
     def test_rosters_and_transactions_map(self) -> None:
         teams, entries = mapper.map_rosters(recorded("espn_categories/teams_rosters.json"))
         assert len(teams) == 10

@@ -272,6 +272,13 @@ What keeps the door open, so it isn't rebuilt later:
 
 **Done when (proposed):** for a real morning in each league, the report says what happened last night in that league's scoring, his day's points and his opponent's match the platform's own daily totals, and in a lock-in league a card never recommends a player Adam has already locked.
 
+**Built (2026-11-16, Adam approved the lane the same day; [ADR 0033](decisions/0033-the-daily-report-says-what-happened-in-every-league.md)):** the engine-only "what happened" cards, for every league kind, with no model and no migration. Each league's daily report now holds, after any lock-or-pass cards:
+- **the matchup:** last night's points for both teams, the matchup so far, and where it stands, counted from box scores and the lineup each team had that day (ESPN points leagues), or category by category for the week (ESPN categories leagues);
+- **his team:** who beat or missed the projection, who didn't play, and a bench player with a good game;
+- **the league's standouts**, **recent pickups that did well**, and **what was expected against what wasn't** (the projection pulled before the games, blended with each player's own games, so nothing reads the future).
+
+Every number is valued by the league's own rules (a categories league, which has no points, gets an index in standard deviations). **Checked against the platform:** ESPN's own daily points for points leagues and its running category totals for categories leagues; the run reports a disagreement as a warning. A lock-in league gets the same cards, with the matchup card showing last night's game scores before locks next to the platform's own week score: it gives no total of ours and guesses no locks. **Not built, and still open:** the opponent-aware part of lock-in v2, the "I locked / I passed" button (needs the API and the app), and the raw per-stat running totals ESPN sends for points leagues as a further check on box scores.
+
 ---
 
 ## M6 — Grading and timeline graphs · about Nov 29–Dec 4, or Dec 4–9

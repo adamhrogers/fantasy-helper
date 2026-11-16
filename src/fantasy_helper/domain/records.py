@@ -47,6 +47,9 @@ class MatchupSide(DomainModel):
     total_points: float | None = None
     points_by_period: dict[int, float] = Field(default_factory=dict)  # ESPN: per scoring day
     player_points: dict[str, float] = Field(default_factory=dict)  # Sleeper: per player, the week
+    # ESPN: the matchup's running total in each category (by name: "PTS", "FG%"), as ESPN counts
+    # it. A check on our own totals, never an input (ADR 0022).
+    category_scores: dict[str, float] = Field(default_factory=dict)
 
 
 class MatchupRecord(DomainModel):
