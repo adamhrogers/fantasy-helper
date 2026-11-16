@@ -54,6 +54,13 @@ class Settings(BaseSettings):
     # run, which starts the weekly one. Unset on the laptop, so hand runs never start a job.
     next_job: str | None = Field(default=None, alias="FH_NEXT_JOB")
 
+    # The phone app's API (ADR 0029). The Supabase project it checks sign-ins against, the
+    # addresses the app is served from (comma-separated, for CORS), and the public half of the
+    # Web Push key the app subscribes with.
+    supabase_url: str | None = Field(default=None, alias="FH_SUPABASE_URL")
+    app_origins: str = Field(default="", alias="FH_APP_ORIGINS")
+    vapid_public_key: str | None = Field(default=None, alias="FH_VAPID_PUBLIC_KEY")
+
     # Local working folder (git-ignored): the raw store when FH_RAW_STORE=local, and HTML reports.
     data_dir: Path = Field(default=Path("data"), alias="FH_DATA_DIR")
 
@@ -68,6 +75,11 @@ class Settings(BaseSettings):
 
     # Used from M4. Deliberately not ANTHROPIC_API_KEY (spec: Cost and tokens).
     anthropic_api_key: SecretStr | None = Field(default=None, alias="FH_ANTHROPIC_API_KEY")
+
+
+def origins(settings: Settings) -> list[str]:
+    """The addresses the phone app may call the API from."""
+    return [o.strip().rstrip("/") for o in settings.app_origins.split(",") if o.strip()]
 
 
 @lru_cache(maxsize=1)

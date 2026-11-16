@@ -138,6 +138,9 @@ class UserRow(Base):
     display_name: Mapped[str] = mapped_column(Text)
     timezone: Mapped[str] = mapped_column(Text)
     role: Mapped[str] = mapped_column(Text)
+    # Supabase Auth's id for this person, set the first time they sign in (ADR 0029). Emails
+    # change; this doesn't, so once it is set only the id is looked at.
+    auth_user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, unique=True)
     created_at: Mapped[datetime] = _created_at()
 
 
@@ -524,3 +527,24 @@ class LeaguePlayerValueRow(Base):
     startable_left: Mapped[int] = mapped_column(Integer)
     per_game: Mapped[float] = mapped_column(REAL)
     value_over_replacement: Mapped[float | None] = mapped_column(REAL)
+
+
+# --------------------------------------------------------- M3 part 3: push (ADR 0029)
+
+
+class PushSubscriptionRow(Base):
+    """One device's Web Push subscription. The endpoint is unique per device, so a device that
+    signs in as someone else is re-registered to them rather than duplicated."""
+
+    __tablename__ = "push_subscriptions"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    endpoint: Mapped[str] = mapped_column(Text, unique=True)
+    p256dh: Mapped[str] = mapped_column(Text)
+    auth: Mapped[str] = mapped_column(Text)
+    user_agent: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = _created_at()
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -8,14 +8,17 @@ dependencies = [
     "alembic>=1.20.1",
     "boto3>=1.43.126",
     "cryptography>=50.0.2",
+    "fastapi>=0.163.1",
     "httpx>=0.28.1",
     "langsmith>=0.14.12",
     "psycopg[binary]>=3.3.6",
     "pydantic>=2.14.1",
     "pydantic-settings>=2.16.1",
+    "pyjwt[crypto]>=2.15.1",
     "sqlalchemy>=2.1.6",
     "structlog>=26.1.0",
     "typer>=0.27.3",
+    "uvicorn>=0.54.0",
 ]
 
 [project.scripts]
