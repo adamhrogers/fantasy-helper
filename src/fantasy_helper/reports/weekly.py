@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID
 
-from fantasy_helper.domain.facts import FactSheet
+from fantasy_helper.domain.facts import FactSheet, LeftOut
 from fantasy_helper.domain.recommendations import CallType, Recommendation
 from fantasy_helper.domain.reports import Card, CardKind, ReportDocument, ReportKind
 
@@ -24,6 +24,9 @@ def weekly_report(
     moves = [rec for _, rec in calls if rec.call_type is CallType.STREAM]
     cards = [c for c in (_matchup(sheet, by_type.get(CallType.MATCHUP_ODDS), lock_in),) if c]
     cards.append(_games(sheet, lock_in))
+    lineup = _lineup(sheet)
+    if lineup is not None:
+        cards.append(lineup)
     cards += [_move(i, rec) for i, rec in enumerate(moves)]
     below = _below_replacement(sheet)
     if below is not None:
@@ -98,6 +101,48 @@ def _games(sheet: FactSheet, lock_in: bool) -> Card:
         title=f"Week {sheet.week}: {sheet.startable} startable games",
         body=body[:1000],
         data={"games": sheet.games, "startable": sheet.startable},
+    )
+
+
+_WHY = {
+    LeftOut.OUT: "not expected to play",
+    LeftOut.NO_PROJECTION: "no projection for the game",
+    LeftOut.OUTRANKED: "better players fill the slots",
+}
+
+
+def _lineup(sheet: FactSheet) -> Card | None:
+    """Who had a game but wasn't counted, and why, so a count that looks wrong can be checked
+    against the league's own lineup. Only shown when there's something to say."""
+    left: dict[tuple[str, LeftOut, bool], list[str]] = {}
+    for d in sheet.days:
+        for e in d.left_out:
+            left.setdefault((e.name, e.reason, e.in_lineup), []).append(f"{d.day:%a}")
+    parts = []
+    for (name, reason, in_lineup), days in sorted(
+        left.items(), key=lambda kv: (not kv[0][2], kv[0])
+    ):
+        where = "in your lineup, " if in_lineup and reason is not LeftOut.OUTRANKED else ""
+        parts.append(f"{name} ({where}{_WHY[reason]}) on {', '.join(days)}")
+    body = ""
+    if parts:
+        body += "Games the plan doesn't count: " + "; ".join(parts) + "."
+    if sheet.without_games:
+        who = ", ".join(
+            f"{g.name} ({g.nba_team or 'no team on file'})" for g in sheet.without_games
+        )
+        body += f" No games found in the schedule this week for: {who}."
+    if not body:
+        return None
+    return Card(
+        id="weekly-lineup",
+        kind=CardKind.RECAP,
+        title="Who the plan counted, and who it left out",
+        body=body.strip()[:1000],
+        data={
+            "days": [d.model_dump(mode="json") for d in sheet.days if d.left_out],
+            "without_games": [g.model_dump(mode="json") for g in sheet.without_games],
+        },
     )
 
 

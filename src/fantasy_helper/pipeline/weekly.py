@@ -25,10 +25,13 @@ from sqlalchemy.orm import Session
 from fantasy_helper.domain.calendar import NBA_TIMEZONE
 from fantasy_helper.domain.facts import (
     FactDay,
+    FactLeftOut,
     FactMatchup,
     FactMove,
+    FactNoGames,
     FactPlayer,
     FactSheet,
+    LeftOut,
     SheetKind,
 )
 from fantasy_helper.domain.league import League, LineupMode
@@ -54,6 +57,7 @@ from fantasy_helper.engine.streaming import StreamMove, plan_streams
 from fantasy_helper.engine.valuation import replacement_levels, value_over_replacement
 from fantasy_helper.engine.win_probability import win_probability
 from fantasy_helper.facts.weekly import (
+    BENCHED,
     TeamWeek,
     WeeklySheet,
     WeekPlayer,
@@ -190,18 +194,49 @@ def _project(sheet: WeeklySheet, team: TeamWeek, points: bool) -> WeekProjection
     )
 
 
-def _days(sheet: WeeklySheet, projection: WeekProjection, points: bool) -> tuple[FactDay, ...]:
-    slots = len(expand_slots(sheet.rules.roster_slots))
-    counts: dict[date, list[int]] = {}
-    for p in sheet.mine.active:
-        for day, _ in p.week.games:
-            counts.setdefault(day, [0, 0])[0] += 1
-    for days in projection.started.values():
-        for day in days:
-            counts.setdefault(day, [0, 0])[1] += 1
+MAX_LEFT_OUT_PER_DAY = 8
+
+
+def _days(
+    slots: int, players: Sequence[WeekPlayer], projection: WeekProjection, *, notes: bool = True
+) -> tuple[FactDay, ...]:
+    """Per day: the games my players are expected to play, how many fit a starting slot, and
+    (`notes`) who had a game but wasn't counted, and why, so a count that looks wrong can be
+    checked against the league's own lineup."""
+    expected: Counter[date] = Counter()
+    started: Counter[date] = Counter()
+    left_out: dict[date, list[FactLeftOut]] = {}
+    seen: set[date] = set()
+
+    def note(day: date, p: WeekPlayer, reason: LeftOut) -> None:
+        if notes:
+            entry = FactLeftOut(name=p.name, reason=reason, in_lineup=p.slot not in BENCHED)
+            left_out.setdefault(day, []).append(entry)
+
+    for p in players:
+        counted = set(projection.started.get(p.player_id, ()))
+        for day, dist in p.week.games:
+            seen.add(day)
+            if dist.play_probability <= 0:
+                note(day, p, LeftOut.OUT)
+                continue
+            expected[day] += 1
+            if day in counted:
+                started[day] += 1
+            elif p.slot not in BENCHED:
+                note(day, p, LeftOut.OUTRANKED)
+        for day in p.no_projection_days:
+            seen.add(day)
+            note(day, p, LeftOut.NO_PROJECTION)
     return tuple(
-        FactDay(day=d, games=g, started=s, slots=slots) for d, (g, s) in sorted(counts.items())
-    )
+        FactDay(
+            day=d, games=expected[d], started=started[d], slots=slots,
+            left_out=tuple(
+                sorted(left_out.get(d, []), key=lambda e: (not e.in_lineup, e.reason, e.name))
+            )[:MAX_LEFT_OUT_PER_DAY],
+        )
+        for d in sorted(seen)
+    )  # fmt: skip
 
 
 def _league_week(
@@ -272,7 +307,12 @@ def _league_week(
         league_id=league.id, kind=SheetKind.WEEKLY, week=ws.week, from_day=ws.from_day,
         as_of=now, settings_version=ws.settings_version,
         projection_snapshot_ids=ws.projection_snapshot_ids, points_league=points,
-        games=mine.games, startable=mine.startable, days=_days(ws, mine, points),
+        games=mine.games, startable=mine.startable,
+        days=_days(len(expand_slots(slots)), ws.mine.active, mine, notes=not lock_in),
+        without_games=tuple(
+            FactNoGames(name=p.name, nba_team=p.nba_team)
+            for p in ws.mine.active if p.team_games_this_week == 0
+        ),
         matchup=matchup,
         my_players=tuple(
             FactPlayer(
