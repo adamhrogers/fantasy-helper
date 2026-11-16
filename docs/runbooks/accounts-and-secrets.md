@@ -10,7 +10,7 @@ Values live in **Bitwarden** and in the places listed below, never in this repo 
 |---|---|---|
 | **GitHub** `adamhrogers/fantasy-helper` (public) | Code, CI, the deploy to Google Cloud (`deploy.yml`, keyless), a manual fallback for the snapshot (**Run workflow**; its schedule was dropped 2026-11-16), a few production secrets in the `prod` environment (usable only from `main`), Dependabot. `main` has a ruleset that requires CI (ADR 0024) | M0. `prod` and the ruleset: 2026-11-07 |
 | **Supabase** | Postgres databases, and from part 3 the app's sign-in. Two projects: dev (`us-east-1`), and prod, created per setup §2 as `fantasy-helper-prod` in `us-east-1`; the deploy migrated it to 0006 on 2026-11-15, and `scripts/fh-prod.sh doctor` names its region. The free plan allows two, so both slots are used | Dev: M0. Prod: 2026-11-07 |
-| **Cloudflare** | R2 bucket `fantasy-helper-raw`: raw snapshots and league responses, later the season archives and backups. Workers (static assets) hosts the phone app from part 4 | 2026-11-07 |
+| **Cloudflare** | R2 bucket `fantasy-helper-raw`: raw snapshots and league responses, later the season archives and backups. Workers (static assets) hosts the phone app (part 4; setup in [phone-app.md](phone-app.md), part 2) | 2026-11-07 |
 | **LangSmith** | Traces of every model call (rule 3), and the doctor's smoke trace | M0 |
 | **ntfy** (`ntfy.sh`, no account) | Ops alerts to the iPhone: a **dev** topic for the laptop, a **prod** topic for the cloud jobs, Healthchecks and GitHub | Dev: M0. Prod: 2026-11-07 |
 | **Anthropic** | The Claude API, for the app only. Claude Code doesn't use this key (rule 6) | M0 |
@@ -67,7 +67,7 @@ Values live in **Bitwarden** and in the places listed below, never in this repo 
 | The backups bucket's access key ID and secret | A second R2 token, for `fantasy-helper-backups` only | `fh-backup` | 5 |
 | `fh-anthropic-api-key`, `fh-langsmith-api-key` | The Claude key (with a spend limit) and the LangSmith key, for the report jobs | `fh-reports` | Before M4 |
 
-The phone app itself is built by Cloudflare with three build variables (the API's address, the Supabase project URL and the **publishable** key, `sb_publishable_...`). Supabase is retiring the older `anon` key at the end of 2026: if that's what was saved on 2026-11-07, copy the publishable one from the project's API keys page before part 4.
+The phone app itself is built by Cloudflare with three build variables (the API's address, the Supabase project URL and the **publishable** key, `sb_publishable_...`). Supabase is retiring the older `anon` key at the end of 2026: if that's what was saved on 2026-11-07, copy the publishable one from the project's API keys page before part 4. The steps are in [phone-app.md](phone-app.md), part 2.
 
 ## Checking without seeing values
 

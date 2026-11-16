@@ -1,0 +1,19 @@
+# The template for the `_headers` file Cloudflare reads for every file the Worker serves (Workers
+# static assets, ADR 0009). The build (vite.config.ts, headers.ts) writes dist/_headers from it,
+# putting the exact API and Supabase addresses, taken from the build variables, in place of the two
+# placeholders: no address lives in this public repo, and the policy lets the app call those two
+# and nothing else. Only this app's own files may run or load.
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' {{CONNECT_ORIGINS}}; manifest-src 'self'; worker-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'
+  Referrer-Policy: no-referrer
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()
+
+# Built files carry a hash in their name, so they never change: keep them for a year.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# The service worker is checked on every open, so a new version arrives on the next open.
+/sw.js
+  Cache-Control: no-cache

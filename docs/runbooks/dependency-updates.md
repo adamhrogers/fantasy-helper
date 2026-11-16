@@ -9,7 +9,7 @@
 | A security advisory affects a dependency | One grouped PR per ecosystem (Python, Actions), any version | CI runs; it merges itself when CI passes |
 | Mondays, 07:00 Eastern | One grouped PR per ecosystem with that week's updates, each release at least 7 days old. No Python major versions | Same |
 
-**Except** PRs that change the deploy path (`deploy.yml`, the `Dockerfile`, `.dockerignore`): those are tested but stay open, because that workflow can deploy code with access to the prod database. That's every Docker update and every grouped Actions update (ADR 0024, Update 2026-11-15). Python updates merge themselves.
+**Except** PRs that change the deploy path (`deploy.yml`, the `Dockerfile`, `.dockerignore`) or the phone app (anything under `web/`): those are tested but stay open, because that workflow can deploy code with access to the prod database, and the app runs on your phone with a signed-in session and is built by Cloudflare straight from `main`. That's every Docker update, every grouped Actions update and every npm update (ADR 0024, Updates 2026-11-15 and 2026-11-16). Python updates merge themselves.
 
 Merged PRs show up in `main`'s history as `Bump ...` commits. A PR whose CI fails stays open, and GitHub emails you about it.
 
@@ -55,7 +55,7 @@ Also worth turning on, but optional: **Settings → General → Automatically de
 
 ## When something needs you
 
-- **A Dependabot PR is open with green checks and hasn't merged.** It changes the deploy path (`deploy.yml`, the `Dockerfile` or `.dockerignore`: every Docker update, and every grouped Actions update because `actions/checkout` is in the deploy job), so the auto-merge job leaves it for a person (ADR 0024, Update 2026-11-15). Tell Claude "review and merge the held Dependabot PRs": it reads the diff, looks at what the new pin changed upstream, and merges.
+- **A Dependabot PR is open with green checks and hasn't merged.** It changes the deploy path (`deploy.yml`, the `Dockerfile` or `.dockerignore`: every Docker update, and every grouped Actions update because `actions/checkout` is in the deploy job), so the auto-merge job leaves it for a person (ADR 0024, Update 2026-11-15). **The same goes for every npm PR** (it changes `web/`; the `Web` check runs on it and is the evidence to read). Tell Claude "review and merge the held Dependabot PRs": it reads the diff, looks at what the new pin changed upstream, and merges.
 
 - **A Dependabot PR has a red check.** Tell Claude "fix or close the Dependabot PR". Don't merge it by hand with the admin bypass.
 - **The auto-merge job fails with "doesn't require these checks".** The ruleset is missing, or a CI job was renamed. Fix the ruleset as above, then open the PR's **Checks** tab and re-run the failed job.

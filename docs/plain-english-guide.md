@@ -21,14 +21,14 @@ Think of a small newsroom that works while you sleep.
  THE WORLD                 THE FILING CABINET         THE DESK                  YOU
  ─────────                 ──────────────────         ────────                  ───
  ESPN, Sleeper   ──►  1. Collect: save a copy  ──►  3. Load it into  ──►  4. Do the math  ──►  5. Write the  ──►  6. Your phone
- (players, scores,       of everything twice         the organized          and write the         report, save        (not built yet)
+ (players, scores,       of everything twice         the organized          and write the         report, save        (written, not live)
   injuries, your         a day, never erase          notebook               calls down            it
   leagues)               it (Cloudflare R2)          (the database)         before tip-off
 
                                                   7. A watchdog and phone alerts tell you if anything breaks
 ```
 
-Steps 1 to 5 are **built and running in the cloud**. Step 6 (the phone app) is **not built yet**. Step 7 is built.
+Steps 1 to 5 are **built and running in the cloud**. Step 6 (the phone app) is **written and waiting for you to merge it and connect it to Cloudflare** (the steps are in `docs/runbooks/phone-app.md`, part 2). Step 7 is built.
 
 ## 3. Each piece, one at a time
 
@@ -153,8 +153,8 @@ Today (as built):
 
 The reports exist but are stuck in the database, and only your laptop can pull them out. The remaining part of this milestone (M3) gets them to your phone:
 
-1. **The API.** A small always-ready service that works like a **doorman**. Your phone asks it "show me today's report"; it checks you're really you (via a sign-in), then hands over only your reports. The phone app is never allowed to touch the database directly. **The code for this was written on 2026-11-15 on a side branch. It isn't merged or running.**
-2. **The phone app.** A web app you add to your iPhone's Home Screen, with sign-in by a 6-digit emailed code and two tabs, Today and This Week.
+1. **The API.** A small always-ready service that works like a **doorman**. Your phone asks it "show me today's report"; it checks you're really you (via a sign-in), then hands over only your reports. The phone app is never allowed to touch the database directly. **This one is done: it has been running since 2026-11-16.**
+2. **The phone app.** A web app you add to your iPhone's Home Screen, with sign-in by your email and a password and two tabs, Today and This Week. It is written (2026-11-16) and waits for you: merge it, connect it to Cloudflare, and add it to your Home Screen (`docs/runbooks/phone-app.md`, part 2). A banner says so whenever the newest report isn't from today, so an old report can't pass for a fresh one. The emailed code is built too, switched off until friends join.
 3. **Push notifications.** The "your report is ready" message from the app itself.
 4. **Backups.** A nightly copy of the irreplaceable tables (the call log, your leagues) to a separate place. (Supabase's free plan has no backups.)
 5. **The final test:** laptop shut, report arrives on the phone; a deliberately broken run raises an alert; a backup restores.

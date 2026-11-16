@@ -22,6 +22,10 @@ uv run fh migrate                         # bring DATABASE_URL's schema to head 
 uv run fh report open [weekly]            # show the latest report saved in the database
 uv run fh serve                           # the phone app's API (Cloud Run runs this; needs DATABASE_URL and FH_SUPABASE_URL)
 uv run fh openapi > web/openapi.json      # the API's committed schema (a test fails when it drifts)
+cd web && npm ci                          # the phone app: install (Node 24 per web/.node-version; npm 11 per packageManager)
+cd web && npm run dev                     # run it locally; needs web/.env.local (copy web/.env.example)
+cd web && npm run typecheck && npm run lint && npm test && npm run build   # what web.yml runs on a PR
+cd web && npm run gen:api                 # regenerate src/api/schema.d.ts after web/openapi.json changes (CI fails on drift)
 uv run fh run daily [--dry-run] [--open]  # ingest, lock-or-pass calls (logged), recap cards, daily report page
 uv run fh run weekly [--open]             # ingest, weekly overview per league (FactSheets, calls)
 uv run fh fixtures record                 # re-record redacted fixtures (then update contract test counts)

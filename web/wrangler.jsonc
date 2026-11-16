@@ -1,0 +1,14 @@
+// The phone app is a Cloudflare Worker with static assets and no code (ADR 0009, Update 2026-11-16).
+// Cloudflare builds it from this repo (root directory `web`): `npm ci && npm run build`, then
+// `npx wrangler deploy`, which uploads ./dist. The Worker's name must match the one created in
+// the dashboard (docs/runbooks/phone-app.md, Part 2).
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "fantasy-helper",
+  "compatibility_date": "2026-11-16",
+  "assets": {
+    "directory": "./dist",
+    // Any path that isn't a file serves index.html, so /today and /week open the app.
+    "not_found_handling": "single-page-application"
+  }
+}

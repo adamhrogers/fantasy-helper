@@ -1,0 +1,65 @@
+# Keeps the phone app (web/, ADR 0009) building and tested on any PR that touches it: the API's
+# generated types match its committed schema, then typecheck, lint, unit tests, a build, and a dry
+# run of the exact deploy command Cloudflare runs. Nothing here deploys: Cloudflare builds the app
+# from `main` itself, and holds no secret this job could see.
+# Not a required check, so it isn't in main's ruleset or the auto-merge guard (ADR 0024), the same
+# as container.yml.
+name: Web
+
+on:
+  pull_request:
+    paths:
+      - "web/**"
+      - .github/workflows/web.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    name: Types, lint, tests, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web
+    env:
+      WRANGLER_SEND_METRICS: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+
+      # The Node version is the one file Cloudflare reads too (web/.node-version).
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version-file: web/.node-version
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - run: npm ci
+
+      # openapi.json is the API's committed schema (a Python test keeps it current); the app's
+      # types are generated from it, so a schema change that wasn't followed by `npm run gen:api`
+      # shows up here.
+      - name: Generated API types match web/openapi.json
+        run: |
+          npm run gen:api
+          git diff --exit-code -- src/api/schema.d.ts
+
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+      - name: The build has what Cloudflare serves
+        run: |
+          for f in index.html sw.js manifest.webmanifest _headers apple-touch-icon.png icon-192.png icon-512.png; do
+            test -s "dist/$f" || { echo "::error::dist/$f is missing or empty"; exit 1; }
+          done
+
+      # What Cloudflare runs on deploy, without credentials: reads wrangler.jsonc and ./dist.
+      - name: The deploy command reads the build
+        run: npx wrangler deploy --dry-run

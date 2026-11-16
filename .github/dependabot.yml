@@ -9,7 +9,10 @@
 #   but the auto-merge job leaves them open for a person (ADR 0028): that is where an action or a
 #   base image runs with access to the production secrets. Every Docker update and every grouped
 #   Actions update lands there, since `actions/checkout` is in the deploy job too.
-# - Python major versions aren't proposed: they can pass CI and still change behavior, so
+# - Updates to the phone app's npm packages (web/) are proposed and tested too, but the auto-merge
+#   job leaves them for a person (ADR 0024, Update 2026-11-16): that code runs on a phone with a
+#   signed-in session, and Cloudflare builds it straight from `main`.
+# - Python and npm major versions aren't proposed: they can pass CI and still change behavior, so
 #   they're bumped on purpose inside a milestone. Action majors are proposed, because CI runs
 #   the same actions the snapshot job uses, and GitHub retires old majors anyway.
 version: 2
@@ -72,5 +75,27 @@ updates:
         applies-to: version-updates
         patterns: ["*"]
       docker-security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  # The phone app (web/, ADR 0009). Held for a person like the deploy path: see the header.
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: America/New_York
+    cooldown:
+      default-days: 7
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]  # version updates only, not security
+    groups:
+      web:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: [minor, patch]
+      web-security:
         applies-to: security-updates
         patterns: ["*"]
