@@ -1,18 +1,11 @@
-# Daily snapshots in the cloud (ADR 0023): the raw public data, saved twice a day to R2.
-# A missed day can't be recovered (ADR 0014), so this runs whether or not the laptop is on.
-#
-# GitHub's cron is UTC. Each set has an entry for Eastern Standard Time and one for Eastern
-# Daylight Time; `fh snapshot --cron` runs only the entry that matches New York's offset today,
-# so the sets run at 06:17 and 17:17 Eastern all year (pipeline/cron.py, tested against this
-# file). Off the hour on purpose: GitHub delays scheduled runs most at the top of the hour.
+# A manual fallback for a day Cloud Run is down (ADR 0023, ADR 0025). The schedule is not here:
+# Cloud Scheduler starts the snapshot jobs on the minute at 06:17 and 17:17 Eastern, and this
+# workflow's own schedule ran hours late (ADR 0025), so it was removed on 2026-11-16 once the
+# cloud copy had proven itself. A missed day can't be recovered (ADR 0014): if a Cloud Run job
+# fails and can't be started again, use Actions -> Snapshot -> Run workflow.
 name: Snapshot
 
 on:
-  schedule:
-    - cron: "17 11 * * *"  # morning, 06:17 EST
-    - cron: "17 10 * * *"  # morning, 06:17 EDT
-    - cron: "17 22 * * *"  # evening, 17:17 EST
-    - cron: "17 21 * * *"  # evening, 17:17 EDT
   workflow_dispatch:
     inputs:
       set:
@@ -61,15 +54,10 @@ jobs:
       - name: Snapshot
         id: snapshot
         env:
-          CRON: ${{ github.event.schedule }}
           SET: ${{ inputs.set }}
         run: |
           code=0
-          if [ -n "$CRON" ]; then
-            uv run --no-sync fh snapshot --cron "$CRON" || code=$?
-          else
-            uv run --no-sync fh snapshot --set "$SET" || code=$?
-          fi
+          uv run --no-sync fh snapshot --set "$SET" || code=$?
           [ "$code" -ne 3 ] || echo "reported=true" >> "$GITHUB_OUTPUT"
           exit "$code"
 

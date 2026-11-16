@@ -1,6 +1,6 @@
 import re
 import shutil
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -15,10 +15,8 @@ from fantasy_helper.cli import main as cli_main
 from fantasy_helper.cli._common import REPORTED_EXIT, watched
 from fantasy_helper.cli.doctor import supabase_region
 from fantasy_helper.cli.main import app
-from fantasy_helper.domain.calendar import NBA_TIMEZONE
 from fantasy_helper.domain.runs import FailureKind, RunKind, RunRecord, RunStatus
 from fantasy_helper.observability.healthchecks import HealthchecksHeartbeat
-from fantasy_helper.pipeline.cron import CRON_ENTRIES
 from fantasy_helper.pipeline.snapshot import DatasetResult, SnapshotResult, SnapshotSet
 from fantasy_helper.storage import crypto, r2_store
 from fantasy_helper.storage.raw_store import LocalRawStore, RawStoreError
@@ -88,25 +86,6 @@ def test_doctor_fails_when_r2_is_chosen_but_not_configured(
     result = runner.invoke(app, ["doctor", "--only", "raw"])
     assert result.exit_code == 1
     assert "FH_R2_ENDPOINT" in result.stdout
-
-
-def test_snapshot_from_the_other_offsets_cron_entry_skips_quietly() -> None:
-    offset = datetime.now(UTC).astimezone(NBA_TIMEZONE).utcoffset()
-    cron = next(c for c, e in CRON_ENTRIES.items() if timedelta(hours=e.utc_offset_hours) != offset)
-    result = runner.invoke(app, ["snapshot", "--cron", cron])
-    assert result.exit_code == 0, result.output
-    assert "skipped" in result.stdout
-
-
-def test_snapshot_rejects_an_unknown_cron_entry() -> None:
-    result = runner.invoke(app, ["snapshot", "--cron", "0 9 * * *"])
-    assert result.exit_code == 2
-    assert "pipeline/cron.py" in result.output
-
-
-def test_snapshot_takes_set_or_cron_not_both() -> None:
-    result = runner.invoke(app, ["snapshot", "--set", "evening", "--cron", "17 11 * * *"])
-    assert result.exit_code == 2
 
 
 def test_snapshot_refuses_to_start_without_its_r2_settings(
