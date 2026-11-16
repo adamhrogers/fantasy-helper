@@ -186,7 +186,7 @@ Phase 0  part 2 rollout ──► Phase 1  end the overlap          (rollout; da
 ### Decisions for Adam before this phase deploys
 
 1. **Where the app lives: decided 2026-11-16 (Adam): Cloudflare Workers static assets, not Pages.** Cloudflare's own docs say to start new projects on Workers, which serves a static app the same way, for free, and is where their new work goes. Recorded as an Update to ADR 0009. Pages still works and is the fallback if anything about Workers gets in the way.
-2. **A domain, now or never-for-now.** An installed web app and its notification permission belong to its address. Moving from `something.workers.dev` to a real domain later means every user reinstalls the app and turns notifications on again, and M7's friend invites need a domain anyway (for the email sender). **If a domain is coming before the beta, buy it before this phase's first deploy** and put the app on `app.<domain>` from day one (Workers needs the domain's DNS on Cloudflare). If not, `workers.dev` is fine for Adam alone.
+2. **A domain: decided 2026-11-16 (Adam): not now, `workers.dev` for the first deploy.** Why it matters: an installed web app and its notification permission belong to its address. Moving from `something.workers.dev` to a real domain later means every user reinstalls the app and turns notifications on again, and M7's friend invites need a domain anyway (for the email sender). **If a domain is coming before the beta, buy it before this phase's first deploy** and put the app on `app.<domain>` from day one (Workers needs the domain's DNS on Cloudflare). If not, `workers.dev` is fine for Adam alone.
 
 ### What Adam does (about 15 minutes)
 
@@ -312,7 +312,7 @@ The dates in roadmap v0.5 assumed M3 would end on 2026-11-12. It won't end befor
 |---|---|---|---|
 | 1 | The new dates, and whether M4's lane A runs in parallel | Parallel, beta about 2026-12-06 | Now |
 | 2 | Workers static assets instead of Pages | **Workers. Decided 2026-11-16 (Adam)** | Phase 3 |
-| 3 | A domain before the app's first deploy | Buy it if one is coming before the beta | Phase 3 |
+| 3 | A domain before the app's first deploy | **Not now (Adam, 2026-11-16): use `workers.dev` for now.** Buy one before the beta (friends' sign-in emails need it); until then, moving means reinstalling the app and turning notifications on again | Phase 3, again before M7 |
 | 4 | Weekly overview notifies on Mondays only | Yes | Phase 4 |
 | 5 | A separate, locked bucket for backups | Yes | Phase 5 |
 | 6 | Google Cloud's project ID and number show in the public deploy logs (GitHub prints environment variables; the repo itself doesn't hold them) | Accept: they identify, they don't grant, and deploys are tied to this repo, branch and workflow. To hide them anyway, store them as `prod` secrets instead of variables | Any time |
