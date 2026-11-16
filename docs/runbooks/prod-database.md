@@ -22,7 +22,7 @@ If `daily` hasn't reported by **07:45** (`weekly`: 08:00), Healthchecks alerts t
 
 ## First-time rollout
 
-**Where it stands (2026-11-15):** steps 1 to 3 and 8 are done. Steps 4 to 7 and 9 should happen the same day: the first scheduled snapshot on the new image runs at **06:17 Eastern on 2026-11-16** and starts `daily` on its own. If prod still has no user by then, `daily` stops with "no user yet" and Healthchecks sends a "down" alert. Nothing is written, so it's a false alarm, but it's avoidable. The order and the traps: [m3-plan.md](../m3-plan.md), Phase 0.
+**Where it stands (2026-11-16): every step is done.** The chain first ran by hand on the evening of 2026-11-15, and then **on its own at 06:17 Eastern on 2026-11-16**: the snapshot started at 06:17:05 and saved 9 of 9, `daily` and `weekly` followed, and all three succeeded by 06:20 with no league errors. The order and the traps from rollout day: [m3-plan.md](../m3-plan.md), Phase 0.
 
 - [x] **1. Claude, before merging** (done 2026-11-15; the job policies show `fh-jobs` may start `daily` and `fh-reports` may start `weekly`)**:** from the PR's branch, add the new pieces. It only adds: the `fh-reports` account, two empty secrets, three placeholder jobs (`migrate`, `daily`, `weekly`), and the chain's permissions (`fh-jobs` may start `daily`, `fh-reports` may start `weekly`, nothing broader). The deployer can't create jobs, so they have to exist before the first deploy.
 
@@ -89,7 +89,7 @@ gcloud run jobs executions list --job weekly --region us-east4 --limit 3
 
   If the phone says "couldn't start daily", see the table at the end. A run started after some of the day's games have tipped logs fewer calls than a morning run: a call is only logged while the player's next tip is still ahead.
 
-- [ ] **7. Adam: open the report the cloud built:**
+- [x] **7. Adam: open the report the cloud built** (done 2026-11-16, the weekly one at least)**:**
 
 ```bash
 scripts/fh-prod.sh report open
@@ -107,13 +107,13 @@ scripts/fh-prod.sh report open weekly
 scripts/gcp-setup.sh schedule
 ```
 
-- [ ] **9. Adam: the Healthchecks schedules, by script** (3 min, and the last time you type a schedule into their website; do it on rollout day, because until it runs the two snapshot checks keep the UTC schedules that raised the false alert). In Healthchecks, open your project → **Settings → API Access → Create API key (read-write)**, save it in Bitwarden, then run the script and paste the key at the hidden prompt. It sets all four checks (cron line, time zone `America/New_York`, grace) from `scripts/jobs.conf`, and it fixes the two snapshot checks that were saved in UTC on 2026-11-14:
+- [x] **9. Adam: the Healthchecks schedules, by script** (done 2026-11-15; all four checks showed recent, on-time pings on 2026-11-16; 3 min, and the last time you type a schedule into their website; do it on rollout day, because until it runs the two snapshot checks keep the UTC schedules that raised the false alert). In Healthchecks, open your project → **Settings → API Access → Create API key (read-write)**, save it in Bitwarden, then run the script and paste the key at the hidden prompt. It sets all four checks (cron line, time zone `America/New_York`, grace) from `scripts/jobs.conf`, and it fixes the two snapshot checks that were saved in UTC on 2026-11-14:
 
 ```bash
 scripts/healthchecks-setup.sh
 ```
 
-- [ ] **10. Clean up, after one clean scheduled morning:** nothing in GitHub uses the database URL or the encryption key now (the report jobs read them from Secret Manager; checked 2026-11-15, no workflow names either). Remove them from GitHub's `prod` environment, so each secret lives in as few places as possible:
+- [x] **10. Clean up, after one clean scheduled morning** (done by Adam, 2026-11-16, after the 06:17 chain ran on its own)**:** nothing in GitHub uses the database URL or the encryption key now. The report jobs read their own copies from Secret Manager (checked 2026-11-15: no workflow names either), and the morning of 2026-11-16 proved those copies work, which is why this waited. Until then GitHub's copies were the spare. Removing them leaves each secret in fewer places, so there are fewer places it can leak from; the values are still in Secret Manager and Bitwarden. Remove them from GitHub's `prod` environment:
 
 ```bash
 gh secret delete DATABASE_URL --env prod
@@ -123,7 +123,7 @@ gh secret delete DATABASE_URL --env prod
 gh secret delete FH_ENCRYPTION_KEY --env prod
 ```
 
-- [ ] **11. Recommended: turn on audit logs for Secret Manager** (2 min), so a read of the database URL or the encryption key leaves a record. They're off by default. In the console: **IAM & Admin → Audit Logs**, find **Secret Manager API**, tick **Data Read**, **Save**. At this volume it costs nothing.
+- [x] **11. Recommended: turn on audit logs for Secret Manager** (done by Adam, 2026-11-15; 2 min), so a read of the database URL or the encryption key leaves a record. They're off by default. In the console: **IAM & Admin → Audit Logs**, find **Secret Manager API**, tick **Data Read**, **Save**. At this volume it costs nothing.
 
 ## Day to day
 
@@ -132,6 +132,8 @@ Nothing to do. Every morning the 06:17 snapshot runs and hands over to `daily`, 
 ```bash
 scripts/fh-prod.sh report open
 ```
+
+**What the counts in the run summaries mean.** `daily` runs first, so its summary shows everything new since the last load: box scores from last night's games, and the projection rows from every snapshot set saved since (on 2026-11-16: 192 box scores and 4,482 projection rows). `weekly` runs two minutes later on the same data, so its summary says 0 new rows. That is correct: loading the same data twice writes nothing (PR #17). A `weekly` run that reports lots of new rows means `daily` didn't load them first, so find out why.
 
 **Look at a run:**
 

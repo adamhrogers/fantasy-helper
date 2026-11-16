@@ -1,6 +1,6 @@
 # Fantasy Helper in plain English
 
-**Written:** 2026-11-15, for Adam, as a guide with no assumed technical background. **Where things stand:** this describes the project as it is on 2026-11-15 and says clearly which parts are built, which are running, and which are still to come. The technical documents (`session-handoff.md`, `architecture.md`, the ADRs) hold the details; this one holds the picture.
+**Written:** 2026-11-15, for Adam, as a guide with no assumed technical background. **Where things stand:** this describes the project as it is on 2026-11-16 (first written the day before) and says clearly which parts are built, which are running, and which are still to come. The technical documents (`session-handoff.md`, `architecture.md`, the ADRs) hold the details; this one holds the picture.
 
 ---
 
@@ -114,7 +114,7 @@ ESPN and Sleeper give the same player different ID numbers. A part of the system
 - **Dependabot** is a bot that proposes small updates to the libraries the code uses, and most merge on their own once the tests pass.
 
 ### Your laptop
-Your laptop still saves its own copy of the snapshots at 06:30 and 17:30, as a backup, until the cloud has proven reliable (four on-time scheduled runs in a row; the count is in `m3-plan.md`). Then the laptop job and GitHub's late spare copy are switched off. The laptop is also where you run `fh` commands.
+Your laptop still saves its own copy of the snapshots at 06:30 and 17:30, as a backup, until the cloud has proven reliable (four on-time scheduled runs in a row; three are done, and the fourth is the evening of 2026-11-16; the count is in `m3-plan.md`). Then the laptop job and GitHub's late spare copy are switched off. The laptop is also where you run `fh` commands.
 
 ## 4. The `fh` commands
 
@@ -141,9 +141,9 @@ Today (as built):
 | Time (ET) | What happens |
 |---|---|
 | 06:17 | Google's alarm clock starts `snapshot-morning`. It saves nine datasets to R2 (30 seconds or so). |
-| ~06:18 | If all nine are good, it writes a "complete" marker and starts `daily`. |
-| ~06:20 | `daily` loads the new data, works out lock-or-pass, logs the calls, saves the daily report, then starts `weekly`. |
-| ~06:22 | `weekly` builds the overview for all three leagues and saves it. |
+| ~06:17:30 | If all nine are good, it writes a "complete" marker and starts `daily`. |
+| ~06:19 | `daily` loads the new data, works out lock-or-pass, logs the calls, saves the daily report, then starts `weekly`. |
+| ~06:20 | `weekly` builds the overview for all three leagues and saves it. (It has nothing new to load, because `daily` just did.) |
 | all along | Each job checks in with Healthchecks and sends status messages to your phone. |
 | 07:45 | If `daily` hasn't finished, Healthchecks warns you. |
 
@@ -153,7 +153,7 @@ Today (as built):
 
 The reports exist but are stuck in the database, and only your laptop can pull them out. The remaining part of this milestone (M3) gets them to your phone:
 
-1. **The API.** A small always-ready service that works like a **doorman**. Your phone asks it "show me today's report"; it checks you're really you (via a sign-in), then hands over only your reports. The phone app is never allowed to touch the database directly. **The code for this was written tonight on a side branch. It isn't merged or running.**
+1. **The API.** A small always-ready service that works like a **doorman**. Your phone asks it "show me today's report"; it checks you're really you (via a sign-in), then hands over only your reports. The phone app is never allowed to touch the database directly. **The code for this was written on 2026-11-15 on a side branch. It isn't merged or running.**
 2. **The phone app.** A web app you add to your iPhone's Home Screen, with sign-in by a 6-digit emailed code and two tabs, Today and This Week.
 3. **Push notifications.** The "your report is ready" message from the app itself.
 4. **Backups.** A nightly copy of the irreplaceable tables (the call log, your leagues) to a separate place. (Supabase's free plan has no backups.)
@@ -169,6 +169,7 @@ The reports exist but are stuck in the database, and only your laptop can pull t
 | **M7** | The friends beta: invite a few friends to use it. |
 | **M8** | A panel of specialist AIs, kept only if they beat a single AI at being right. |
 | **M4b: the buddy** | Your main long-term goal (2026-11-15), now planned as early as it can go: a chat you can talk to all the time, starting about Nov 25. You give it opinions, it remembers them as takes that get graded, and the grading keeps it honest. |
+| **A smarter weekly plan** | A direction (2026-11-16), placement proposed. Today's weekly plan suggests swaps as if you'd make them all at the start of the week. The goal is a plan that works through the week day by day: when to make each move, how to spend your limited adds, and what happens when an injured player returns. It also means teaching the chat how these leagues work. |
 | **Reports shaped by you** | A direction, not scheduled: each person (you, a friend) could choose what their report shows. The reports are already built from separate cards, which is what makes this possible later. |
 | After | Trade tracking, 9-category leagues, then the end-of-season case study. |
 
@@ -180,7 +181,7 @@ Target for the friends beta is **about 8 December** (hard stop **15 December**),
 - Type secrets and ESPN cookies at private prompts. They never go through chat.
 - Create accounts (done for everything M3 needs).
 - Decide the open questions (listed in `m3-plan.md`).
-- Turn things on or off in dashboards: for example, **Secret Manager audit logs** (step 11) and, after tomorrow's run, removing two now-unused secrets from GitHub (step 10).
+- Turn things on or off in dashboards: for example, **Secret Manager audit logs** and removing two now-unused secrets from GitHub (both done on 2026-11-15 and 2026-11-16).
 
 ## 9. The jargon, decoded
 

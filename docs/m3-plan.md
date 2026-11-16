@@ -8,9 +8,9 @@ This is the plan for everything between "part 2 is merged" and "M3 is done": six
 
 | Phase | What | Status |
 |---|---|---|
-| **0** | Finish part 2's rollout: leagues in prod, history loaded, first chained morning | **In progress.** Runbook steps 1–6 and 8 done on 2026-11-15 (the chain ran end to end); 7 (Adam opens the reports), 9–11 open |
-| **1** | End the snapshot overlap: retire launchd and the GitHub schedule | Waiting on four on-time runs (earliest: the evening of 2026-11-16) |
-| **2** | Part 3: the API on Cloud Run, sign-in checked, reports served | Not started |
+| **0** | Finish part 2's rollout: leagues in prod, history loaded, first chained morning | **Done (2026-11-16).** All 11 runbook steps are ticked; the chain ran on its own at 06:17 on 2026-11-16 (snapshot, `daily`, `weekly` all succeeded by 06:20) |
+| **1** | End the snapshot overlap: retire launchd and the GitHub schedule | **3 of 4 on-time runs done** (2026-11-15 06:17 and 17:17, 2026-11-16 06:17); the fourth is the evening of 2026-11-16. The Healthchecks condition is met. Then Adam's go-ahead |
+| **2** | Part 3: the API on Cloud Run, sign-in checked, reports served | Code written on branch `m3-part3-api` (pushed, no PR, held until the cloud setup is done); Adam's inputs and the cloud setup still to do |
 | **3** | Part 4: the phone app | Not started |
 | **4** | Part 5a: push ("your report is ready") | Not started |
 | **5** | Part 5b: backups, locks, loose ends, the exit test | Not started |
@@ -35,9 +35,21 @@ Phases 0 and 1 are rollout work, not code. Phases 2 to 5 are one branch and one 
 
 Part 2 went this way on 2026-11-15 and its first deploy passed without a fallback.
 
-## Where things stand (checked 2026-11-15, about 09:45 Eastern)
+## Where things stand, update of 2026-11-16 (read after the 06:17 chain)
 
-Each line was read from the system itself, not from a doc.
+Each line was read from the system itself, not from a doc. The section below it is the record from the day before.
+
+- **The morning chain ran on its own.** `snapshot-morning` started at 06:17:05 Eastern (22 seconds, 9 of 9 datasets), started `daily` (06:17:30 to 06:19:10), which started `weekly` (06:19:10 to 06:20:24). All three succeeded, with no league errors. Nobody pressed anything: this is the proof of the hand-over and of the permissions, from the scheduler.
+- **The overlap count is 3 of 4:** 2026-11-15 06:17 and 17:17, and 2026-11-16 06:17, all on the minute. The fourth is 17:17 on 2026-11-16. The Healthchecks schedules are set by the script, and all four checks showed recent, on-time pings.
+- **What the run summaries' numbers mean:** `daily` loaded 192 box scores and 4,482 projection rows (everything new since the last load: Sunday's games, and three snapshot sets, two of them GitHub's late copies and one this morning's). `weekly` then loaded 0 and 0, because `daily` had just loaded it all. That is the designed behavior, and PR #17's fix at work: loading the same data twice writes nothing.
+- **What the weekly report said** (from the job's log): the ESPN points league got a win chance, a startable-games card, three add/drop suggestions and a below-replacement card; the lock-in league got a win chance (a fresh week has no locks to hide), a games card and a below-replacement card; the categories league got only the games card, as expected until P9.
+- **Runbook steps 7, 9, 10 and 11 are done** (the secrets are out of GitHub's `prod` environment).
+- **PR #17 (box-score upserts write only changed rows) merged on 2026-11-15** (`3e9eff9`). The database was 45 MB of 500 MB after the history load, about 12 MB of it bloat from re-saving unchanged box scores; `VACUUM FULL player_game_stats` reclaims it (Adam's command; not confirmed run). Details: [session-handoff.md](session-handoff.md) §7.
+- **A finding to chase (does not block a phase):** one day's startable count in the weekly report was one lower than the league's real lineup. Candidates and how to find it: [session-handoff.md](session-handoff.md) §7, "Found on 2026-11-16".
+
+## Where things stand (as first checked 2026-11-15, about 09:45 Eastern)
+
+Each line was read from the system itself, not from a doc. Superseded where the update above says so.
 
 - **PR #16 merged** at 09:27 Eastern (`f7544b2`). CI on `main` is green.
 - **The deploy that followed succeeded** (Actions run 43724460526, 95 seconds). It answered the two questions the last session left open:
@@ -92,7 +104,7 @@ Phase 0  part 2 rollout ──► Phase 1  end the overlap          (rollout; da
 - **If the phone says "couldn't start daily: HTTP 403":** the permission isn't what the policy listing shows. Re-run `scripts/gcp-setup.sh infra` (it only adds), list the policy again (`gcloud run jobs get-iam-policy daily --region us-east4`), then start `daily` by hand: `gcloud run jobs execute daily --region us-east4 --wait`. The snapshot wrote its marker before it tried the hand-over, so the gate passes, and `daily` hands over to `weekly` itself.
 - **A hand run in the afternoon logs fewer calls than a morning one.** The tip-off guard only lets a call through while the player's next tip is still ahead. That's correct, not a bug.
 
-**Done when:** one chained morning ran end to end in prod (by hand on 2026-11-15 or on its own on 2026-11-16), both reports open from prod, the four Healthchecks checks show the Eastern schedules, and steps 10 and 11 are ticked. Then tick the runbook and update the handoff.
+**Done when:** one chained morning ran end to end in prod (by hand on 2026-11-15 or on its own on 2026-11-16), both reports open from prod, the four Healthchecks checks show the Eastern schedules, and steps 10 and 11 are ticked. Then tick the runbook and update the handoff. **Met on 2026-11-16.**
 
 ## Phase 1: end the snapshot overlap
 
@@ -286,6 +298,7 @@ gcloud run jobs execute weekly --region us-east4 --update-env-vars=FH_RAW_STORE=
 - **Chat comes early (Adam, 2026-11-15).** It is M4b in the roadmap, about Nov 25, a third lane. From this plan it needs: the API's pattern (a signed-in route; Phase 2), the app's Chat tab (Phase 3), and the Claude and LangSmith keys in the cloud with a spend cap (below). Nothing in Phases 2 to 5 needs to change for it, but **keep the app's card rendering generic** (Phase 3, item 3): it is also what lets reports be customized per person later.
 The dates in roadmap v0.5 assumed M3 would end on 2026-11-12. It won't end before about 2026-11-23, so everything after it moves. Roadmap v0.6 has the new dates; they are a proposal until Adam confirms them.
 
+- **A smarter weekly planner, and a buddy that knows how leagues work (Adam, 2026-11-16).** Planning the week day by day (when to make each add, injured players' returns, the add limit as a budget) and teaching the chat the leagues' mechanics. It is engine and facts work with no files shared with the app or the API, so it can run as a lane beside Phases 3 to 5. It is **not** one of M3's phases. See the roadmap's direction of that name.
 - **M4 can start beside Phase 3.** Its lane A (the LLM gateway, the baseline graph, guardrails, the MCP server) lives in `brain/` and `mcp_server/` and touches nothing the phone app does. Running it as a second session is the difference between a beta around 2026-12-06 and one around 2026-12-12; the hard stop is 2026-12-15.
 - **Before M4 writes its first model call,** the cloud jobs need two secrets they don't have: the Claude key (`fh-anthropic-api-key`, with a spend limit set in the Console) and the LangSmith key (rule 3: every model call is traced, and today only CI and the laptop have that key). Both go into Secret Manager for `fh-reports`, not into GitHub's `prod` as the older setup runbook says.
 - **Before M7:** a domain (see Phase 3), a custom email sender for Supabase Auth, the tenancy test extended to every new route, and a database role for the API that can't touch tables it doesn't serve (today it connects as the owner, like the jobs; fine for one user, worth narrowing before friends' logins are in the database).
@@ -300,6 +313,7 @@ The dates in roadmap v0.5 assumed M3 would end on 2026-11-12. It won't end befor
 | 4 | Weekly overview notifies on Mondays only | Yes | Phase 4 |
 | 5 | A separate, locked bucket for backups | Yes | Phase 5 |
 | 6 | Google Cloud's project ID and number show in the public deploy logs (GitHub prints environment variables; the repo itself doesn't hold them) | Accept: they identify, they don't grant, and deploys are tied to this repo, branch and workflow. To hide them anyway, store them as `prod` secrets instead of variables | Any time |
+| 7 | Where the smarter weekly planner goes (roadmap, "Direction: a smarter weekly planner") | The smallest piece first (show who's counted each day and check it against the league's lineup), as a lane beside Phase 3 or 4; the day-by-day planning beside M4 | Before M4 starts |
 
 ## Outside facts (checked 2026-11-15)
 

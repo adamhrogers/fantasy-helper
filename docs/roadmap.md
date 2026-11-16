@@ -1,6 +1,6 @@
 # Fantasy Helper — Phased Roadmap
 
-**Status:** v0.6, 2026-11-15 (dates proposed, waiting on Adam) · companion to [architecture.md](architecture.md)
+**Status:** v0.6, 2026-11-15, with additions on 2026-11-16 (dates proposed, waiting on Adam) · companion to [architecture.md](architecture.md)
 
 **Friends beta: about Dec 8, with M4's brain work and the chat running as parallel lanes (planned Nov 15, then Nov 22, then Nov 29). Without parallel lanes the plan no longer fits before the hard stop. Hard stop: Dec 15.** Each milestone ends with something Adam uses the next morning and an automated check that proves it works. Lanes (A, B, …) inside a milestone have no dependencies on each other, so they can run as parallel sub-agents or sessions once you approve.
 
@@ -11,6 +11,7 @@
 - **M3's shape changed:** timed jobs are Cloud Run jobs in a morning chain, not `daily.yml` and `weekly.yml` on GitHub (ADRs 0025, 0028); sign-in is a 6-digit email code, not a magic link (decided Nov 6); the app's host is proposed as Cloudflare Workers static assets instead of Pages, because Cloudflare now says to start new projects there.
 - **Chat moved forward** (Adam, 2026-11-15: "the earlier that we can get the chat in, the better"): it's now M4b, right after the pieces it needs exist (see "The buddy"), instead of a later idea.
 - **M4's streak** ("by 8 a.m. five days in a row") moves from Nov 15–19 to the first five mornings after M4 ships.
+- **Added Nov 16:** part 2's rollout finished (the morning chain ran on its own), and a smarter weekly planner with a league-savvy buddy was recorded as a direction (below), placement proposed.
 
 **What changed in v0.5 (Nov 6):**
 - **Sleeper lock-in moves from M5 to M2,** so Adam uses it in his live league from about Nov 11 instead of about Nov 23. It needs no AI, only M2's scoring and distributions. It arrives as lock-or-pass cards in an **engine-only daily report**, not a separate command. The registry's core (append-only table, tip-off guard) moves with it, because every call is logged. Lock-in v2 stays in M5.
@@ -118,6 +119,7 @@ Apr–Sep 2027 ─ P12 Offseason: Yahoo, sign-up, pricing ─ fall 2027 launch
   - a mid-week win probability for lock-in leagues (needs lock data, parked)
   - ESPN matchup periods mapped to scoring days, before the All-Star break (until then a period that started in an earlier week is flagged, with no win probability)
   - categories-league valuation (P9)
+  - a day-by-day weekly plan: the streaming planner is a whole-week batch (see "Direction: a smarter weekly planner")
 
 These steps depend on each other, so they're ordered. B and C run in parallel at the end.
 
@@ -143,7 +145,7 @@ These steps depend on each other, so they're ordered. B and C run in parallel at
 
 **Goal:** prove the whole path from scheduled job to sign-in to push before any LLM work starts.
 
-**Status (Nov 15):** in five parts (session-handoff §7). Parts 1 and 2 are merged; part 2's rollout is half done; parts 3 to 5 are planned in [m3-plan.md](m3-plan.md). Because the deploy runs only from `main`, M3 merges part by part.
+**Status (Nov 16):** in five parts (session-handoff §7). Parts 1 and 2 are merged and part 2's rollout is done: the morning chain ran on its own on Nov 16. Part 3's code is written on a side branch; parts 3 to 5 are planned in [m3-plan.md](m3-plan.md). Because the deploy runs only from `main`, M3 merges part by part.
 - **Part 1, cloud snapshots: merged and live** (PR #4, ADR 0023). The raw store is on R2, and the snapshot job runs on GitHub Actions on Eastern time. The laptop keeps saving to its own disk as an independent backup until the part 5 watchdog is live ([runbooks/cloud-snapshots.md](runbooks/cloud-snapshots.md)).
 - **Dependabot: merged** (PR #5, ADR 0024). Dependency updates merge themselves once CI passes.
 - **Adam's accounts:** every one M3 needs exists (GitHub `prod`, Supabase prod, the prod key and topic, R2 on 2026-11-07; Google Cloud and Healthchecks on 2026-11-14). Inventory: [runbooks/accounts-and-secrets.md](runbooks/accounts-and-secrets.md).
@@ -151,7 +153,7 @@ These steps depend on each other, so they're ordered. B and C run in parallel at
 - **Decided 2026-11-14 (ADR 0025):** timed jobs move to Cloud Run Jobs started by Cloud Scheduler, watched by Healthchecks ([runbooks/scheduled-jobs.md](runbooks/scheduled-jobs.md)).
 - **Snapshots on Cloud Run: live** since 2026-11-14 (PRs #12, #14), tested end to end, Healthchecks schedules set. The laptop retires after four on-time runs in a row, counting from 2026-11-15 06:17.
 - **Part 2: merged 2026-11-15** (PR #16). Reports saved in a `reports` table; `migrate`, `daily` and `weekly` as Cloud Run jobs, with the morning a chain (snapshot, then daily, then weekly, each starting only when the one before is complete, ADR 0028); a run lock; the prod database migrated by the deploy; `scripts/fh-prod.sh`; Healthchecks schedules set by script. ADRs 0026, 0027 and 0028, [runbooks/prod-database.md](runbooks/prod-database.md). The deploy migrated prod to 0006 and wired the chain. **Rollout:** leagues, history and the first chained morning are still to do.
-- **Next:** finish part 2's rollout (before 06:17 Eastern on 2026-11-16, when the chain first starts on its own), end the snapshot overlap, then part 3 (the API and sign-in), part 4 (the phone app) and part 5 (push, backups, the exit test). All of it, in order: [m3-plan.md](m3-plan.md).
+- **Next:** end the snapshot overlap (after the fourth on-time run, the evening of 2026-11-16), then part 3 (the API and sign-in), part 4 (the phone app) and part 5 (push, backups, the exit test). All of it, in order: [m3-plan.md](m3-plan.md).
 
 The lanes as built and planned (the first version of this table had a magic link, Cloudflare Pages and GitHub cron workflows):
 
@@ -233,6 +235,24 @@ What keeps the door open, so it isn't rebuilt later:
 - **Customizing means choosing among blocks the code computes**, never an AI making up numbers: which kinds of cards, in what order, with what thresholds. A genuinely new block is new code. This keeps the rule that code computes every number.
 - **The chat is the natural way to ask for it** ("show me this, drop that"), saved as a per-user preference after he confirms it, the same way opinions become takes.
 - **Where it would land:** after the beta shows what friends actually want to change. It needs per-user settings stored in the database (a migration), the reports jobs reading them (so each user's report is built to their preferences), and an editing screen or the chat. Not before M7.
+
+## Direction: a smarter weekly planner, and a buddy that knows how leagues work (stated 2026-11-16, placement proposed)
+
+**Adam's point, 2026-11-16:** the weekly plan should reason about a week the way a careful manager does, and the agent (the buddy) should understand how these leagues work: how slots, injured reserve, add limits and timing interact, and what a manager could do about each. Today's weekly plan is a first version, and these are its known limits (read from `engine/schedule.py`, `engine/streaming.py` and `facts/weekly.py`):
+
+- **Who counts is a snapshot of now.** Only players who are not in an injured-reserve slot count, and anyone whose latest status says out is treated as out for every remaining day that has no provider projection of its own, when often a status is about one game, a rest day or a recent event. A player on injured reserve is never planned back in, though his return needs a roster spot, which means a planned drop.
+- **Every swap is scored as if made at the start of the week.** The dropped player is gone for every remaining day, and the add limit is spent all at once as a list of changes, with nothing said about which day to make each one, and nothing kept back for news. A swap made after the dropped player's game would keep that game and add the new player's games; the planner can't express that.
+- **The count of who can start each day isn't checked** against the league's real lineup, the way banked points are checked against the platform's daily totals, and the report doesn't say who it counted or why it left someone out. A day's count was found one lower than the league's real lineup on 2026-11-16 (the cause isn't found yet: session-handoff §7).
+
+**What it should become:**
+1. **Say what it counted.** For each day, who is in the lineup, who was left out, and why; checked against the league's real lineup. This is the smallest piece and a trust issue: a wrong count has to be visible.
+2. **Availability over time, not yes or no.** Out for tonight, out for the week, expected back on a day with a probability; injured-reserve returns as planned roster events.
+3. **A day-by-day plan.** For each remaining day: the lineup, the moves to make that day, and the adds left. The add limit is a budget spent across the week, with some held back, and the planner picks each move's day (a swap after the dropped player's last useful game, an add before his best stretch).
+4. **The buddy knows the mechanics.** The league's rules (slots, injured reserve, add limits, lock rules, how a week is scored) and the planner's reasoning for each suggestion come to the chat as facts it reads through the same read-only tools as the reports' brain, so it can explain a plan and answer "what if I do it a day later" from code that computed it. This keeps the rule that code computes every number and the AI explains.
+
+**Where it lands (proposed, waiting on Adam; m3-plan.md decision 7):** items 1 to 3 are pure engine and facts work (`engine/`, `facts/`, `reports/weekly.py`), with no files shared with the app, the API or the brain, so they can run as a lane beside M3's Phases 3 to 5. Item 1 first, because it is small and the cause of the count mismatch needs finding anyway. Items 2 and 3 are bigger and should land before the chat (M4b), which will be asked about these plans, and before the beta, because friends will read weekly plans. Item 4 belongs to M4b.
+
+**Done when (proposed):** for a real week in each points league, the plan lists the lineup and the moves day by day, its daily counts match the league's own, and Adam either agrees with it or can see exactly why it differs from what he would do.
 
 ## M6 — Grading and timeline graphs · about Nov 29–Dec 4, or Dec 4–9
 
