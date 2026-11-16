@@ -16,6 +16,7 @@ from fantasy_helper.cli._common import REPORTED_EXIT, alert_crash, fail, watched
 from fantasy_helper.cli._runs import start_next
 from fantasy_helper.cli.doctor import Check, Status, run_checks
 from fantasy_helper.cli.ingest import ingest as ingest_command
+from fantasy_helper.cli.sql import sql as sql_command
 from fantasy_helper.config import Settings, get_settings
 from fantasy_helper.domain.ports import SystemClock
 from fantasy_helper.domain.runs import RunKind, RunRecord, RunStatus
@@ -23,7 +24,6 @@ from fantasy_helper.observability.alerts import notifier_from_settings
 from fantasy_helper.observability.events import events_from_settings
 from fantasy_helper.observability.healthchecks import heartbeat_from_settings
 from fantasy_helper.observability.logs import configure_logging, get_logger
-from fantasy_helper.pipeline.cron import UnknownCronError, job_for
 from fantasy_helper.pipeline.freshness import mark_snapshot_complete
 from fantasy_helper.pipeline.morning import incompleteness
 from fantasy_helper.pipeline.snapshot import DATASETS, SnapshotResult, SnapshotSet, run_snapshot
@@ -56,6 +56,7 @@ app.add_typer(report.app, name="report")
 app.command("ingest")(ingest_command)
 app.command("serve")(serve.serve)
 app.command("openapi")(serve.openapi)
+app.command("sql")(sql_command)
 
 _SYMBOLS = {Status.OK: "✓", Status.SKIP: "-", Status.FAIL: "✗"}
 
@@ -120,9 +121,6 @@ def doctor(
         raise typer.Exit(code=1)
 
 
-_SNAPSHOT_JOBS = {"snapshot-morning": SnapshotSet.MORNING, "snapshot-evening": SnapshotSet.EVENING}
-
-
 @app.command()
 def snapshot(
     run_set: Annotated[
@@ -130,14 +128,6 @@ def snapshot(
         typer.Option(
             "--set",
             help="morning (default): everything; evening: pre-tip injuries and projections.",
-        ),
-    ] = None,
-    cron: Annotated[
-        str | None,
-        typer.Option(
-            "--cron",
-            help="The GitHub cron entry that started this run. It picks the set, or exits "
-            "quietly if the entry is for the other UTC offset today (pipeline/cron.py).",
         ),
     ] = None,
     only: Annotated[
@@ -156,22 +146,6 @@ def snapshot(
     if unknown:
         typer.echo(f"✗ unknown dataset {', '.join(sorted(unknown))}", err=True)
         raise typer.Exit(code=2)
-    if cron is not None:
-        if run_set is not None:
-            typer.echo("✗ use --set or --cron, not both", err=True)
-            raise typer.Exit(code=2)
-        try:
-            job = job_for(cron, SystemClock().now())
-        except UnknownCronError as exc:
-            typer.echo(f"✗ {exc}", err=True)
-            raise typer.Exit(code=2) from exc
-        if job is None:
-            typer.echo(f"skipped: cron {cron!r} is the other UTC offset's entry today")
-            return
-        if job not in _SNAPSHOT_JOBS:
-            typer.echo(f"✗ cron {cron!r} is for {job}, not a snapshot", err=True)
-            raise typer.Exit(code=2)
-        run_set = _SNAPSHOT_JOBS[job]
     run_set = run_set or SnapshotSet.MORNING
     # A settings error stops here with exit 1, before any alert channel or ping key is known. On
     # GitHub the workflow alerts for it; on Cloud Run there's no workflow, so only the watchdog

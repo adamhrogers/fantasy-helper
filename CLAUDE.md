@@ -1,6 +1,6 @@
 # Fantasy Helper: working guide
 
-**Starting a new session? Read [docs/session-handoff.md](docs/session-handoff.md) first.** It has the current state, how we work with Adam, what we learned the hard way, and exactly what's next.
+**Starting a new session? Read [docs/session-handoff.md](docs/session-handoff.md) first.** It has the current state, how we work with Adam, what we learned the hard way, and exactly what's next. **Then [docs/m3-plan.md](docs/m3-plan.md):** the phased plan for the rest of M3, with a status table to start from.
 
 A fantasy basketball assistant: a daily report and weekly plan with specific moves, tuned to each league's scoring, built on the user's own takes, and graded on every call it makes. Read `docs/architecture.md` (system design), `docs/roadmap.md` (milestones and current status) and `docs/decisions/` (ADRs) before changing anything structural.
 
@@ -15,7 +15,7 @@ uv run lint-imports                       # architecture contracts
 uv run alembic upgrade head               # migrate DATABASE_URL
 uv run alembic revision --autogenerate --rev-id 0002 -m "..."   # new migration
 uv run fh doctor                          # check config, encryption, DB, tracing, alerts, R2
-uv run fh snapshot                        # save today's raw public data (GitHub Actions, twice a day)
+uv run fh snapshot                        # save today's raw public data (Cloud Run jobs, twice a day)
 uv run fh raw upload [--dry-run]          # copy local raw snapshots to R2 (never overwrites)
 uv run fh ingest                          # load leagues + snapshots into the database (idempotent)
 uv run fh migrate                         # bring DATABASE_URL's schema to head (the deploy runs this in the cloud)
@@ -25,6 +25,8 @@ uv run fh run weekly [--open]             # ingest, weekly overview per league (
 uv run fh fixtures record                 # re-record redacted fixtures (then update contract test counts)
 scripts/snapshot-schedule.sh status       # snapshot schedule state and logs
 scripts/fh-prod.sh league add ...         # ONE fh command against prod (league|report|doctor only); secrets never touch disk
+scripts/fh-sql.sh "select ..."            # look at prod through the read-only login (docs/runbooks/read-only-access.md)
+scripts/readonly-setup.sh                 # create or refresh that login (once, and after a migration adds a table)
 scripts/gcp-setup.sh infra|schedule|show  # Google Cloud: accounts, secrets, jobs, schedules (docs/runbooks/scheduled-jobs.md)
 scripts/healthchecks-setup.sh             # set the Healthchecks schedules from scripts/jobs.conf (always Eastern)
 ```

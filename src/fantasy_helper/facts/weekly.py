@@ -59,6 +59,10 @@ class WeekPlayer:
     # Lock-in leagues: his latest game's score while it can still be locked (his next game
     # hasn't tipped). None otherwise.
     lockable_points: float | None = None
+    # Days his team plays that no provider projects him for: those games can't count, and the
+    # report says so. None: not known (a hand-built player).
+    no_projection_days: tuple[date, ...] = ()
+    team_games_this_week: int | None = None  # all his team's games this matchup week
 
     @property
     def expected(self) -> float:
@@ -156,11 +160,13 @@ def load_weekly(
             return None
         name, team, positions = profiles[pid]
         games = []
+        no_projection: list[date] = []
         for tip, day in sorted(games_by_team.get(team or "", [])):
             if slot == FREE_AGENT and tip <= now:
                 continue  # a free agent can't be added in time for a game that's started
             projection = book.for_game(pid, day)
             if projection is None:
+                no_projection.append(day)
                 continue
             if not rules.scoring.weights:  # categories: a game counts as a game
                 dist = GameDistribution(1.0, 0.0, 1.0 if projection else 0.0)
@@ -179,8 +185,10 @@ def load_weekly(
             else None
         )
         return WeekPlayer(
-            pid, name, team, pos, slot, PlayerWeek(pid, pos, tuple(games)), season, lockable
-        )
+            pid, name, team, pos, slot, PlayerWeek(pid, pos, tuple(games)), season, lockable,
+            no_projection_days=tuple(no_projection),
+            team_games_this_week=len(team_week.get(team or "", [])),
+        )  # fmt: skip
 
     names = league_data.team_names(session, league.id)
 

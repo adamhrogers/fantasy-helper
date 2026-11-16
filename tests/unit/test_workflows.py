@@ -28,6 +28,14 @@ def test_the_snapshot_job_alerts_on_any_unreported_failure() -> None:
     assert "persist-credentials: false" in text
 
 
+def test_the_snapshot_workflow_is_a_manual_fallback_with_no_schedule() -> None:
+    """Cloud Scheduler is the only timer (ADR 0025): a second one saves the same day twice,
+    hours late, and doubles the projection snapshots in the database."""
+    text = (WORKFLOWS / "snapshot.yml").read_text()
+    assert re.search(r"^\s*schedule:", text, re.MULTILINE) is None
+    assert "workflow_dispatch:" in text
+
+
 def _ci_job_names() -> set[str]:
     return set(re.findall(r"^    name: (.+)$", (WORKFLOWS / "ci.yml").read_text(), re.MULTILINE))
 

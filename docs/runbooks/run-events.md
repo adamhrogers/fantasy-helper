@@ -83,19 +83,19 @@ There are three layers, from fastest to slowest:
 
 ## What you get today
 
-**Morning and evening snapshots** (GitHub Actions at 06:17 and 17:17 Eastern from M3 part 1, ADR 0023; the Mac's 06:30 and 17:30 jobs during the overlap):
+**Morning and evening snapshots** (Cloud Run jobs at 06:17 and 17:17 Eastern since 2026-11-14, ADR 0025, the only timer since 2026-11-16; before that GitHub's late copy and the Mac's 06:30 and 17:30 jobs ran beside them):
 - `Morning snapshot started` (quiet): "9 datasets to save."
 - `Morning snapshot: retrying (attempt 2 of 3)` (normal), only when needed. An R2 outage while saving counts as retryable ("the raw store (R2) was unreachable").
-- `Morning snapshot succeeded` (quiet): "9/9 datasets saved, 3.9 MB. Took 41 s." While the Mac and the cloud overlap, the second morning run adds "1 already saved today by another run": Sleeper's player list is fetched once a day.
+- `Morning snapshot succeeded` (quiet): "9/9 datasets saved, 3.9 MB. Took 41 s." A second morning run on the same day (a manual one) adds "1 already saved today by another run": Sleeper's player list is fetched once a day.
 - `Morning snapshot incomplete` (loud): which datasets failed, why, and after how many attempts. The others are still saved.
 - `Morning snapshot failed` (urgent): every dataset failed.
 - `Morning snapshot crashed` (urgent): it stopped on something unexpected, or the raw store isn't configured. Names the kind of error only.
 - `Morning snapshot: raw store check failed` (urgent): R2 answered, but not correctly (wrong endpoint, bad keys). The snapshot still ran, so the day is saved, but the files may not be where ingest looks.
-- `Snapshot job failed` (urgent, from the workflow itself): the job failed, timed out or was cancelled before the app could say why (a settings error, a failed install, a killed process). Tap it to open the run.
+- `Snapshot job failed` (urgent, from the GitHub workflow itself; on Cloud Run, Healthchecks' "down" alert covers the same case): the job failed, timed out or was cancelled before the app could say why (a settings error, a failed install, a killed process). Tap it to open the run.
 
 **Exit codes (M3):** a scheduled command exits **3** once it has sent its failure to the phone, and the workflow alerts on any other failure, so a failure is reported exactly once and never silently. A prod job without `FH_NTFY_TOPIC` goes red on purpose, after saving the day. Prod and the laptop use different topics (decided 2026-11-07).
 
-**Ingest (`fh ingest`, by hand until M3):**
+**Ingest (`fh ingest`, by hand; in the cloud it runs inside the daily and weekly jobs):**
 - `Ingest started`
 - `Ingest: League data fetched` ("15 of 15 leagues.")
 - `Ingest: Public data loaded` (games, projection rows, injury changes, box score rows)
@@ -106,7 +106,7 @@ There are three layers, from fastest to slowest:
   - `Ingest finished with warnings` (normal): every league loaded, plus counts that need a look. For example "2 rostered players unresolved in 1 leagues", "1 leagues score a setting with no box score stat yet", or the database over 60%.
   - `Ingest failed` (loud; urgent if no league loaded): leagues failed, grouped by platform and cause, with attempts. For example "2 Sleeper leagues failed: the source's servers erred, after 3 attempts".
 
-**Daily run (`fh run daily`, by hand until M3; `--dry-run` saves nothing, `--open` opens the report):**
+**Daily run (`fh run daily`: every morning in the cloud, started by the snapshot (ADR 0028), and by hand on the laptop; `--dry-run` saves nothing, `--open` opens the report):**
 - `Daily run started`
 - The three ingest steps: `Daily run: League data fetched`, `Daily run: Public data loaded`, `Daily run: Leagues stored`
 - `Daily run: Box scores checked` ("ESPN season totals 155/155; Sleeper one game a week 405/417."): our box scores and scoring against each platform's own numbers, settled data only (ADR 0022). Below the expected agreement (ESPN 98%, Sleeper 90%), the run ends with a warning.
@@ -120,7 +120,7 @@ There are three layers, from fastest to slowest:
 
 The report itself, with the lock-or-pass calls, is a local page (`data/reports/<date>/daily.html`) until the phone app (M3) shows it. It never goes through ntfy.
 
-**Weekly run (`fh run weekly`, by hand until M3; `--open` opens the overview):**
+**Weekly run (`fh run weekly`: every morning in the cloud, started by the daily run, and by hand on the laptop; `--open` opens the overview):**
 - `Weekly run started`
 - The three ingest steps
 - `Weekly run: Weekly overview built` ("3 of 3 leagues; 1 streaming moves; 2 calls newly logged."). Mid-week, a league whose banked points differ from the platform's daily totals by more than a point ends the run with a warning (a lineup or box score is off).
@@ -132,7 +132,7 @@ The overview itself is a local page (`data/reports/<date>/weekly.html`) until th
 
 **Test:** `uv run fh doctor --alert` sends one test event.
 
-The 06:30 and 17:30 jobs run the code in your main checkout, so the snapshot events start once the M2 branch is merged.
+The Mac no longer runs scheduled jobs (removed 2026-11-16), so a stale checkout there only matters for the `fh` commands you run by hand: `git pull` before running them.
 
 ## Rules every event follows
 
@@ -199,7 +199,7 @@ def daily(settings: Settings) -> None:
 | `FH_NTFY_SERVER` | `https://ntfy.sh` by default |
 | `FH_NOTIFY_PROGRESS` | `true` by default. `false` keeps only retries, warnings and failures. |
 
-From M3 the same variables live in the GitHub `prod` environment, and the scheduled jobs send the same events.
+In the cloud the topic comes from Secret Manager (`fh-ntfy-topic`, ADR 0025), and the scheduled jobs send the same events to the prod topic.
 
 ## Planned
 

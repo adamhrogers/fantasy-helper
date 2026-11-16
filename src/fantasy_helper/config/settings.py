@@ -33,6 +33,9 @@ class Settings(BaseSettings):
 
     database_url: SecretStr | None = Field(default=None, alias="DATABASE_URL")
     encryption_key: SecretStr | None = Field(default=None, alias="FH_ENCRYPTION_KEY")
+    # The login that can only look (ADR 0032). Only `fh sql` reads it, and it refuses any login that
+    # can write. scripts/fh-sql.sh fetches it from Secret Manager for the one process.
+    readonly_database_url: SecretStr | None = Field(default=None, alias="FH_READONLY_DATABASE_URL")
 
     langsmith_api_key: SecretStr | None = Field(default=None, alias="LANGSMITH_API_KEY")
     langsmith_tracing: bool = Field(default=False, alias="LANGSMITH_TRACING")

@@ -41,11 +41,34 @@ class FactMove(DomainModel):
     games_added: int
 
 
+class LeftOut(StrEnum):
+    """Why a player with a game on a day isn't counted in the plan for it."""
+
+    OUT = "out"  # he isn't expected to play (listed out, or the provider has no row for him)
+    NO_PROJECTION = "no_projection"  # no provider projects him for that game, so it can't count
+    OUTRANKED = "outranked"  # he's in one of my starting slots, but better players fill them
+
+
+class FactLeftOut(DomainModel):
+    name: str
+    reason: LeftOut
+    in_lineup: bool  # he's in one of my starting slots now (not on the bench)
+
+
+class FactNoGames(DomainModel):
+    """A player on my active roster the schedule has no game for this week: either his team
+    really has none, or the team code on file doesn't match the schedule's."""
+
+    name: str
+    nba_team: str | None = None
+
+
 class FactDay(DomainModel):
     day: date
-    games: int  # my players with a game that day
+    games: int  # my players expected to play that day
     started: int  # of those, how many fit a starting slot
     slots: int  # starting slots
+    left_out: tuple[FactLeftOut, ...] = ()  # who had a game but wasn't counted, and why
 
 
 class FactMatchup(DomainModel):
@@ -76,6 +99,7 @@ class FactSheet(DomainModel):
     games: int
     startable: int
     days: tuple[FactDay, ...] = ()
+    without_games: tuple[FactNoGames, ...] = ()
     matchup: FactMatchup | None = None
     my_players: tuple[FactPlayer, ...]
     free_agents: tuple[FactPlayer, ...] = ()  # the best few, for context

@@ -2,6 +2,8 @@
 
 **Status:** Draft v0.2, revised after Adam's review · companion to [architecture.md](architecture.md)
 
+**Where the repo differs from this proposal (2026-11-15):** the `Dockerfile` is at the root, not under `infra/`, and there is no `infra/` folder: the Cloud Run jobs are defined in `.github/workflows/deploy.yml`, and the cloud setup is `scripts/gcp-setup.sh` with `scripts/jobs.conf`. There are no `daily.yml` or `weekly.yml` cron workflows: timed work runs as Cloud Run jobs in a chain (ADRs 0025, 0028). For what exists file by file, see [session-handoff.md](session-handoff.md) §4.
+
 This is a monorepo with one Python package (`src/fantasy_helper/`) whose internal boundaries are linted, plus one PWA (`web/`). Every top-level package exists from M0 with only a docstring, so the import contracts cover every layer. Files and folders marked *(Mx)* inside them are created when that milestone starts, not before.
 
 ```
@@ -20,9 +22,11 @@ fantasy-helper/
 │
 ├── .github/workflows/
 │   ├── ci.yml                        # lint · types · tests (Postgres service container) · import contracts · secret scan
+│   ├── container.yml                 # the image builds, starts and migrates an empty database
+│   ├── deploy.yml                    # builds the image, deploys the Cloud Run jobs from main, migrating in between
+│   ├── snapshot.yml                  # a manual fallback for the snapshot (no schedule since 2026-11-16)
+│   ├── dependabot-auto-merge.yml     # Dependabot PRs merge once CI passes (ADR 0024)
 │   ├── web.yml                (M3)   # PWA typecheck · lint · build
-│   ├── daily.yml              (M3)   # cron ≈04:30 ET: ingest → grade → evaluate → daily report
-│   ├── weekly.yml             (M3)   # cron Mon: weekly overview + report card
 │   └── evals.yml              (M6)   # regression replay when brain/ or prompts/ change
 │
 ├── src/fantasy_helper/
@@ -138,10 +142,9 @@ fantasy-helper/
 │   ├── setups/                       # baseline.yaml · council-v1.yaml (graph + role→model + prompt versions)
 │   └── datasets/              (M6)   # LangSmith dataset exports of graded days
 │
-├── scripts/                          # one-off ops: record fixtures, backfill trajectories, seed a test league
-├── infra/                     (M3)
-│   ├── Dockerfile                    # one image: API + jobs
-│   └── cloudrun/                     # service + job definitions
+├── scripts/                          # cloud setup and ops: gcp-setup.sh · gcp-secrets.sh · jobs.conf · fh-prod.sh ·
+│                                     #   healthchecks-setup.sh · snapshot-schedule.sh
+├── Dockerfile                        # one image: every Cloud Run job, and the API from M3 part 3
 │
 └── docs/
     ├── architecture.md
