@@ -23,10 +23,10 @@ export interface AuthClient {
 }
 
 export const FAILURE_MESSAGES: Record<AuthFailure, string> = {
-  bad_credentials: "That email and password don't match.",
-  not_a_user: "That email isn't set up for this app.",
-  bad_code: "That code didn't work. It may have expired: ask for a new one.",
+  bad_credentials: 'That email and password don’t match.',
+  not_a_user: 'That email isn’t set up for this app.',
+  bad_code: 'That code didn’t work. It may have expired: ask for a new one.',
   rate_limited: 'Too many tries. Wait a minute and try again.',
-  network: "Couldn't reach the sign-in service. Check your connection.",
-  other: "Couldn't sign in. Try again.",
+  network: 'Couldn’t reach the sign-in service. Check your connection.',
+  other: 'Couldn’t sign in. Try again.',
 };

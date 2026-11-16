@@ -21,7 +21,7 @@ export function ProblemScreen({
 
 export function ConfigProblem({ problems }: { problems: string[] }) {
   return (
-    <ProblemScreen title="This build isn't set up">
+    <ProblemScreen title="This build isn’t set up">
       <p>
         The app was built without: <strong>{problems.join(', ')}</strong>. Set them as the Worker&rsquo;s
         build variables in Cloudflare and build again (docs/runbooks/phone-app.md).
@@ -33,7 +33,7 @@ export function ConfigProblem({ problems }: { problems: string[] }) {
 export function NotSetUp({ onSignOut }: { onSignOut: () => void }) {
   return (
     <ProblemScreen
-      title="This sign-in isn't set up"
+      title="This sign-in isn’t set up"
       actions={
         <button type="button" onClick={onSignOut}>
           Sign out

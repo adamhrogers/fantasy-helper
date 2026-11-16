@@ -1,12 +1,12 @@
 import react from '@vitejs/plugin-react';
+import { fileURLToPath } from 'node:url';
 import { VitePWA } from 'vite-plugin-pwa';
 import { defineConfig } from 'vitest/config';
-
-// The commit this build came from: Cloudflare sets WORKERS_CI_COMMIT_SHA, GitHub sets GITHUB_SHA.
-const build = (process.env.WORKERS_CI_COMMIT_SHA ?? process.env.GITHUB_SHA ?? 'dev').slice(0, 7);
+import { buildId } from './build-id';
 
 export default defineConfig({
-  define: { __APP_BUILD__: JSON.stringify(build) },
+  // Shown in the app's footer; a hash of the app's sources (build-id.ts says why).
+  define: { __APP_BUILD__: JSON.stringify(buildId(fileURLToPath(new URL('.', import.meta.url)))) },
   plugins: [
     react(),
     VitePWA({
@@ -45,6 +45,6 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     setupFiles: ['./src/test-setup.ts'],
-    include: ['src/**/*.test.{ts,tsx}'],
+    include: ['src/**/*.test.{ts,tsx}', 'build-id.test.ts'],
   },
 });

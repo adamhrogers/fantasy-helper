@@ -29,7 +29,7 @@ function failure(kind: ApiErrorKind, message: string): { ok: false; error: ApiEr
 
 function failureFor(status: number): { ok: false; error: ApiError } {
   if (status === 401) return failure('unauthorized', 'Your sign-in expired.');
-  if (status === 403) return failure('forbidden', "This sign-in isn't set up for this app.");
+  if (status === 403) return failure('forbidden', 'This sign-in isn’t set up for this app.');
   return failure('server', `The server had a problem (status ${status}). Try again in a minute.`);
 }
 
@@ -53,7 +53,7 @@ export function createApi({ baseUrl, getToken, fetch: fetchImpl }: ApiOptions): 
       if (response.ok && data !== undefined) return { ok: true, data };
       return failureFor(response.status);
     } catch {
-      return failure('network', "Couldn't reach the server. Check your connection and try again.");
+      return failure('network', 'Couldn’t reach the server. Check your connection and try again.');
     }
   }
 

@@ -117,7 +117,7 @@ describe('when something is wrong', () => {
     const auth = fakeAuth(true);
     const user = userEvent.setup();
     render(<App auth={auth} api={fakeApi({ me: vi.fn(async () => fail('forbidden')) })} codeSignIn={false} />);
-    expect(await screen.findByRole('heading', { name: "This sign-in isn't set up" })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'This sign-in isn’t set up' })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Sign out' }));
     expect(auth.signOut).toHaveBeenCalled();
   });
@@ -134,10 +134,10 @@ describe('when something is wrong', () => {
   });
 
   it('offers a retry when the API cannot be reached at first', async () => {
-    const me = vi.fn().mockResolvedValueOnce(fail('network', "Couldn't reach the server.")).mockResolvedValue(ok(ME));
+    const me = vi.fn().mockResolvedValueOnce(fail('network', 'Couldn’t reach the server.')).mockResolvedValue(ok(ME));
     const user = userEvent.setup();
     render(<App auth={fakeAuth(true)} api={fakeApi({ me })} codeSignIn={false} />);
-    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't reach the server.");
+    expect(await screen.findByRole('alert')).toHaveTextContent('Couldn’t reach the server.');
     await user.click(screen.getByRole('button', { name: 'Try again' }));
     expect(await screen.findByRole('region', { name: 'Test League A' })).toBeInTheDocument();
   });

@@ -59,13 +59,17 @@ def test_auto_merge_runs_only_for_dependabot_with_no_third_party_code() -> None:
     assert "uses:" not in text  # this job can write to the repo
 
 
-def test_dependabot_covers_python_and_actions_after_a_cooldown() -> None:
+def test_dependabot_covers_python_actions_docker_and_the_phone_app_after_a_cooldown() -> None:
     text = (GITHUB / "dependabot.yml").read_text()
-    assert re.findall(r"package-ecosystem: (\S+)", text) == ["uv", "github-actions", "docker"]
-    assert text.count("default-days: 7") == 3
-    assert text.count("applies-to: security-updates") == 3
-    # Python majors are skipped as version updates only; a security fix of any size still comes.
-    assert 'update-types: ["version-update:semver-major"]' in text
+    ecosystems = re.findall(r"package-ecosystem: (\S+)", text)
+    assert ecosystems == ["uv", "github-actions", "docker", "npm"]
+    assert text.count("default-days: 7") == 4
+    assert text.count("applies-to: security-updates") == 4
+    # Majors are skipped as version updates only, for Python and for npm; a security fix of any
+    # size still comes.
+    assert text.count('update-types: ["version-update:semver-major"]') == 2
+    # The phone app's packages come from its own folder.
+    assert re.search(r"package-ecosystem: npm\n\s+directory: /web\n", text)
 
 
 DEPLOY = WORKFLOWS / "deploy.yml"
@@ -328,13 +332,71 @@ def test_the_morning_chain_is_the_same_in_the_job_table_the_workflow_and_the_set
     assert 'gcloud scheduler jobs delete "$job"' in setup  # a chained job has no clock of its own
 
 
-def test_dependabot_updates_to_the_deploy_path_wait_for_a_person() -> None:
+def test_dependabot_updates_to_the_deploy_path_and_the_phone_app_wait_for_a_person() -> None:
     """The deploy workflow's identity can deploy code that reads the prod database and the key
-    that decrypts every league login, so an automatic bump of anything it runs isn't merged."""
+    that decrypts every league login, so an automatic bump of anything it runs isn't merged. The
+    phone app is held too: it runs on a phone with a signed-in session, and Cloudflare builds it
+    from main as soon as a PR merges (ADR 0024, Update 2026-11-16)."""
     text = AUTO_MERGE.read_text()
     assert 'gh pr diff "$PR_URL" --name-only' in text
-    assert r"^(\.github/workflows/deploy\.yml|Dockerfile|\.dockerignore)$" in text
+    assert r"^(\.github/workflows/deploy\.yml|Dockerfile|\.dockerignore)$|^web/" in text
     merge = text.split("- name: Merge once the required checks pass", 1)[1]
     assert "if: steps.deploy_path.outputs.hold != 'true'" in merge
     assert "gh pr merge --auto --squash" in merge
     assert "uses:" not in text  # still no third-party code in the job that can write to the repo
+
+
+def test_the_web_workflow_checks_the_phone_app_and_holds_nothing_secret() -> None:
+    """The phone app (web/, ADR 0009): CI proves the generated types match the API's committed
+    schema, then typechecks, lints, tests, builds and dry-runs the deploy command Cloudflare runs.
+    Cloudflare builds from main itself, so nothing here deploys and nothing here is secret."""
+    text = (WORKFLOWS / "web.yml").read_text()
+    assert re.search(r"^on:\n  pull_request:\n    paths:\n      - \"web/\*\*\"", text, re.MULTILINE)
+    assert "node-version-file: web/.node-version" in text  # the same pin Cloudflare reads
+    for step in (
+        "npm ci",
+        "npm run gen:api",
+        "git diff --exit-code -- src/api/schema.d.ts",
+        "npm run typecheck",
+        "npm run lint",
+        "npm test",
+        "npm run build",
+        "npx wrangler deploy --dry-run",
+    ):
+        assert step in text, step
+    for forbidden in ("secrets.", "id-token", "environment:"):
+        assert forbidden not in text, forbidden
+    assert "\npermissions:\n  contents: read\n" in text
+    # Not a required check, like container.yml, so the ruleset and the auto-merge guard (which
+    # name ci.yml's jobs) are unaffected.
+    assert "Web" not in AUTO_MERGE.read_text()
+
+
+def test_the_phone_app_is_a_workers_static_assets_site_with_a_pinned_node() -> None:
+    """ADR 0009's Update: Workers static assets, not Pages, and a single-page-app fallback so
+    /today and /week open the app."""
+    web = ROOT / "web"
+    wrangler = (web / "wrangler.jsonc").read_text()
+    assert '"directory": "./dist"' in wrangler
+    assert '"not_found_handling": "single-page-application"' in wrangler
+    assert re.fullmatch(r"\d+(\.\d+){0,2}", (web / ".node-version").read_text().strip())
+    # Cloudflare's npm 10 can't install the test runner's dependencies: the version is pinned.
+    assert re.search(r'"packageManager": "npm@\d+\.\d+\.\d+"', (web / "package.json").read_text())
+
+
+def test_the_phone_app_names_no_project_or_address() -> None:
+    """The repo is public. The app learns its API and its Supabase project from build variables
+    set in Cloudflare, and the content-security policy allows them by pattern."""
+    app_files = [
+        path
+        for path in (ROOT / "web" / "src").rglob("*")
+        if path.suffix in {".ts", ".tsx"}
+        and ".test." not in path.name
+        and not path.name.startswith("test-")
+        and path.name != "schema.d.ts"
+    ]
+    assert app_files  # the glob found the app
+    for path in app_files:
+        text = path.read_text()
+        assert "supabase.co" not in text, path
+        assert ".run.app" not in text, path

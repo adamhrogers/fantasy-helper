@@ -8,6 +8,9 @@
 # when CI passes. That workflow's identity can deploy code that reads the prod database and the key
 # that decrypts every league login, and any action in its job can ask GitHub for the token that
 # identity uses. A release a week old (the cooldown) is too little review for that (ADR 0028).
+# Updates to the phone app (web/) are held too, for a smaller version of the same reason: that code
+# runs on a phone with a signed-in session, and Cloudflare builds it from `main` as soon as it
+# merges (ADR 0024, Update 2026-11-16).
 #
 # No third-party actions: this job can write to the repo, so it runs only GitHub's own `gh`.
 name: Dependabot auto-merge
@@ -45,12 +48,12 @@ jobs:
             exit 1
           fi
 
-      - name: Leave updates to the deploy path for a person
+      - name: Leave updates to the deploy path and the phone app for a person
         id: deploy_path
         run: |
-          held="$(gh pr diff "$PR_URL" --name-only | grep -E '^(\.github/workflows/deploy\.yml|Dockerfile|\.dockerignore)$' || true)"
+          held="$(gh pr diff "$PR_URL" --name-only | grep -E '^(\.github/workflows/deploy\.yml|Dockerfile|\.dockerignore)$|^web/' || true)"
           if [ -n "$held" ]; then
-            echo "::notice::this PR changes the deploy path ($held), so it stays open for a person to review"
+            echo "::notice::this PR changes the deploy path or the phone app, so it stays open for a person to review: $(echo "$held" | head -3 | tr '\n' ' ')"
             echo "hold=true" >> "$GITHUB_OUTPUT"
           fi
 
