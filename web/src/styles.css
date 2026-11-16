@@ -1,0 +1,325 @@
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --text: #1b2330;
+  --muted: #5d6877;
+  --line: #dde1e7;
+  --accent: #c2410c;
+  --accent-text: #ffffff;
+  --warn-bg: #fff4d6;
+  --warn-text: #5c4400;
+  --warn-line: #ecc866;
+  --danger: #b3261e;
+  --tabs-height: 3.5rem;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14181f;
+    --surface: #1d232d;
+    --text: #e8ebf0;
+    --muted: #9aa5b4;
+    --line: #2d3644;
+    --accent: #f08a4b;
+    --accent-text: #1a1008;
+    --warn-bg: #3a2f10;
+    --warn-text: #f3dd9a;
+    --warn-line: #6b5518;
+    --danger: #ff8a80;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  min-height: 2.75rem;
+  padding: 0 1rem;
+  border: 0;
+  border-radius: 0.6rem;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+button:disabled {
+  opacity: 0.6;
+}
+
+button.link {
+  min-height: 2.75rem;
+  padding: 0;
+  background: none;
+  color: var(--accent);
+  font-weight: 500;
+  text-decoration: underline;
+}
+
+.splash {
+  padding: 4rem 1rem;
+  text-align: center;
+  color: var(--muted);
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+/* Signed-out, config and problem screens */
+.screen {
+  display: grid;
+  gap: 1rem;
+  max-width: 26rem;
+  margin: 0 auto;
+  padding: calc(2rem + env(safe-area-inset-top)) 1rem calc(2rem + env(safe-area-inset-bottom));
+}
+
+.screen h1 {
+  font-size: 1.5rem;
+}
+
+form {
+  display: grid;
+  gap: 1rem;
+}
+
+label {
+  display: grid;
+  gap: 0.35rem;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+input {
+  min-height: 2.75rem;
+  padding: 0 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  background: var(--surface);
+  /* 16px or larger, or iOS zooms the page when the field is focused */
+  font-size: 1rem;
+  font-weight: 400;
+}
+
+.alternatives {
+  display: grid;
+  gap: 0.25rem;
+  justify-items: start;
+}
+
+.problem-text {
+  color: var(--danger);
+}
+
+.problem {
+  display: grid;
+  gap: 0.75rem;
+  justify-items: start;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  background: var(--surface);
+}
+
+.actions {
+  display: flex;
+  gap: 0.75rem;
+}
+
+/* The signed-in app: a top bar, the content, and a tab bar fixed at the bottom */
+.app {
+  min-height: 100dvh;
+}
+
+.top {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: calc(0.5rem + env(safe-area-inset-top)) 1rem 0.5rem;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+}
+
+.top h1 {
+  font-size: 1.25rem;
+}
+
+.refresh {
+  width: 2.75rem;
+  padding: 0;
+  background: none;
+  color: var(--accent);
+  font-size: 1.4rem;
+}
+
+.content {
+  display: grid;
+  gap: 1rem;
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 1rem 1rem calc(var(--tabs-height) + env(safe-area-inset-bottom) + 1.5rem);
+}
+
+.league {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.league-name {
+  font-size: 1.1rem;
+}
+
+.card {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  background: var(--surface);
+}
+
+.card-kind {
+  color: var(--accent);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.card-title {
+  font-size: 1rem;
+  line-height: 1.3;
+}
+
+.card-body {
+  white-space: pre-line;
+}
+
+.card-reason {
+  padding-left: 0.6rem;
+  border-left: 3px solid var(--line);
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.card-plain {
+  color: var(--muted);
+}
+
+.banner {
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  background: var(--surface);
+}
+
+.banner-stale {
+  border-color: var(--warn-line);
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+
+.install {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  background: var(--surface);
+}
+
+.install h2 {
+  font-size: 1rem;
+}
+
+.install ol {
+  margin: 0;
+  padding-left: 1.25rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.install button.link {
+  justify-self: start;
+}
+
+.update-bar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: calc(0.5rem + env(safe-area-inset-top)) 1rem 0.5rem;
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.update-bar button {
+  background: var(--accent-text);
+  color: var(--accent);
+}
+
+.foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-top: 0.5rem;
+}
+
+.tabs {
+  position: fixed;
+  inset: auto 0 0 0;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  padding-bottom: env(safe-area-inset-bottom);
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.tabs a {
+  display: grid;
+  place-items: center;
+  height: var(--tabs-height);
+  color: var(--muted);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.tabs a[aria-current='page'] {
+  color: var(--accent);
+  box-shadow: inset 0 3px 0 var(--accent);
+}
