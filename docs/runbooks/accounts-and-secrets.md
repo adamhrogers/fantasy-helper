@@ -39,6 +39,7 @@ Values live in **Bitwarden** and in the places listed below, never in this repo 
 | `fh-healthchecks-ping-key` | The same key as GitHub `prod` | Regenerate it, then update it in both places |
 | `fh-database-url` | Prod's database, Supabase's **session pooler** (port 5432), for the report jobs and `scripts/fh-prod.sh` | Reset the database password in Supabase, then `scripts/gcp-secrets.sh fh-database-url` |
 | `fh-encryption-key` | Prod's encryption key (the same value as GitHub `prod`'s `FH_ENCRYPTION_KEY` until that's removed) | Every ESPN cookie is typed again (ADR 0007): see the rotation note in [prod-database.md](prod-database.md) |
+| `fh-readonly-database-url` | The `fh_readonly` login's URL (read-only, ADR 0032). **No job reads it:** only your own `gcloud` does, through `scripts/fh-sql.sh` | `scripts/readonly-setup.sh` again (it rotates the password) |
 
 **After part 2's rollout, GitHub's `prod` environment no longer needs `DATABASE_URL` or `FH_ENCRYPTION_KEY`:** the report jobs read them from Secret Manager, and the deploy migrates from inside Google (ADR 0027). They're removed in [prod-database.md](prod-database.md), step 10.
 

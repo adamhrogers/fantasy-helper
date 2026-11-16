@@ -16,6 +16,7 @@ from fantasy_helper.cli._common import REPORTED_EXIT, alert_crash, fail, watched
 from fantasy_helper.cli._runs import start_next
 from fantasy_helper.cli.doctor import Check, Status, run_checks
 from fantasy_helper.cli.ingest import ingest as ingest_command
+from fantasy_helper.cli.sql import sql as sql_command
 from fantasy_helper.config import Settings, get_settings
 from fantasy_helper.domain.ports import SystemClock
 from fantasy_helper.domain.runs import RunKind, RunRecord, RunStatus
@@ -53,6 +54,7 @@ app.add_typer(run.app, name="run")
 app.add_typer(raw.app, name="raw")
 app.add_typer(report.app, name="report")
 app.command("ingest")(ingest_command)
+app.command("sql")(sql_command)
 
 _SYMBOLS = {Status.OK: "✓", Status.SKIP: "-", Status.FAIL: "✗"}
 
