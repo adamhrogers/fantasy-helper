@@ -9,7 +9,7 @@ This is the plan for everything between "part 2 is merged" and "M3 is done": six
 | Phase | What | Status |
 |---|---|---|
 | **0** | Finish part 2's rollout: leagues in prod, history loaded, first chained morning | **Done (2026-11-16).** All 11 runbook steps are ticked; the chain ran on its own at 06:17 on 2026-11-16 (snapshot, `daily`, `weekly` all succeeded by 06:20) |
-| **1** | End the snapshot overlap: retire launchd and the GitHub schedule | **Done 2026-11-16** except Adam's three laptop steps (upload the last copies, the laptop's own R2 key, `FH_RAW_STORE=r2`). He ended it after 3 of 4 on-time runs; the Mac's schedule is removed and GitHub's is dropped (PR #19) | Adam: runbook section 5, steps 2 to 4 |
+| **1** | End the snapshot overlap: retire launchd and the GitHub schedule | **Done 2026-11-16**, laptop steps included (the last copies uploaded, the laptop has its own R2 key, `FH_RAW_STORE=r2`). He ended it after 3 of 4 on-time runs; the Mac's schedule is removed and GitHub's is dropped (PR #19) |
 | **2** | Part 3: the API on Cloud Run, sign-in checked, reports served | **Done 2026-11-16.** Merged (PR #26) and deployed; Adam's cloud setup finished and `scripts/api-smoke.sh` passed every check against the live service: his password sign-in, his 3 leagues, his saved reports, 401 without a token, sign-ups refused. The first smoke run found two things, fixed in PR #28: Cloud Run answers `/healthz` itself, so the health route is `/livez`; and a bare `postgres` user in the API's database secret made every signed-in call fail, so `gcp-secrets.sh` now refuses a pooler URL with no project ref |
 | **3** | Part 4: the phone app | Not started |
 | **4** | Part 5a: push ("your report is ready") | Not started |
@@ -109,7 +109,7 @@ Phase 0  part 2 rollout ──► Phase 1  end the overlap          (rollout; da
 
 ## Phase 1: end the snapshot overlap
 
-**Status 2026-11-16: done except three steps on Adam's laptop.** Adam ended the overlap after 3 of the 4 on-time runs, without waiting for the fourth. Launchd is removed (`scripts/snapshot-schedule.sh status`: not installed for both) and the GitHub schedule, `pipeline/cron.py` and the `--cron` option are gone (PR #19). What's left is [runbooks/cloud-snapshots.md](runbooks/cloud-snapshots.md) section 5, steps 2 to 4: `fh raw upload`, a laptop-only R2 key, and `FH_RAW_STORE=r2` in `.env`. The text below is the plan as written.
+**Status 2026-11-16: done, including the three steps on Adam's laptop.** Adam ended the overlap after 3 of the 4 on-time runs, without waiting for the fourth. Launchd is removed (`scripts/snapshot-schedule.sh status`: not installed for both) and the GitHub schedule, `pipeline/cron.py` and the `--cron` option are gone (PR #19). Adam then did [runbooks/cloud-snapshots.md](runbooks/cloud-snapshots.md) section 5, steps 2 to 4 (`fh raw upload`, a laptop-only R2 key, `FH_RAW_STORE=r2` in `.env`). The text below is the plan as written.
 
 **Goal:** one scheduler, one cloud copy, the laptop free to be closed. Steps: [runbooks/cloud-snapshots.md](runbooks/cloud-snapshots.md), section 5.
 
@@ -185,7 +185,7 @@ Phase 0  part 2 rollout ──► Phase 1  end the overlap          (rollout; da
 
 ### Decisions for Adam before this phase deploys
 
-1. **Where the app lives.** ADR 0009 says Cloudflare Pages. Cloudflare's own docs now say to start new projects on **Workers** (static assets), which serves a static app the same way, for free, and is where their new work goes. **Recommended: Workers static assets**, recorded as an Update to ADR 0009. Pages still works and is the fallback if anything about Workers gets in the way.
+1. **Where the app lives: decided 2026-11-16 (Adam): Cloudflare Workers static assets, not Pages.** Cloudflare's own docs say to start new projects on Workers, which serves a static app the same way, for free, and is where their new work goes. Recorded as an Update to ADR 0009. Pages still works and is the fallback if anything about Workers gets in the way.
 2. **A domain, now or never-for-now.** An installed web app and its notification permission belong to its address. Moving from `something.workers.dev` to a real domain later means every user reinstalls the app and turns notifications on again, and M7's friend invites need a domain anyway (for the email sender). **If a domain is coming before the beta, buy it before this phase's first deploy** and put the app on `app.<domain>` from day one (Workers needs the domain's DNS on Cloudflare). If not, `workers.dev` is fine for Adam alone.
 
 ### What Adam does (about 15 minutes)
@@ -311,7 +311,7 @@ The dates in roadmap v0.5 assumed M3 would end on 2026-11-12. It won't end befor
 | # | Decision | Recommended | Needed by |
 |---|---|---|---|
 | 1 | The new dates, and whether M4's lane A runs in parallel | Parallel, beta about 2026-12-06 | Now |
-| 2 | Workers static assets instead of Pages | Workers | Phase 3 |
+| 2 | Workers static assets instead of Pages | **Workers. Decided 2026-11-16 (Adam)** | Phase 3 |
 | 3 | A domain before the app's first deploy | Buy it if one is coming before the beta | Phase 3 |
 | 4 | Weekly overview notifies on Mondays only | Yes | Phase 4 |
 | 5 | A separate, locked bucket for backups | Yes | Phase 5 |
