@@ -164,3 +164,103 @@ def test_every_script_is_executable_and_parses_under_the_macs_bash() -> None:
         assert parsed.returncode == 0, f"{script.name}: {parsed.stderr}"
         assert "declare -A" not in script.read_text(), script.name
         assert "mapfile" not in script.read_text(), script.name
+
+
+@pytest.fixture
+def fake_cloud(tmp_path: Path) -> dict[str, str]:
+    """A `gcloud` that serves the owner's URL and records what's saved, and a `psql` that records
+    its environment and input, and answers the way a correctly locked-down login would."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "gcloud").write_text(
+        """#!/bin/sh
+echo "$*" >> "$FAKE_DIR/gcloud.log"
+case "$1 $2 $3" in
+  "secrets versions access")
+    printf 'postgresql://postgres.abcref:Own%%40er@aws-0-us-east-1.pooler.supabase.com'
+    printf ':5432/postgres' ;;
+  "secrets describe"*) exit 1 ;;
+  "secrets versions list") printf '3\\n' ;;
+  "secrets versions add") cat > "$FAKE_DIR/saved_url.txt" ;;
+esac
+"""
+    )
+    (bin_dir / "psql").write_text(
+        """#!/bin/sh
+echo "ARGS: $*" >> "$FAKE_DIR/psql.log"
+echo "ENV: $PGHOST $PGPORT $PGUSER $PGPASSWORD $PGDATABASE" >> "$FAKE_DIR/psql.log"
+case "$*" in
+  *" -c "*)
+    case "$*" in
+      *zz_probe*|*platform_credentials*) [ -n "$FAKE_WEAK" ] && exit 0; exit 1 ;;
+    esac
+    exit 0 ;;
+  *) cat > "$FAKE_DIR/setup_stdin.txt" ;;
+esac
+"""
+    )
+    for tool in ("gcloud", "psql"):
+        (bin_dir / tool).chmod(0o755)
+    return {"PATH": f"{bin_dir}:/usr/bin:/bin", "FAKE_DIR": str(tmp_path)}
+
+
+def test_the_readonly_setup_makes_the_login_proves_it_and_saves_only_its_url(
+    fake_cloud: dict[str, str], tmp_path: Path
+) -> None:
+    done = run("readonly-setup.sh", env=fake_cloud)
+    assert done.returncode == 0, done.stderr
+    assert "new version saved, older version(s) disabled" in done.stdout
+    saved = (tmp_path / "saved_url.txt").read_text()
+    prefix = "postgresql://fh_readonly.abcref:"
+    suffix = "@aws-0-us-east-1.pooler.supabase.com:5432/postgres"
+    assert saved.startswith(prefix)
+    assert saved.endswith(suffix)
+    password = saved.removeprefix(prefix).removesuffix(suffix)
+    assert len(password) == 48
+    assert "Own" not in saved  # the owner's password isn't reused
+    stdin = (tmp_path / "setup_stdin.txt").read_text()
+    assert stdin.startswith(f"\\set pw '{password}'\n")
+    assert "CREATE ROLE fh_readonly" in stdin
+    log = (tmp_path / "psql.log").read_text()
+    assert password not in "\n".join(line for line in log.splitlines() if line.startswith("ARGS"))
+    envs = [line for line in log.splitlines() if line.startswith("ENV")]
+    assert envs[0].startswith(
+        "ENV: aws-0-us-east-1.pooler.supabase.com 5432 postgres.abcref Own@er "
+    )
+    assert all(f"fh_readonly.abcref {password} " in env for env in envs[1:])  # the probes
+    assert password not in done.stdout + done.stderr
+    gcloud = (tmp_path / "gcloud.log").read_text()
+    assert "secrets create fh-readonly-database-url" in gcloud
+    assert "secrets versions disable 3 --secret fh-readonly-database-url" in gcloud
+
+
+def test_the_readonly_setup_saves_nothing_if_the_login_can_do_too_much(
+    fake_cloud: dict[str, str], tmp_path: Path
+) -> None:
+    done = run("readonly-setup.sh", env={**fake_cloud, "FAKE_WEAK": "1"})
+    assert done.returncode == 1
+    assert "can CREATE a table: not saved" in done.stderr
+    assert not (tmp_path / "saved_url.txt").exists()
+
+
+def test_the_sql_script_fetches_only_the_readonly_url_and_never_writes_it(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "gcloud").write_text(
+        '#!/bin/sh\necho "$*" >> "$FAKE_DIR/gcloud.log"\nprintf "value-of-$6"\n'
+    )
+    (bin_dir / "uv").write_text(
+        '#!/bin/sh\nprintf "RO=%s DB=%s KEY=%s ARGS=%s\\n" "$FH_READONLY_DATABASE_URL" '
+        '"$DATABASE_URL" "$FH_ENCRYPTION_KEY" "$*"\n'
+    )
+    for tool in ("gcloud", "uv"):
+        (bin_dir / tool).chmod(0o755)
+    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "FAKE_DIR": str(tmp_path)}
+    before = {p.name for p in ROOT.iterdir()}
+    done = run("fh-sql.sh", "select 1", env=env)
+    assert done.returncode == 0, done.stderr
+    assert ("RO=value-of-fh-readonly-database-url DB= KEY= ARGS=run fh sql select 1") in done.stdout
+    assert (tmp_path / "gcloud.log").read_text().count("--secret") == 1
+    assert "fh-database-url" not in (tmp_path / "gcloud.log").read_text()
+    assert {p.name for p in ROOT.iterdir()} == before
+    assert run("fh-sql.sh", env=env).returncode == 2

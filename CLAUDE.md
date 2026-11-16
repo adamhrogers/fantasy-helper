@@ -25,6 +25,8 @@ uv run fh run weekly [--open]             # ingest, weekly overview per league (
 uv run fh fixtures record                 # re-record redacted fixtures (then update contract test counts)
 scripts/snapshot-schedule.sh status       # snapshot schedule state and logs
 scripts/fh-prod.sh league add ...         # ONE fh command against prod (league|report|doctor only); secrets never touch disk
+scripts/fh-sql.sh "select ..."            # look at prod through the read-only login (docs/runbooks/read-only-access.md)
+scripts/readonly-setup.sh                 # create or refresh that login (once, and after a migration adds a table)
 scripts/gcp-setup.sh infra|schedule|show  # Google Cloud: accounts, secrets, jobs, schedules (docs/runbooks/scheduled-jobs.md)
 scripts/healthchecks-setup.sh             # set the Healthchecks schedules from scripts/jobs.conf (always Eastern)
 ```
