@@ -59,8 +59,8 @@ echo
 KEY=(-H "apikey: $key")
 
 echo "The API"
-http GET "$API/healthz"
-expect "GET /healthz" 200 || true
+http GET "$API/livez"
+expect "GET /livez" 200 || true
 http GET "$API/v1/me"
 expect "GET /v1/me with no token is refused" 401 || true
 http GET "$API/v1/me" -H "Authorization: Bearer not-a-token"

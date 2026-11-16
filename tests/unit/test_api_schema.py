@@ -15,9 +15,9 @@ def test_the_committed_schema_is_the_apis_current_schema() -> None:
     assert committed == json.loads(json.dumps(create_app(Settings()).openapi()))
 
 
-def test_every_route_but_healthz_requires_a_sign_in() -> None:
+def test_every_route_but_livez_requires_a_sign_in() -> None:
     schema = create_app(Settings()).openapi()
     for path, methods in schema["paths"].items():
         for method, spec in methods.items():
             secured = "security" in spec
-            assert secured == (path != "/healthz"), (method, path)
+            assert secured == (path != "/livez"), (method, path)

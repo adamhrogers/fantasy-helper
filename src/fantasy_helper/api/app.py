@@ -66,8 +66,8 @@ CurrentUser = Annotated[User, Depends(current_user)]
 DbSession = Annotated[Session, Depends(get_session)]
 
 
-@router.get("/healthz", response_model=schemas.Health, tags=["ops"])
-def healthz() -> schemas.Health:
+@router.get("/livez", response_model=schemas.Health, tags=["ops"])
+def livez() -> schemas.Health:
     return schemas.Health(status="ok", version=__version__)
 
 

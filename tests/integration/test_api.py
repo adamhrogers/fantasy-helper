@@ -80,9 +80,9 @@ def make_client(engine: Engine, **settings: Any) -> TestClient:
     return TestClient(app)
 
 
-def test_healthz_needs_no_sign_in(engine: Engine) -> None:
+def test_livez_needs_no_sign_in(engine: Engine) -> None:
     with make_client(engine) as client:
-        assert client.get("/healthz").json()["status"] == "ok"
+        assert client.get("/livez").json()["status"] == "ok"
 
 
 def test_nothing_else_opens_without_a_valid_token(engine: Engine) -> None:
@@ -215,5 +215,5 @@ def test_the_push_key_is_unavailable_until_it_is_set(
 def test_an_app_with_no_sign_in_configured_refuses_everyone(engine: Engine) -> None:
     app = create_app(Settings(), engine_factory=lambda: engine)  # no verifier, no Supabase URL
     with TestClient(app) as client:
-        assert client.get("/healthz").status_code == 200
+        assert client.get("/livez").status_code == 200
         assert client.get("/v1/me", headers=bearer(uuid4(), "a@example.com")).status_code == 503

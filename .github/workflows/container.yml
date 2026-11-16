@@ -69,7 +69,7 @@ jobs:
           run fh:test doctor --only database
 
       # The API is the same image started with `serve` (ADR 0029). It has to start with only its
-      # settings, and answer /healthz, which needs no token and no database round trip.
+      # settings, and answer /livez, which needs no token and no database round trip.
       - name: The API starts and answers
         env:
           DATABASE_URL: postgresql://fh:fh@localhost:5432/fh_image
@@ -79,7 +79,7 @@ jobs:
             -e FH_SUPABASE_URL=https://example.supabase.co \
             -e FH_APP_ORIGINS=https://app.example.test fh:test serve
           for _ in $(seq 1 30); do
-            if curl -fsS http://localhost:8080/healthz | grep -q '"status":"ok"'; then
+            if curl -fsS http://localhost:8080/livez | grep -q '"status":"ok"'; then
               docker rm -f api >/dev/null
               exit 0
             fi
