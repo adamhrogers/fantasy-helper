@@ -1,8 +1,8 @@
 """Games and startable games in a matchup week. Pure functions.
 
 A player's game only scores if he's in a starting slot that day. Each day, the players with a
-game are placed into the league's starting slots, best expected points first, each into the most
-specific open slot he fits (a center into C before UTIL), so flexible slots stay open for others.
+game are placed into the league's starting slots: the best set that can all fill a slot at once,
+moving players between the slots they're eligible for to make room (see `fill_day`).
 """
 
 from collections.abc import Sequence
@@ -44,16 +44,34 @@ def fill_day(
     candidates: Sequence[tuple[UUID, tuple[Position, ...], float]],
     slots: Sequence[tuple[Position, ...]],
 ) -> set[UUID]:
-    """Who starts on one day: best expected points first, each into the most specific open
-    slot he's eligible for."""
-    open_slots = list(slots)
+    """Who starts on one day: the set of players with the most expected points that can all
+    fill a slot at once.
+
+    Best expected points first, each is added only if the players already chosen, plus him, can
+    still all be given a slot. A chosen player may move to another slot he's eligible for to make
+    room, which is what a person does with a lineup (the center-eligible forward goes to C so the
+    other forwards have somewhere to play). Placing each player into the first slot that fits,
+    without moving anyone, leaves a slot empty and a player on the bench when a full lineup
+    exists. Because the sets that can start together form a matroid, taking players best first
+    and keeping each one that fits gives the best possible set, not just a good one."""
+    eligible = [set(e) for e in slots]
+    owner: list[int | None] = [None] * len(slots)  # the candidate index in each slot
+
+    def place(index: int, tried: set[int]) -> bool:
+        for slot, ok in enumerate(eligible):
+            if slot in tried or not (set(candidates[index][1]) & ok):
+                continue
+            tried.add(slot)
+            holder = owner[slot]
+            if holder is None or place(holder, tried):
+                owner[slot] = index
+                return True
+        return False
+
     started: set[UUID] = set()
-    for player_id, positions, _ in sorted(candidates, key=lambda c: -c[2]):
-        for i, eligible in enumerate(open_slots):
-            if set(positions) & set(eligible):
-                started.add(player_id)
-                del open_slots[i]
-                break
+    for index in sorted(range(len(candidates)), key=lambda i: -candidates[i][2]):
+        if place(index, set()):
+            started.add(candidates[index][0])
     return started
 
 

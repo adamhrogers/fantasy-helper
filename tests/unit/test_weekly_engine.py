@@ -40,6 +40,58 @@ def test_the_most_specific_slot_fills_first() -> None:
     assert fill_day([(g1, PG, 30.0), (g2, PG, 20.0)], starting_slots(SLOTS)) == {g1}
 
 
+def test_a_flexible_player_moves_so_a_full_lineup_fits() -> None:
+    # Slots: PG, SG, SF, PF, C, G, F and three UTIL, the shape of a common league. Ten players
+    # have a game. The forward who is also center-eligible must go to C, not PF: otherwise the
+    # last forward has nowhere to play, though a full lineup of ten exists.
+    slots = starting_slots(
+        (
+            RosterSlot.named("PG", 1), RosterSlot.named("SG", 1), RosterSlot.named("SF", 1),
+            RosterSlot.named("PF", 1), RosterSlot.named("C", 1), RosterSlot.named("G", 1),
+            RosterSlot.named("F", 1), RosterSlot.named("UTIL", 3),
+        )
+    )  # fmt: skip
+    pg, sg, sf, pf, c = Position.PG, Position.SG, Position.SF, Position.PF, Position.C
+    players = [
+        ((pg,), 60.0), ((sg, sf), 42.0), ((pg, sg), 35.0), ((pg, sg), 34.0), ((pf, c), 31.0),
+        ((sg, sf), 28.0), ((sf, pf), 27.0), ((pg, sg), 26.0), ((sf, pf), 26.0), ((sf, pf), 23.0),
+    ]  # fmt: skip
+    candidates = [(uuid4(), positions, ev) for positions, ev in players]
+    assert len(fill_day(candidates, slots)) == 10
+
+
+def _lineup_exists(chosen: list[tuple[Position, ...]], slots: list[tuple[Position, ...]]) -> bool:
+    if not chosen:
+        return True
+    first, rest = chosen[0], chosen[1:]
+    return any(
+        set(first) & set(slot) and _lineup_exists(rest, slots[:i] + slots[i + 1 :])
+        for i, slot in enumerate(slots)
+    )
+
+
+position_sets = st.lists(st.sampled_from(list(Position)), min_size=1, max_size=3, unique=True)
+
+
+@given(
+    st.lists(st.tuples(position_sets, st.floats(1, 60)), max_size=7),
+    st.lists(position_sets, min_size=1, max_size=6),
+)
+def test_the_day_is_filled_with_the_best_set_that_fits(
+    players: list[tuple[list[Position], float]], slot_sets: list[list[Position]]
+) -> None:
+    slots = [tuple(s) for s in slot_sets]
+    candidates = [(uuid4(), tuple(positions), ev) for positions, ev in players]
+    chosen = fill_day(candidates, slots)
+    assert _lineup_exists([positions for pid, positions, _ in candidates if pid in chosen], slots)
+    best = 0.0
+    for mask in range(1 << len(candidates)):
+        picked = [c for i, c in enumerate(candidates) if mask >> i & 1]
+        if _lineup_exists([positions for _, positions, _ in picked], slots):
+            best = max(best, sum(ev for *_, ev in picked))
+    assert sum(ev for pid, _, ev in candidates if pid in chosen) == pytest.approx(best)
+
+
 def test_a_hand_checked_week() -> None:
     big = week(C, (MON, 40.0), (WED, 40.0))
     guard = week(PG, (MON, 30.0), (TUE, 30.0))
