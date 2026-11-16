@@ -12,7 +12,7 @@ The snapshot job moves from the Mac's schedule (launchd) to GitHub Actions, and 
 - [x] **1.** The laptop has the R2 values, and `fh doctor --only raw` passed against the live bucket (2026-11-07).
 - [x] **2.** Upload the backlog (2026-11-07). The laptop's copies since then are uploaded too: on 2026-11-14 all 1,898 local files were in R2 with the same bytes.
 - [x] **3.** The first cloud run: 2026-11-07, saved 4/4, but at 20:28 Eastern, 3 hours late. The notification reached the phone's prod subscription.
-- [ ] **4.** The overlap: four clean cloud runs in a row, **and** the Healthchecks pings live (part 5). **Blocked on timing:** from 2026-11-07 to 11-14 every cloud set saved, and none was dropped, but every one started hours late (mornings around 11:40–16:30, evenings around 20:00–23:10 Eastern, often after tip-off). So the cloud copy moved to Cloud Run Jobs, which fire on the minute ([scheduled-jobs.md](scheduled-jobs.md), live since 2026-11-14), with the Healthchecks schedules set the same day. **The count starts with the first scheduled run, 2026-11-15 at 06:17 Eastern.**
+- [ ] **4.** The overlap: four clean cloud runs in a row, **and** the Healthchecks pings live (part 5). **Blocked on timing:** from 2026-11-07 to 11-14 every cloud set saved, and none was dropped, but every one started hours late (mornings around 11:40–16:30, evenings around 20:00–23:10 Eastern, often after tip-off). So the cloud copy moved to Cloud Run Jobs, which fire on the minute ([scheduled-jobs.md](scheduled-jobs.md), live since 2026-11-14). **The count started with the first scheduled run, 2026-11-15 at 06:17 Eastern, and stands at 3 of 4:** 11-15 06:17 (started 06:17:05, 9/9), 11-15 17:17 (started 17:17:07, saved) and 11-16 06:17 (started 06:17:05, 9/9, and it started the whole chain). The fourth is 11-16 17:17. The Healthchecks condition is met: the script ran on 2026-11-15 ([prod-database.md](prod-database.md), step 9), and all four checks showed on-time pings on 2026-11-16. GitHub's late copies also load as extra projection snapshots of the same data (two on the evening of 2026-11-15), which grows the database for no benefit, so there's a reason to end the overlap beyond tidiness.
 - [ ] **5.** End of the overlap, with Claude's go-ahead: remove launchd, give the laptop its own R2 key, switch it to R2, and drop the GitHub schedule.
 
 All commands run in your own Terminal app, from `~/projects/fantasy-helper`.
@@ -65,7 +65,13 @@ The schedules run side by side, and the laptop saves to its own place: **Cloud R
 
 **How long:** until both of these are true. Then tell Claude.
 - **Four clean, on-time Cloud Run runs in a row** (two mornings, two evenings), each starting within a few minutes of 06:17 or 17:17. A failed or late run restarts the count once it's fixed.
-- **The Healthchecks schedules are set** for both checks ([scheduled-jobs.md](scheduled-jobs.md), step 6), so a late, missing or silent run alerts the phone. Until then the laptop is the only cover for a run that never starts.
+- **The Healthchecks schedules are set by the script** for both checks ([prod-database.md](prod-database.md), step 9; the ones typed into the website on 2026-11-14 were saved in UTC), so a late, missing or silent run alerts the phone. Until then the laptop is the only cover for a run that never starts.
+
+To check a run was on time (the creation time is UTC; 06:17 Eastern is 11:17 UTC in winter):
+
+```bash
+gcloud run jobs executions list --job snapshot-morning --region us-east4 --limit 3
+```
 
 Leave the Mac on or asleep at 06:30 and 17:30, not shut down. A sleeping Mac runs the job when it wakes; a Mac that's shut down skips it.
 

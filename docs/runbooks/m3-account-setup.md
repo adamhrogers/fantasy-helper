@@ -15,7 +15,7 @@ This prepares everything M3 needs, so that M3 can start building as soon as M2's
 | 3. Encryption key and alerts | **Done.** `FH_ENCRYPTION_KEY` and `FH_NTFY_TOPIC` are in `prod`. The phone gets the cloud runs' notifications on its prod subscription (Adam, 2026-11-14) |
 | 4. Cloudflare R2 | **Done.** Bucket, token, and the three values in `prod` and the laptop's `.env`. `fh doctor --only raw` passed against the live bucket |
 | 5. Google Cloud | **Done** (2026-11-14). Project `fantasy-helper` (its ID is in Bitwarden and `gcloud config get project`), billing linked, a $5 budget, `gcloud` 593 from Google's installer, region `us-east4`, the four services on. Checked by Claude with `gcloud` |
-| 6. Healthchecks.io | **Account done** (Adam, 2026-11-14). `FH_HEALTHCHECKS_PING_KEY` is in `prod`. No checks yet: they appear when part 5 wires the pings into the scheduled jobs. The laptop keeps its snapshot schedule until those pings are live |
+| 6. Healthchecks.io | **Account done** (Adam, 2026-11-14). `FH_HEALTHCHECKS_PING_KEY` is in `prod` and in Secret Manager. The pings have been live since 2026-11-14 (ADR 0025), and the checks' schedules are set by `scripts/healthchecks-setup.sh` ([prod-database.md](prod-database.md), step 9), never typed into the website |
 | 7. iPhone | **Done.** iOS 16.4 or later (Adam, 2026-11-14), so Web Push works from the Home Screen app in part 4 |
 
 **All eight `prod` secrets are set** (the last, `FH_HEALTHCHECKS_PING_KEY`, on 2026-11-14). **Every account M3 needs exists.** Your password manager is **Bitwarden** (2026-11-07).
@@ -65,7 +65,7 @@ gh secret set LANGSMITH_API_KEY --env prod
 gh secret set DATABASE_URL --env prod
 ```
 
-- [x] Save the **Project URL** and the **publishable (anon) key** from **Project Settings → API** in your password manager. They aren't secret (the phone app ships them), but they stay out of the public repo. M3 puts them where they're needed.
+- [x] Save the **Project URL** and the **publishable (anon) key** from **Project Settings → API** in your password manager. They aren't secret (the phone app ships them), but they stay out of the public repo. M3 puts them where they're needed. *(2026-11-15: the key the app needs is the **publishable** one, `sb_publishable_...`. Supabase is retiring the older `anon` key at the end of 2026, so if you saved that one, copy the publishable key before part 4.)*
 - [x] Go to **Authentication → Sign In / Providers**. Keep **Email** on, and turn **off** "Allow new users to sign up". The app is invite-only.
 - [x] Leave Site URL, redirect URLs and email templates alone. M3 sets them once the app has an address.
 
@@ -131,7 +131,7 @@ gh secret set FH_R2_ENDPOINT --env prod
 ```
 
 - [x] The three R2 values are in the laptop's `.env` too (2026-11-07), for the one-time upload of the snapshot backlog.
-- **Later, in part 4:** Cloudflare Pages. You'll click **Connect to Git** once and authorize Cloudflare's GitHub app.
+- **Later, in part 4:** the phone app's home on Cloudflare (Workers static assets is proposed, because Cloudflare now says to start new projects there; Pages is what ADR 0009 first named). Either way you connect the repository once and authorize Cloudflare's GitHub app ([m3-plan.md](../m3-plan.md), Phase 3).
 
 ## 5. Google Cloud: Cloud Run for the API (15–20 min)
 
@@ -196,13 +196,13 @@ A run that never starts can't report itself: the GitHub scheduler skipped it, or
 gh secret set FH_HEALTHCHECKS_PING_KEY --env prod
 ```
 
-- [x] Don't create any checks. The scheduled jobs create them on their first ping, and in M3 I'll give you each one's schedule to set (about two minutes).
+- [x] Don't create any checks. The scheduled jobs create them on their first ping. (Their schedules were first typed into the website, which saved them in UTC and raised a false alert; since 2026-11-15 `scripts/healthchecks-setup.sh` sets them.)
 
 ## 7. Your phone, and the later items (2 min)
 
 - [x] Check that your iPhone runs **iOS 16.4 or later** (Settings → General → About). Web Push needs it, and the app has to be added to the Home Screen; we'll do that together in M3.
 - [ ] **Later, not now:**
-  - **Before M4:** the Claude API key goes into `prod` with `gh secret set FH_ANTHROPIC_API_KEY --env prod`, with a monthly spend limit set in the Anthropic Console.
+  - **Before M4:** the Claude API key goes into **Google Secret Manager** (the report jobs read their secrets there since 2026-11-14, not from GitHub), with a monthly spend limit set in the Anthropic Console. The LangSmith key goes there too: the cloud jobs don't have it yet.
   - **Before M7:** friend invites need a custom email sender (for example Resend's free tier). That requires a domain you own, about $10–15 a year. Decide whether you want one before the beta.
   - **Before M8:** an API key from the second model provider, for the Skeptic.
 
