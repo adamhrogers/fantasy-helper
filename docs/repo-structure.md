@@ -24,7 +24,7 @@ fantasy-helper/
 │   ├── ci.yml                        # lint · types · tests (Postgres service container) · import contracts · secret scan
 │   ├── container.yml                 # the image builds, starts and migrates an empty database
 │   ├── deploy.yml                    # builds the image, deploys the Cloud Run jobs from main, migrating in between
-│   ├── snapshot.yml                  # a manual fallback for the snapshot (its schedule goes when the overlap ends)
+│   ├── snapshot.yml                  # a manual fallback for the snapshot (no schedule since 2026-11-16)
 │   ├── dependabot-auto-merge.yml     # Dependabot PRs merge once CI passes (ADR 0024)
 │   ├── web.yml                (M3)   # PWA typecheck · lint · build
 │   └── evals.yml              (M6)   # regression replay when brain/ or prompts/ change
