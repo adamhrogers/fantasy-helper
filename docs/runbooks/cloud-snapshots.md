@@ -13,7 +13,7 @@ The snapshot job moves from the Mac's schedule (launchd) to GitHub Actions, and 
 - [x] **2.** Upload the backlog (2026-11-07). The laptop's copies since then are uploaded too: on 2026-11-14 all 1,898 local files were in R2 with the same bytes.
 - [x] **3.** The first cloud run: 2026-11-07, saved 4/4, but at 20:28 Eastern, 3 hours late. The notification reached the phone's prod subscription.
 - [x] **4.** The overlap, **ended 2026-11-16.** From 2026-11-07 to 11-14 every cloud set saved and none was dropped, but every one started hours late (mornings around 11:40–16:30, evenings around 20:00–23:10 Eastern, often after tip-off), so the cloud copy moved to Cloud Run Jobs, which fire on the minute ([scheduled-jobs.md](scheduled-jobs.md), live since 2026-11-14). The plan was four on-time runs in a row; three were done (2026-11-15 06:17 and 17:17, 2026-11-16 06:17, each starting within seconds, the last one starting the whole chain) when Adam chose to end it without waiting for the fourth. The Healthchecks condition was met (the script ran on 2026-11-15, [prod-database.md](prod-database.md) step 9, and all four checks showed on-time pings on 2026-11-16). GitHub's late copies had also been loading extra projection snapshots of the same data, which grew the database for no benefit.
-- [ ] **5.** End of the overlap. **Done 2026-11-16:** the Mac's schedule is removed (`scripts/snapshot-schedule.sh status` says `not installed` for both jobs) and GitHub's schedule is dropped (PR #19: `snapshot.yml` is only **Run workflow**; `pipeline/cron.py` and the `--cron` option are gone). **Left for Adam (section 5, steps 2 to 4):** upload the laptop's last copies, give the laptop its own R2 key, and set `FH_RAW_STORE=r2`.
+- [ ] **5.** End of the overlap. **Done 2026-11-16:** the Mac's schedule is removed (`scripts/snapshot-schedule.sh status` says `not installed` for both jobs) and GitHub's schedule is dropped (PR #19: `snapshot.yml` is only **Run workflow**; `pipeline/cron.py` and the `--cron` option are gone). **Steps 2 to 4 done by Adam, 2026-11-16:** the laptop's last copies uploaded, the laptop has its own R2 key, and `FH_RAW_STORE=r2` is set.
 
 All commands run in your own Terminal app, from `~/projects/fantasy-helper`.
 
@@ -89,7 +89,7 @@ It uploads every file R2 doesn't have yet. That includes the laptop's copies of 
 
 ## 5. End of the overlap
 
-**Status 2026-11-16:** steps 1 and 6 are done; steps 2 to 4 are Adam's, on the laptop.
+**Status 2026-11-16:** all steps are done.
 
 1. **Done 2026-11-16.** Remove the Mac's schedule, then check that both jobs say `not installed`:
 

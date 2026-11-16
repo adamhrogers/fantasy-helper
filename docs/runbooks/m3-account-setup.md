@@ -131,7 +131,7 @@ gh secret set FH_R2_ENDPOINT --env prod
 ```
 
 - [x] The three R2 values are in the laptop's `.env` too (2026-11-07), for the one-time upload of the snapshot backlog.
-- **Later, in part 4:** the phone app's home on Cloudflare (Workers static assets is proposed, because Cloudflare now says to start new projects there; Pages is what ADR 0009 first named). Either way you connect the repository once and authorize Cloudflare's GitHub app ([m3-plan.md](../m3-plan.md), Phase 3).
+- **Later, in part 4:** the phone app's home on Cloudflare Workers (static assets; decided 2026-11-16, because Cloudflare now says to start new projects there; Pages is what ADR 0009 first named). Either way you connect the repository once and authorize Cloudflare's GitHub app ([m3-plan.md](../m3-plan.md), Phase 3).
 
 ## 5. Google Cloud: Cloud Run for the API (15–20 min)
 
