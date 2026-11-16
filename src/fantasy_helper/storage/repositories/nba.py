@@ -6,7 +6,7 @@ from collections.abc import Iterable, Sequence
 from datetime import date, datetime, time, timedelta
 from uuid import UUID
 
-from sqlalchemy import func, insert, select
+from sqlalchemy import func, insert, or_, select
 from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
@@ -72,7 +72,11 @@ def game_index(session: Session, season: int) -> dict[str, tuple[UUID, date]]:
 
 def upsert_game_logs(session: Session, rows: list[tuple[GameLogRecord, UUID, UUID, date]]) -> int:
     """Box score rows as (record, player ID, game ID, game date). Re-loading a game overwrites
-    it, so a later stat correction wins."""
+    it, so a later stat correction wins. Returns how many rows were inserted or changed.
+
+    A row that is already stored with the same values is left alone. Every daily payload holds the
+    whole season, so rewriting each row each time would leave a dead copy of it behind: on
+    2026-11-15 that had made an 11,000-row table 14 MB instead of about 2 MB."""
     if not rows:
         return 0
     values = {
@@ -85,15 +89,25 @@ def upsert_game_logs(session: Session, rows: list[tuple[GameLogRecord, UUID, UUI
     }  # fmt: skip
     updated = ["season", "game_date", "scoring_period", "team", "played", *STAT_COLUMNS.values()]
     batch = list(values.values())
+    changed = 0
     for start in range(0, len(batch), GAME_LOG_CHUNK):
         stmt = pg_insert(PlayerGameStatRow).values(batch[start : start + GAME_LOG_CHUNK])
-        session.execute(
+        result = session.execute(
             stmt.on_conflict_do_update(
                 index_elements=["player_id", "game_id"],
                 set_={col: stmt.excluded[col] for col in updated} | {"updated_at": func.now()},
-            )
+                # IS DISTINCT FROM, not <>: a stat that is NULL on one side and a number on the
+                # other counts as a change, and NULL against NULL doesn't.
+                where=or_(
+                    *(
+                        PlayerGameStatRow.__table__.c[col].is_distinct_from(stmt.excluded[col])
+                        for col in updated
+                    )
+                ),
+            ).returning(PlayerGameStatRow.player_id)  # RETURNING counts what was written
         )
-    return len(values)
+        changed += len(result.all())
+    return changed
 
 
 def snapshot_loaded(session: Session, raw_key: str) -> bool:
