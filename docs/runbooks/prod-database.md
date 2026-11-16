@@ -37,13 +37,13 @@ scripts/gcp-secrets.sh fh-database-url fh-encryption-key
 ```
 
 - [x] **3. Merge the PR** (done 2026-11-15 at 09:27 Eastern; the deploy took 95 seconds, the deployer's job-level role was enough to run `migrate` and wait for it, and the job's log says `migrated an empty database to 0006`)**.** The deploy builds the image, updates the snapshot jobs, then **migrates the prod database** (0001 to 0006: its first migration) and waits for it, then updates `daily` and `weekly`. Claude watches it. If it stops at the migration, the report jobs still run their old image and nothing is half-done.
-- [ ] **4. Check prod's database** (Adam; the migration is already confirmed by the job's log, so this adds the region. On 2026-11-15 the app's permission check stopped Claude's session from reading prod secrets, so it's your command unless you allow it): the doctor names the Supabase region and says whether the migrations are at head. Expect `migrations at head (0006), Supabase us-east-1`:
+- [x] **4. Check prod's database** (done by Adam, 2026-11-15; the migration is already confirmed by the job's log, so this adds the region. On 2026-11-15 the app's permission check stopped Claude's session from reading prod secrets, so it's your command unless you allow it): the doctor names the Supabase region and says whether the migrations are at head. Expect `migrations at head (0006), Supabase us-east-1`:
 
 ```bash
 scripts/fh-prod.sh doctor
 ```
 
-- [ ] **5. Adam: add the three leagues to prod** (10 min). Your dev database already knows their IDs:
+- [x] **5. Adam: add the three leagues to prod** (done 2026-11-15)**:** (10 min). Your dev database already knows their IDs:
 
 ```bash
 uv run fh league list
@@ -63,7 +63,7 @@ scripts/fh-prod.sh league add espn OTHER_LEAGUE_ID
 scripts/fh-prod.sh league add sleeper LEAGUE_ID --username YOUR_SLEEPER_NAME
 ```
 
-- [ ] **6. Claude: load the history from R2 into prod, then run the chain once.** First one `ingest` run, started as the `daily` job with its command replaced. It reads every snapshot since 2026-11-06 (about 1,900 files) and loads them. Claude checks the counts against dev afterwards:
+- [x] **6. Claude: load the history from R2 into prod, then run the chain once** (done 2026-11-15, evening: the load took 8.5 minutes, 101 projection snapshots, 90,508 projection rows, three leagues, database 45 MB of 500 MB; then a hand-started `snapshot-morning` completed, started `daily`, which started `weekly`, all three succeeded, so the chain's hand-over and permissions are proven)**.** First one `ingest` run, started as the `daily` job with its command replaced. It reads every snapshot since 2026-11-06 (about 1,900 files) and loads them. Claude checks the counts against dev afterwards:
 
 ```bash
 gcloud run jobs execute daily --region us-east4 --args=ingest --wait

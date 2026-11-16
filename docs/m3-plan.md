@@ -8,7 +8,7 @@ This is the plan for everything between "part 2 is merged" and "M3 is done": six
 
 | Phase | What | Status |
 |---|---|---|
-| **0** | Finish part 2's rollout: leagues in prod, history loaded, first chained morning | **In progress.** Runbook steps 1–3 and 8 done on 2026-11-15; 4–7 and 9–11 open |
+| **0** | Finish part 2's rollout: leagues in prod, history loaded, first chained morning | **In progress.** Runbook steps 1–6 and 8 done on 2026-11-15 (the chain ran end to end); 7 (Adam opens the reports), 9–11 open |
 | **1** | End the snapshot overlap: retire launchd and the GitHub schedule | Waiting on four on-time runs (earliest: the evening of 2026-11-16) |
 | **2** | Part 3: the API on Cloud Run, sign-in checked, reports served | Not started |
 | **3** | Part 4: the phone app | Not started |

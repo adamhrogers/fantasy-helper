@@ -238,7 +238,7 @@ TCP only, because long scratch paths exceed the 103-byte Unix socket limit. `LC_
 
 ### Found on 2026-11-15 (after PR #16 merged)
 - **The deploy answered both open questions.** The deployer's job-level role can run `migrate` and wait for it (prod went from empty to 0006 inside the deploy), and all five jobs took their accounts, secrets and chain settings. The fallbacks in ADR 0027 and the runbook weren't needed.
-- **The chain is wired but hasn't handed over yet.** The policies are right (`fh-jobs` → `daily`, `fh-reports` → `weekly`). The first real hand-over is the first morning snapshot that completes on the new image.
+- **UPDATE, evening of 2026-11-15: the chain has run.** Prod has Adam's leagues and all history, and a hand-started morning snapshot handed over to `daily` and then `weekly`; all succeeded. (Original note:) **The chain was wired but hadn't handed over yet.** The policies are right (`fh-jobs` → `daily`, `fh-reports` → `weekly`). The first real hand-over is the first morning snapshot that completes on the new image.
 - **That happens on its own at 06:17 Eastern on 2026-11-16.** If prod has no user by then, `daily` exits 1 ("no user yet") and Healthchecks alerts; nothing is written. So the rollout's steps 4 to 6 and 9 belong on 2026-11-15.
 - **A trap in the rollout, now fixed in the runbook:** on rollout day the 06:17 snapshot ran the old image and wrote no completion marker, so starting `daily` by hand would wait and fail. Start `snapshot-morning` by hand instead: it writes the marker and runs the whole chain.
 - **`fh ingest` is one transaction.** A history load that hits the job's time limit saves nothing and starts over; the runbook used to say it picks up where it stopped.
