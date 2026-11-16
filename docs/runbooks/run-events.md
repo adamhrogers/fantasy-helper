@@ -83,10 +83,10 @@ There are three layers, from fastest to slowest:
 
 ## What you get today
 
-**Morning and evening snapshots** (Cloud Run jobs at 06:17 and 17:17 Eastern since 2026-11-14, ADR 0025; GitHub's late copy and the Mac's 06:30 and 17:30 jobs during the overlap):
+**Morning and evening snapshots** (Cloud Run jobs at 06:17 and 17:17 Eastern since 2026-11-14, ADR 0025, the only timer since 2026-11-16; before that GitHub's late copy and the Mac's 06:30 and 17:30 jobs ran beside them):
 - `Morning snapshot started` (quiet): "9 datasets to save."
 - `Morning snapshot: retrying (attempt 2 of 3)` (normal), only when needed. An R2 outage while saving counts as retryable ("the raw store (R2) was unreachable").
-- `Morning snapshot succeeded` (quiet): "9/9 datasets saved, 3.9 MB. Took 41 s." While the Mac and the cloud overlap, the second morning run adds "1 already saved today by another run": Sleeper's player list is fetched once a day.
+- `Morning snapshot succeeded` (quiet): "9/9 datasets saved, 3.9 MB. Took 41 s." A second morning run on the same day (a manual one) adds "1 already saved today by another run": Sleeper's player list is fetched once a day.
 - `Morning snapshot incomplete` (loud): which datasets failed, why, and after how many attempts. The others are still saved.
 - `Morning snapshot failed` (urgent): every dataset failed.
 - `Morning snapshot crashed` (urgent): it stopped on something unexpected, or the raw store isn't configured. Names the kind of error only.
@@ -132,7 +132,7 @@ The overview itself is a local page (`data/reports/<date>/weekly.html`) until th
 
 **Test:** `uv run fh doctor --alert` sends one test event.
 
-Until the overlap ends, the Mac's 06:30 and 17:30 jobs run the code in your main checkout, so `git pull` there after a merge.
+The Mac no longer runs scheduled jobs (removed 2026-11-16), so a stale checkout there only matters for the `fh` commands you run by hand: `git pull` before running them.
 
 ## Rules every event follows
 

@@ -153,7 +153,7 @@ These steps depend on each other, so they're ordered. B and C run in parallel at
 - **Decided 2026-11-14 (ADR 0025):** timed jobs move to Cloud Run Jobs started by Cloud Scheduler, watched by Healthchecks ([runbooks/scheduled-jobs.md](runbooks/scheduled-jobs.md)).
 - **Snapshots on Cloud Run: live** since 2026-11-14 (PRs #12, #14), tested end to end, Healthchecks schedules set. The laptop retires after four on-time runs in a row, counting from 2026-11-15 06:17.
 - **Part 2: merged 2026-11-15** (PR #16). Reports saved in a `reports` table; `migrate`, `daily` and `weekly` as Cloud Run jobs, with the morning a chain (snapshot, then daily, then weekly, each starting only when the one before is complete, ADR 0028); a run lock; the prod database migrated by the deploy; `scripts/fh-prod.sh`; Healthchecks schedules set by script. ADRs 0026, 0027 and 0028, [runbooks/prod-database.md](runbooks/prod-database.md). The deploy migrated prod to 0006 and wired the chain. **Rollout:** leagues, history and the first chained morning are still to do.
-- **Next:** end the snapshot overlap (after the fourth on-time run, the evening of 2026-11-16), then part 3 (the API and sign-in), part 4 (the phone app) and part 5 (push, backups, the exit test). All of it, in order: [m3-plan.md](m3-plan.md).
+- **The snapshot overlap ended 2026-11-16** (the Mac's schedule and GitHub's are removed; Cloud Run is the only timer). **Next:** part 3 (the API and sign-in), part 4 (the phone app) and part 5 (push, backups, the exit test). All of it, in order: [m3-plan.md](m3-plan.md).
 
 The lanes as built and planned (the first version of this table had a magic link, Cloudflare Pages and GitHub cron workflows):
 

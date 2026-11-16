@@ -1,6 +1,6 @@
 # Moving snapshots to the cloud (M3 part 1)
 
-**Written:** 2026-11-06. **Revised:** 2026-11-07: the laptop keeps saving to its own disk, and keeps its schedule until the missed-run watchdog is live (ADR 0023, Update). 2026-11-14: the cloud copy moves from GitHub's scheduler, which ran hours late, to Cloud Run Jobs ([ADR 0025](../decisions/0025-timed-jobs-on-cloud-run.md), [scheduled-jobs.md](scheduled-jobs.md)). **Who:** Adam, with Claude checking each step. **Design:** ADR 0023.
+**Written:** 2026-11-06. **Revised:** 2026-11-07: the laptop keeps saving to its own disk, and keeps its schedule until the missed-run watchdog is live (ADR 0023, Update). 2026-11-14: the cloud copy moves from GitHub's scheduler, which ran hours late, to Cloud Run Jobs ([ADR 0025](../decisions/0025-timed-jobs-on-cloud-run.md), [scheduled-jobs.md](scheduled-jobs.md)). 2026-11-16: the overlap ended (Adam's call, after 3 of the 4 planned on-time runs): the laptop's schedule and GitHub's schedule are gone, and Cloud Run is the only timer. **Who:** Adam, with Claude checking each step. **Design:** ADR 0023.
 
 The snapshot job moves from the Mac's schedule (launchd) to GitHub Actions, and the raw files move from `data/raw` to the R2 bucket. No day may be missed (rule 8), so the Mac keeps saving on its own until the cloud has proven itself and something watches for runs that never start.
 
@@ -12,8 +12,8 @@ The snapshot job moves from the Mac's schedule (launchd) to GitHub Actions, and 
 - [x] **1.** The laptop has the R2 values, and `fh doctor --only raw` passed against the live bucket (2026-11-07).
 - [x] **2.** Upload the backlog (2026-11-07). The laptop's copies since then are uploaded too: on 2026-11-14 all 1,898 local files were in R2 with the same bytes.
 - [x] **3.** The first cloud run: 2026-11-07, saved 4/4, but at 20:28 Eastern, 3 hours late. The notification reached the phone's prod subscription.
-- [ ] **4.** The overlap: four clean cloud runs in a row, **and** the Healthchecks pings live (part 5). **Blocked on timing:** from 2026-11-07 to 11-14 every cloud set saved, and none was dropped, but every one started hours late (mornings around 11:40–16:30, evenings around 20:00–23:10 Eastern, often after tip-off). So the cloud copy moved to Cloud Run Jobs, which fire on the minute ([scheduled-jobs.md](scheduled-jobs.md), live since 2026-11-14). **The count started with the first scheduled run, 2026-11-15 at 06:17 Eastern, and stands at 3 of 4:** 11-15 06:17 (started 06:17:05, 9/9), 11-15 17:17 (started 17:17:07, saved) and 11-16 06:17 (started 06:17:05, 9/9, and it started the whole chain). The fourth is 11-16 17:17. The Healthchecks condition is met: the script ran on 2026-11-15 ([prod-database.md](prod-database.md), step 9), and all four checks showed on-time pings on 2026-11-16. GitHub's late copies also load as extra projection snapshots of the same data (two on the evening of 2026-11-15), which grows the database for no benefit, so there's a reason to end the overlap beyond tidiness.
-- [ ] **5.** End of the overlap, with Claude's go-ahead: remove launchd, give the laptop its own R2 key, switch it to R2, and drop the GitHub schedule.
+- [x] **4.** The overlap, **ended 2026-11-16.** From 2026-11-07 to 11-14 every cloud set saved and none was dropped, but every one started hours late (mornings around 11:40–16:30, evenings around 20:00–23:10 Eastern, often after tip-off), so the cloud copy moved to Cloud Run Jobs, which fire on the minute ([scheduled-jobs.md](scheduled-jobs.md), live since 2026-11-14). The plan was four on-time runs in a row; three were done (2026-11-15 06:17 and 17:17, 2026-11-16 06:17, each starting within seconds, the last one starting the whole chain) when Adam chose to end it without waiting for the fourth. The Healthchecks condition was met (the script ran on 2026-11-15, [prod-database.md](prod-database.md) step 9, and all four checks showed on-time pings on 2026-11-16). GitHub's late copies had also been loading extra projection snapshots of the same data, which grew the database for no benefit.
+- [ ] **5.** End of the overlap. **Done 2026-11-16:** the Mac's schedule is removed (`scripts/snapshot-schedule.sh status` says `not installed` for both jobs) and GitHub's schedule is dropped (PR #19: `snapshot.yml` is only **Run workflow**; `pipeline/cron.py` and the `--cron` option are gone). **Left for Adam (section 5, steps 2 to 4):** upload the laptop's last copies, give the laptop its own R2 key, and set `FH_RAW_STORE=r2`.
 
 All commands run in your own Terminal app, from `~/projects/fantasy-helper`.
 
@@ -55,9 +55,11 @@ Nothing to do: the schedule starts it at 17:17 Eastern. To see it work sooner, u
 - If it fails, the phone says why, on the prod topic. Tell Claude. The laptop's 17:30 run saves the set either way.
 - A wrong endpoint can still accept the files, in the wrong place. Bad keys can't save anything. Both end in `Evening snapshot: raw store check failed`.
 
-## 4. The overlap: two copies that can't fail together
+## 4. The overlap: two copies that can't fail together (ended 2026-11-16)
 
-The schedules run side by side, and the laptop saves to its own place: **Cloud Run** to R2 (06:17 and 17:17, on time), **GitHub** to R2 too (the same times, but hours late), and the laptop to `data/raw` (06:30 and 17:30). GitHub's copy is a spare until the end of the overlap. **Don't add `FH_RAW_STORE=r2` to `.env` yet.**
+*This section is the record of how the overlap ran. It ended on 2026-11-16: the laptop's schedule and GitHub's are removed, and the only timer is Cloud Run (section 5).*
+
+The schedules ran side by side, and the laptop saves to its own place: **Cloud Run** to R2 (06:17 and 17:17, on time), **GitHub** to R2 too (the same times, but hours late), and the laptop to `data/raw` (06:30 and 17:30). GitHub's copy is a spare until the end of the overlap. **Don't add `FH_RAW_STORE=r2` to `.env` yet.**
 
 **Why separate places:** the overlap is only a backup if the two runs can't fail together. If both saved to R2 with the same key and the same new code, one bad key, one bug or one R2 outage would stop both in the same evening. The laptop's disk is the path that has saved every day since 2026-11-06.
 
@@ -85,9 +87,11 @@ It uploads every file R2 doesn't have yet. That includes the laptop's copies of 
 
 **To pause a cloud job** (if it keeps failing): see [scheduled-jobs.md](scheduled-jobs.md), Pausing. For the GitHub copy: **Actions → Snapshot → ··· → Disable workflow**. The laptop keeps saving.
 
-## 5. End of the overlap (with Claude's go-ahead)
+## 5. End of the overlap
 
-1. Remove the Mac's schedule, then check that both jobs say `not installed`:
+**Status 2026-11-16:** steps 1 and 6 are done; steps 2 to 4 are Adam's, on the laptop.
+
+1. **Done 2026-11-16.** Remove the Mac's schedule, then check that both jobs say `not installed`:
 
 ```bash
 scripts/snapshot-schedule.sh uninstall
@@ -114,10 +118,10 @@ Expect `✓ raw  R2 bucket 'fantasy-helper-raw' configured (FH_RAW_STORE=r2); it
 
 5. `data/raw` stays as an old backup and stops growing.
 
-6. **Drop the GitHub schedule** (Claude, in a PR): `snapshot.yml` keeps only **Run workflow**, as a manual fallback for a day Cloud Run is down, and `pipeline/cron.py` goes. **Keep** the three `FH_R2_*` secrets in the `prod` environment: they're that fallback's own R2 token, now used by GitHub alone, since the laptop and Cloud Run have their own.
+6. **Done 2026-11-16 (PR #19).** **Drop the GitHub schedule** (Claude, in a PR): `snapshot.yml` keeps only **Run workflow**, as a manual fallback for a day Cloud Run is down, and `pipeline/cron.py` goes. **Keep** the three `FH_R2_*` secrets in the `prod` environment: they're that fallback's own R2 token, now used by GitHub alone, since the laptop and Cloud Run have their own.
 
 ## Later: protecting the history from deletion (part 5)
 
 An R2 bucket lock stops anyone deleting or overwriting objects, even with a leaked key: our keys can't change bucket settings. It has to cover only the **public** datasets (`espn/players_projections/`, `sleeper/projections_season/` and the rest), not `espn/leagues/` or `sleeper/leagues/`: a beta friend must be able to have their league data deleted. Locks are set per prefix, one rule per dataset, so part 5 sets them alongside the backups.
 
-**Rolling back:** before step 5 there's nothing to undo; the laptop never stopped saving to its own disk. After step 5, delete the `FH_RAW_STORE=r2` line and reinstall the schedule (`scripts/snapshot-schedule.sh install`).
+**Rolling back:** the laptop's schedule can be put back with `scripts/snapshot-schedule.sh install` (it saves to `data/raw`, which `fh raw upload` then copies to R2); GitHub's can't (it was removed because it ran hours late), and **Actions → Snapshot → Run workflow** is the manual fallback. After step 4, delete the `FH_RAW_STORE=r2` line and reinstall the schedule (`scripts/snapshot-schedule.sh install`).

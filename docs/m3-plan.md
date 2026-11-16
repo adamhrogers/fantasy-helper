@@ -9,7 +9,7 @@ This is the plan for everything between "part 2 is merged" and "M3 is done": six
 | Phase | What | Status |
 |---|---|---|
 | **0** | Finish part 2's rollout: leagues in prod, history loaded, first chained morning | **Done (2026-11-16).** All 11 runbook steps are ticked; the chain ran on its own at 06:17 on 2026-11-16 (snapshot, `daily`, `weekly` all succeeded by 06:20) |
-| **1** | End the snapshot overlap: retire launchd and the GitHub schedule | **3 of 4 on-time runs done** (2026-11-15 06:17 and 17:17, 2026-11-16 06:17); the fourth is the evening of 2026-11-16. The Healthchecks condition is met. Then Adam's go-ahead |
+| **1** | End the snapshot overlap: retire launchd and the GitHub schedule | **Done 2026-11-16** except Adam's three laptop steps (upload the last copies, the laptop's own R2 key, `FH_RAW_STORE=r2`). He ended it after 3 of 4 on-time runs; the Mac's schedule is removed and GitHub's is dropped (PR #19) | Adam: runbook section 5, steps 2 to 4 |
 | **2** | Part 3: the API on Cloud Run, sign-in checked, reports served | Code written on branch `m3-part3-api` (pushed, no PR, held until the cloud setup is done); Adam's inputs and the cloud setup still to do |
 | **3** | Part 4: the phone app | Not started |
 | **4** | Part 5a: push ("your report is ready") | Not started |
@@ -40,7 +40,7 @@ Part 2 went this way on 2026-11-15 and its first deploy passed without a fallbac
 Each line was read from the system itself, not from a doc. The section below it is the record from the day before.
 
 - **The morning chain ran on its own.** `snapshot-morning` started at 06:17:05 Eastern (22 seconds, 9 of 9 datasets), started `daily` (06:17:30 to 06:19:10), which started `weekly` (06:19:10 to 06:20:24). All three succeeded, with no league errors. Nobody pressed anything: this is the proof of the hand-over and of the permissions, from the scheduler.
-- **The overlap count is 3 of 4:** 2026-11-15 06:17 and 17:17, and 2026-11-16 06:17, all on the minute. The fourth is 17:17 on 2026-11-16. The Healthchecks schedules are set by the script, and all four checks showed recent, on-time pings.
+- **The overlap count was 3 of 4, and Adam ended it there** (2026-11-16): 2026-11-15 06:17 and 17:17, and 2026-11-16 06:17, all on the minute. He removed the Mac's schedule and PR #19 dropped GitHub's, so Cloud Run is the only timer. The Healthchecks schedules are set by the script, and all four checks showed recent, on-time pings.
 - **What the run summaries' numbers mean:** `daily` loaded 192 box scores and 4,482 projection rows (everything new since the last load: Sunday's games, and three snapshot sets, two of them GitHub's late copies and one this morning's). `weekly` then loaded 0 and 0, because `daily` had just loaded it all. That is the designed behavior, and PR #17's fix at work: loading the same data twice writes nothing.
 - **What the weekly report said** (from the job's log): the ESPN points league got a win chance, a startable-games card, three add/drop suggestions and a below-replacement card; the lock-in league got a win chance (a fresh week has no locks to hide), a games card and a below-replacement card; the categories league got only the games card, as expected until P9.
 - **Runbook steps 7, 9, 10 and 11 are done** (the secrets are out of GitHub's `prod` environment).
@@ -107,6 +107,8 @@ Phase 0  part 2 rollout ──► Phase 1  end the overlap          (rollout; da
 **Done when:** one chained morning ran end to end in prod (by hand on 2026-11-15 or on its own on 2026-11-16), both reports open from prod, the four Healthchecks checks show the Eastern schedules, and steps 10 and 11 are ticked. Then tick the runbook and update the handoff. **Met on 2026-11-16.**
 
 ## Phase 1: end the snapshot overlap
+
+**Status 2026-11-16: done except three steps on Adam's laptop.** Adam ended the overlap after 3 of the 4 on-time runs, without waiting for the fourth. Launchd is removed (`scripts/snapshot-schedule.sh status`: not installed for both) and the GitHub schedule, `pipeline/cron.py` and the `--cron` option are gone (PR #19). What's left is [runbooks/cloud-snapshots.md](runbooks/cloud-snapshots.md) section 5, steps 2 to 4: `fh raw upload`, a laptop-only R2 key, and `FH_RAW_STORE=r2` in `.env`. The text below is the plan as written.
 
 **Goal:** one scheduler, one cloud copy, the laptop free to be closed. Steps: [runbooks/cloud-snapshots.md](runbooks/cloud-snapshots.md), section 5.
 

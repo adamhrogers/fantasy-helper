@@ -8,7 +8,7 @@ Values live in **Bitwarden** and in the places listed below, never in this repo 
 
 | Service | What it does for us | Since |
 |---|---|---|
-| **GitHub** `adamhrogers/fantasy-helper` (public) | Code, CI, the deploy to Google Cloud (`deploy.yml`, keyless), a late spare copy of the snapshot until the overlap ends, a few production secrets in the `prod` environment (usable only from `main`), Dependabot. `main` has a ruleset that requires CI (ADR 0024) | M0. `prod` and the ruleset: 2026-11-07 |
+| **GitHub** `adamhrogers/fantasy-helper` (public) | Code, CI, the deploy to Google Cloud (`deploy.yml`, keyless), a manual fallback for the snapshot (**Run workflow**; its schedule was dropped 2026-11-16), a few production secrets in the `prod` environment (usable only from `main`), Dependabot. `main` has a ruleset that requires CI (ADR 0024) | M0. `prod` and the ruleset: 2026-11-07 |
 | **Supabase** | Postgres databases, and from part 3 the app's sign-in. Two projects: dev (`us-east-1`), and prod, created per setup §2 as `fantasy-helper-prod` in `us-east-1`; the deploy migrated it to 0006 on 2026-11-15, and `scripts/fh-prod.sh doctor` names its region. The free plan allows two, so both slots are used | Dev: M0. Prod: 2026-11-07 |
 | **Cloudflare** | R2 bucket `fantasy-helper-raw`: raw snapshots and league responses, later the season archives and backups. Pages hosts the phone app from part 4 | 2026-11-07 |
 | **LangSmith** | Traces of every model call (rule 3), and the doctor's smoke trace | M0 |

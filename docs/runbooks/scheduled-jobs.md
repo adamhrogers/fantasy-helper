@@ -43,7 +43,7 @@ gcloud scheduler jobs run snapshot-evening --location us-east4
 
 - [x] **6. Adam: the Healthchecks schedules** (typed in on 2026-11-14 and **saved in UTC**, the website's default, which raised a false "down" alert for the evening snapshot that night). Since 2026-11-15 they're set by `scripts/healthchecks-setup.sh`, from `scripts/jobs.conf`, always in `America/New_York` ([prod-database.md](prod-database.md), step 9). Don't type a schedule into the website.
 
-Then the overlap in [cloud-snapshots.md](cloud-snapshots.md) continues, with Cloud Run as the cloud copy.
+Cloud Run is now the only snapshot timer: the overlap in [cloud-snapshots.md](cloud-snapshots.md) ended on 2026-11-16.
 
 ## Day to day
 
@@ -79,7 +79,7 @@ gcloud scheduler jobs run snapshot-morning --location us-east4
 
 ## Pausing
 
-Stops the schedule but keeps the job (for example, if a run keeps failing). The laptop keeps saving during the overlap.
+Stops the schedule but keeps the job (for example, if a run keeps failing). With the laptop's schedule gone, a paused snapshot job means no snapshot that day (rule 8): run the manual fallback (**Actions → Snapshot → Run workflow**) or resume the job before the next tip-off.
 
 ```bash
 gcloud scheduler jobs pause snapshot-evening --location us-east4

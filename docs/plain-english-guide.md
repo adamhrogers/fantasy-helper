@@ -114,7 +114,7 @@ ESPN and Sleeper give the same player different ID numbers. A part of the system
 - **Dependabot** is a bot that proposes small updates to the libraries the code uses, and most merge on their own once the tests pass.
 
 ### Your laptop
-Your laptop still saves its own copy of the snapshots at 06:30 and 17:30, as a backup, until the cloud has proven reliable (four on-time scheduled runs in a row; three are done, and the fourth is the evening of 2026-11-16; the count is in `m3-plan.md`). Then the laptop job and GitHub's late spare copy are switched off. The laptop is also where you run `fh` commands.
+Your laptop used to save its own copy of the snapshots at 06:30 and 17:30, as a backup while the cloud proved itself. It did (the cloud jobs started on the minute three times in a row), so on 2026-11-16 you switched the laptop's job off, and GitHub's late spare copy went too. The cloud is now the only thing that saves them, and the phone alerts you if a run doesn't start. The laptop is still where you run `fh` commands.
 
 ## 4. The `fh` commands
 
