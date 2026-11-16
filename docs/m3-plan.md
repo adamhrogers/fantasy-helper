@@ -45,7 +45,7 @@ Each line was read from the system itself, not from a doc. The section below it 
 - **What the weekly report said** (from the job's log): the ESPN points league got a win chance, a startable-games card, three add/drop suggestions and a below-replacement card; the lock-in league got a win chance (a fresh week has no locks to hide), a games card and a below-replacement card; the categories league got only the games card, as expected until P9.
 - **Runbook steps 7, 9, 10 and 11 are done** (the secrets are out of GitHub's `prod` environment).
 - **PR #17 (box-score upserts write only changed rows) merged on 2026-11-15** (`3e9eff9`). The database was 45 MB of 500 MB after the history load, about 12 MB of it bloat from re-saving unchanged box scores; `VACUUM FULL player_game_stats` reclaims it (Adam's command; not confirmed run). Details: [session-handoff.md](session-handoff.md) §7.
-- **A finding to chase (does not block a phase):** one day's startable count in the weekly report was one lower than the league's real lineup. Candidates and how to find it: [session-handoff.md](session-handoff.md) §7, "Found on 2026-11-16".
+- **A finding to chase (does not block a phase):** one day's startable count in the weekly report was one lower than the league's real lineup. Candidates and how to find it: [session-handoff.md](session-handoff.md) §7, "Found on 2026-11-16". **Started the same day (PR 21):** the weekly report now names who each day's count left out and why, and players who aren't expected to play no longer count; read the next weekly report for the cause.
 
 ## Where things stand (as first checked 2026-11-15, about 09:45 Eastern)
 
@@ -313,7 +313,7 @@ The dates in roadmap v0.5 assumed M3 would end on 2026-11-12. It won't end befor
 | 4 | Weekly overview notifies on Mondays only | Yes | Phase 4 |
 | 5 | A separate, locked bucket for backups | Yes | Phase 5 |
 | 6 | Google Cloud's project ID and number show in the public deploy logs (GitHub prints environment variables; the repo itself doesn't hold them) | Accept: they identify, they don't grant, and deploys are tied to this repo, branch and workflow. To hide them anyway, store them as `prod` secrets instead of variables | Any time |
-| 7 | Where the smarter weekly planner goes (roadmap, "Direction: a smarter weekly planner") | The smallest piece first (show who's counted each day and check it against the league's lineup), as a lane beside Phase 3 or 4; the day-by-day planning beside M4 | Before M4 starts |
+| 7 | Where the smarter weekly planner goes (roadmap, "Direction: a smarter weekly planner") | **Decided 2026-11-16 (Adam): start now.** The smallest piece is built (PR 21: the report says who each day's count left out and why); the day-by-day planning stays beside M4 | Done for the first piece |
 
 ## Outside facts (checked 2026-11-15)
 

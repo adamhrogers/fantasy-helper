@@ -27,8 +27,8 @@ class WeekProjection:
     started: dict[UUID, tuple[date, ...]]  # the days each player would be started
     points: float  # expected points from started games
     variance: float  # sum of started games' variances (games treated as independent)
-    games: int  # games on the roster this week
-    startable: int  # games that fit in a starting slot
+    games: int  # games on the roster this week that his player is expected to play
+    startable: int  # of those, games that fit in a starting slot
 
     def started_games(self, player_id: UUID) -> int:
         return len(self.started.get(player_id, ()))
@@ -69,7 +69,10 @@ def project_week(players: Sequence[PlayerWeek], slots: Sequence[RosterSlot]) -> 
     startable = 0
     for day in sorted(by_day):
         entries = by_day[day]
-        chosen = fill_day([(pid, pos, ev) for pid, pos, ev, _ in entries], day_slots)
+        # A player who isn't expected to play (play probability 0) can't fill a slot: he'd score
+        # nothing, and counting him would inflate the startable games.
+        playing = [(pid, pos, ev) for pid, pos, ev, dist in entries if dist.play_probability > 0]
+        chosen = fill_day(playing, day_slots)
         for pid, _, _, dist in entries:
             if pid in chosen:
                 started.setdefault(pid, []).append(day)
@@ -82,6 +85,6 @@ def project_week(players: Sequence[PlayerWeek], slots: Sequence[RosterSlot]) -> 
         started={pid: tuple(days) for pid, days in started.items()},
         points=points,
         variance=variance,
-        games=sum(len(pw.games) for pw in players),
+        games=sum(1 for pw in players for _, dist in pw.games if dist.play_probability > 0),
         startable=startable,
     )
