@@ -1,7 +1,7 @@
 # Session handoff: everything a new session needs
 
 **Last updated:** 2026-11-15, during M3. Parts 1 and 2 are merged (PRs #4, #12, #14, #16); part 2's rollout is half done; parts 3 to 5 are planned, not started. **Now: [docs/m3-plan.md](m3-plan.md)**, the phased plan for the rest of M3, starting with Phase 0 (finish the rollout, which has a deadline of 06:17 Eastern on 2026-11-16).
-**Read this first**, then `docs/m3-plan.md` (what to do next, in order), `CLAUDE.md` (rules), `docs/roadmap.md` (milestones), `docs/architecture.md` (design) and `docs/decisions/` (ADRs). This file is the narrative glue: what exists, how we work, what we learned the hard way, and exactly what comes next.
+**Read this first** (and [plain-english-guide.md](plain-english-guide.md) if you want the whole project explained without jargon), then `docs/m3-plan.md` (what to do next, in order), `CLAUDE.md` (rules), `docs/roadmap.md` (milestones), `docs/architecture.md` (design) and `docs/decisions/` (ADRs). This file is the narrative glue: what exists, how we work, what we learned the hard way, and exactly what comes next.
 
 The repo is **public**, so this file holds no secrets or personal data. League names and IDs, the owner's email, the Supabase project ID and the ntfy topic live in `.env` and the database. `uv run fh league list` shows the leagues.
 
