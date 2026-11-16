@@ -20,6 +20,8 @@ uv run fh raw upload [--dry-run]          # copy local raw snapshots to R2 (neve
 uv run fh ingest                          # load leagues + snapshots into the database (idempotent)
 uv run fh migrate                         # bring DATABASE_URL's schema to head (the deploy runs this in the cloud)
 uv run fh report open [weekly]            # show the latest report saved in the database
+uv run fh serve                           # the phone app's API (Cloud Run runs this; needs DATABASE_URL and FH_SUPABASE_URL)
+uv run fh openapi > web/openapi.json      # the API's committed schema (a test fails when it drifts)
 uv run fh run daily [--dry-run] [--open]  # ingest, lock-or-pass calls (logged), recap cards, daily report page
 uv run fh run weekly [--open]             # ingest, weekly overview per league (FactSheets, calls)
 uv run fh fixtures record                 # re-record redacted fixtures (then update contract test counts)
@@ -27,6 +29,7 @@ scripts/snapshot-schedule.sh status       # snapshot schedule state and logs
 scripts/fh-prod.sh league add ...         # ONE fh command against prod (league|report|doctor only); secrets never touch disk
 scripts/fh-sql.sh "select ..."            # look at prod through the read-only login (docs/runbooks/read-only-access.md)
 scripts/readonly-setup.sh                 # create or refresh that login (once, and after a migration adds a table)
+scripts/api-smoke.sh https://<api>        # signs in through Supabase and checks every API route; prints statuses and counts only
 scripts/gcp-setup.sh infra|schedule|show  # Google Cloud: accounts, secrets, jobs, schedules (docs/runbooks/scheduled-jobs.md)
 scripts/healthchecks-setup.sh             # set the Healthchecks schedules from scripts/jobs.conf (always Eastern)
 ```

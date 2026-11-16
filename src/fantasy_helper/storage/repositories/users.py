@@ -1,4 +1,7 @@
-from sqlalchemy import select
+from uuid import UUID
+
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from fantasy_helper.domain.users import Role, User
@@ -39,3 +42,25 @@ def create(session: Session, user: User) -> User:
     )
     session.flush()
     return user
+
+
+def get_by_auth_id(session: Session, auth_user_id: UUID) -> User | None:
+    row = session.scalar(select(UserRow).where(UserRow.auth_user_id == auth_user_id))
+    return _to_domain(row) if row else None
+
+
+def link_auth_id(session: Session, auth_user_id: UUID, email: str) -> User | None:
+    """Tie a Supabase sign-in to the user with this email, the first time it arrives (ADR 0029).
+    Only a user with no sign-in yet can be linked, so a second sign-in with the same email can't
+    take over a user who already has one. Returns the user, or None when there's nobody to link."""
+    try:
+        with session.begin_nested():
+            row = session.scalar(
+                update(UserRow)
+                .where(UserRow.auth_user_id.is_(None), UserRow.email == email.strip().lower())
+                .values(auth_user_id=auth_user_id)
+                .returning(UserRow)
+            )
+    except IntegrityError:  # this sign-in id already belongs to someone else
+        return None
+    return _to_domain(row) if row else None

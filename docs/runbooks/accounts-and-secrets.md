@@ -55,6 +55,8 @@ Values live in **Bitwarden** and in the places listed below, never in this repo 
 
 ## Coming in M3 parts 3 to 5 (planned names; [m3-plan.md](../m3-plan.md))
 
+**The first three rows belong to the API (Phase 2, [ADR 0029](../decisions/0029-the-phone-apps-api.md)):** `scripts/gcp-setup.sh infra` creates the `fh-api` account and the empty secrets, you fill them with `scripts/gcp-secrets.sh` ([phone-app.md](phone-app.md)), and only `fh-api` can read them. They are not in use until Phase 2 deploys.
+
 | Secret (Secret Manager) | Holds | Read by | Part |
 |---|---|---|---|
 | `fh-api-database-url` | Prod's database, the **transaction pooler** (port 6543) | `fh-api` | 3 |

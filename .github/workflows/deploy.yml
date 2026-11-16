@@ -1,4 +1,4 @@
-# Builds the image and deploys the Cloud Run jobs (ADR 0025, 0026, 0027). Cloud Scheduler starts
+# Builds the image and deploys the Cloud Run jobs and the phone app's API (ADR 0025, 0026, 0027, 0029). Cloud Scheduler starts
 # the scheduled ones on the minute; this workflow only ships new code, and migrates the database
 # before the jobs that use the new schema. No key file exists: GitHub proves who
 # it is to Google with a short-lived token (Workload Identity Federation), accepted only from
@@ -32,7 +32,7 @@ concurrency:
 
 jobs:
   deploy:
-    name: Build and deploy the scheduled jobs
+    name: Build and deploy the jobs and the API
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: prod
@@ -48,12 +48,16 @@ jobs:
       # key; only the report jobs (and the migration) can reach the database and league logins.
       JOBS_SA: fh-jobs@${{ vars.GCP_PROJECT }}.iam.gserviceaccount.com
       REPORTS_SA: fh-reports@${{ vars.GCP_PROJECT }}.iam.gserviceaccount.com
+      # The API has its own account and its own three secrets (ADR 0029): no encryption key, no R2.
+      API_SA: fh-api@${{ vars.GCP_PROJECT }}.iam.gserviceaccount.com
       # Setting = Secret Manager secret (config/settings.py). Values never pass through GitHub:
       # each job reads them from Secret Manager when it starts.
       SNAPSHOT_SECRETS: >-
         FH_R2_ENDPOINT=fh-r2-endpoint:latest,FH_R2_ACCESS_KEY_ID=fh-r2-access-key-id:latest,FH_R2_SECRET_ACCESS_KEY=fh-r2-secret-access-key:latest,FH_NTFY_TOPIC=fh-ntfy-topic:latest,FH_HEALTHCHECKS_PING_KEY=fh-healthchecks-ping-key:latest
       DATABASE_SECRETS: >-
         DATABASE_URL=fh-database-url:latest,FH_ENCRYPTION_KEY=fh-encryption-key:latest
+      API_SECRETS: >-
+        DATABASE_URL=fh-api-database-url:latest,FH_SUPABASE_URL=fh-supabase-url:latest,FH_APP_ORIGINS=fh-app-origins:latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
@@ -134,3 +138,12 @@ jobs:
           gcloud run jobs execute migrate --project "$PROJECT" --region "$REGION" --wait
           deploy daily "$REPORTS_SA" "$REPORT_SECRETS" run,daily,--require-snapshot-today 30m 1Gi weekly
           deploy weekly "$REPORTS_SA" "$REPORT_SECRETS" run,weekly,--require-snapshot-today 30m 1Gi -
+
+          # The API moves last, after the migration, so it never runs ahead of its schema. It is
+          # public at the platform and checks every token itself (ADR 0029), and that public
+          # access was granted once by the owner (scripts/gcp-setup.sh): the deployer can't
+          # change IAM, so this command passes no public-access flag, on purpose.
+          gcloud run deploy api --project "$PROJECT" --region "$REGION" --quiet \
+            --image "$IMAGE" --service-account "$API_SA" --set-secrets "$API_SECRETS" \
+            --args serve --min-instances 0 --max-instances 2 --cpu 1 --memory 512Mi \
+            --timeout 30 --port 8080 --set-env-vars FH_ENV=prod,FH_LOG_JSON=true

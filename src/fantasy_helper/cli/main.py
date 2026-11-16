@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from fantasy_helper import __version__
 from fantasy_helper.adapters._http import make_client
 from fantasy_helper.adapters.espn.public import GAME_LOG_DEPTH
-from fantasy_helper.cli import fixtures, leagues, raw, report, run
+from fantasy_helper.cli import fixtures, leagues, raw, report, run, serve
 from fantasy_helper.cli._common import REPORTED_EXIT, alert_crash, fail, watched
 from fantasy_helper.cli._runs import start_next
 from fantasy_helper.cli.doctor import Check, Status, run_checks
@@ -54,6 +54,8 @@ app.add_typer(run.app, name="run")
 app.add_typer(raw.app, name="raw")
 app.add_typer(report.app, name="report")
 app.command("ingest")(ingest_command)
+app.command("serve")(serve.serve)
+app.command("openapi")(serve.openapi)
 app.command("sql")(sql_command)
 
 _SYMBOLS = {Status.OK: "✓", Status.SKIP: "-", Status.FAIL: "✗"}
