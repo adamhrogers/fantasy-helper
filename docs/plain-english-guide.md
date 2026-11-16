@@ -168,6 +168,7 @@ The reports exist but are stuck in the database, and only your laptop can pull t
 | **M6** | Grading and the scorecard: how good were its calls, with graphs over time. |
 | **M7** | The friends beta: invite a few friends to use it. |
 | **M8** | A panel of specialist AIs, kept only if they beat a single AI at being right. |
+| **The buddy** | The long-term main goal (your words, 2026-11-15): a chat you can talk to all the time. You give it opinions, it remembers them as takes that get graded, and the grading keeps it honest. Placement is proposed in the roadmap, waiting on you. |
 | After | Trade tracking, 9-category leagues, then the end-of-season case study. |
 
 Target for the friends beta is **early to mid-December** (hard stop **15 December**). The exact dates are proposed in the roadmap and wait for your confirmation.

@@ -16,6 +16,8 @@ A fantasy basketball assistant for Adam (customer one), then a friends beta, the
 - **Evidence over opinion.** Every call is logged before tip-off and never edited; inputs are versioned snapshots; grades come later, against a baseline.
 - **Adapters isolate platforms.** ESPN's API is unofficial; when it changes, only `adapters/espn/` changes.
 
+**The long-term goal (Adam, 2026-11-15):** the daily and weekly reports are the first deliverable, not the finish line. The main thing he wants is **a chat buddy he can talk to all the time**, about players, moves and his own opinions, that remembers what he tells it. The data we collect and his opinions are what it works from, and the grading loop keeps it honest. See "The buddy" in `docs/roadmap.md`: the foundations are in the design, the memory design and the placement are proposals waiting on his OK. Don't build chat before M4's tool server and brain exist, and don't let it write to the call log: opinions become confirmed, gradable takes.
+
 ## 2. Where things stand (2026-11-15)
 
 | Milestone | Status |

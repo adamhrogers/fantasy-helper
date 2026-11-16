@@ -195,6 +195,20 @@ The lanes as built and planned (the first version of this table had a magic link
 
 ---
 
+## The buddy: a chat you can talk to all the time (stated 2026-11-15, placement proposed)
+
+**Adam's words, 2026-11-15:** a chatbot "like a buddy that you can talk to all the time" is "very important", and "the weekly and daily report is just the deliverable right now, but that is the main thing that I want in the future." He talks to it about players and moves, gives his opinions, and it remembers them. The design in his head: **the data we collect plus his opinions are what the agent works from, and the grading is the loop that keeps it honest.**
+
+**Where this stands in the docs before today:** the pieces for it were designed in (ADR 0003 and 0020: one read-only tool server and a fast read path "for the future chat"; a Chat tab marked "later" in the app layout), but chat itself was listed under "not in version 1", to ship only if the report card supported it. That is superseded: it is now a goal. What is **not** yet designed is how the chat remembers what he says.
+
+**Proposal (waiting on Adam's OK):** chat is a milestone of its own, and it reuses everything M3 to M6 already build.
+- **It needs, and gets, the same foundations:** the collected data and the engine (done), the call log, the API and phone app (M3), the read-only tool server and the AI brain (M4), and takes and the watchlist (M5). Chat is a second front door onto the same brain, not a second system.
+- **Memory = his opinions as takes.** When he says "I think Player X is going to break out", the chat proposes a take (player, direction, how long, how sure) and he confirms it. Code then saves it. This keeps two existing rules: tools stay read-only, so the AI never writes to the record by itself (ADR 0003), and saved opinions are never edited, only superseded, so they can be graded later (ADR 0013). Casual remarks that aren't confirmed takes can go into a plain notes memory that the chat may read but that is never graded.
+- **The loop = the grading.** His takes and the app's calls are graded the same way (M6). The chat can then say honestly "your last four takes on rookies were right, your calls on bigs were wrong", and the brain's prompts can be tuned against graded history.
+- **First version, for Adam only:** after M4 and M5. Text chat in the app, reading the day's facts, his takes and the call history, able to propose takes. Voice, proactive messages ("you should look at this") and shared chats for friends come later.
+- **Two things to design on purpose:** the buddy must not just agree with him (a built-in skeptic voice, which is the Skeptic and Your Voice agents of M8, pulled forward in simple form); and every message costs money and time, so it needs a monthly spend cap and probably an always-warm service (ADR 0020 deferred that decision to "when chat ships").
+- **Timeline effect:** chat v0 fits between M5 and the beta only if the other pieces hold their dates; otherwise it follows the beta. Adam decides which.
+
 ## M6 — Grading and timeline graphs · about Nov 29–Dec 4, or Dec 4–9
 
 | Lane | Work |
@@ -240,7 +254,7 @@ The lanes as built and planned (the first version of this table had a magic link
 
 ## P10 — Iterate on evidence · Jan 1–Mar 15
 
-Monthly deep dive on the five weakest cells → improvement tickets with traces attached → fix → replay. The rest of the spec's "not in version 1" list (evening report, ghost moves, chat) ships only if the report card and feedback support it.
+Monthly deep dive on the five weakest cells → improvement tickets with traces attached → fix → replay. The rest of the spec's "not in version 1" list (evening report, ghost moves) ships only if the report card and feedback support it. **Chat is no longer on that list:** Adam made it a core goal on 2026-11-15 (see "The buddy" above).
 
 ## P11 — Season close and case study · Mar 15 →
 
