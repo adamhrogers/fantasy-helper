@@ -254,6 +254,26 @@ What keeps the door open, so it isn't rebuilt later:
 
 **Done when (proposed):** for a real week in each points league, the plan lists the lineup and the moves day by day, its daily counts match the league's own, and Adam either agrees with it or can see exactly why it differs from what he would do.
 
+## Direction: a daily report that says what happened in each league (stated 2026-11-16, placement proposed)
+
+**Adam's point:** the morning report should tell him what happened, in every league, not only give lock calls for the one lock-in league. Today the daily report holds only lock-or-pass cards (plus a recap) for lock-in leagues, so a league on another format gets no daily card at all.
+
+**What he wants, for every league, in that league's own scoring (rule 9):**
+- **Last night across the league:** the standout performances, the free-agent and waiver pickups that did well, and what was expected against what wasn't.
+- **His own team:** who did well, who did badly, measured against the projection.
+- **The matchup:** the points he scored that day, the points his opponent scored, and the matchup total so far.
+- **Lock-in leagues, on top of that:** the lock-or-pass calls stay the core. They also need to weigh what the **opponent** has locked, which the app can't see (the matchup response carries weekly points per player and no lock flags, session-handoff §5). The engine should treat the unseen part as uncertainty and not guess, and where the matchup stands should shape how much risk a call takes (this is lock-in v2's matchup-aware risk, M5 lane C). Whether the opponent's displayed points count only locked games is checkable with real data once a week has games; check before relying on it.
+
+**Telling the app a player is locked.** Locks can't be read from the platform, so the app learns them from the user: the one-tap "I locked" and "I passed" button on a lock card, planned in M5 lane C. Until it exists, a card can recommend a player Adam already locked. It needs a small table, an API route and the button, so it follows the API and the app (M3 parts 3 and 4).
+
+**Principles, unchanged:** code computes every number (points, ranks, expected against actual); the brain (M4) only writes the narrative around them. An engine-only version of these cards, plain facts with no model, is useful on its own and can come first. Each kind of card is a block the customizable-reports direction can switch on and off.
+
+**Where it lands (proposed, waiting on Adam; m3-plan.md decisions 8 and 9):** the engine-only "what happened" cards are engine, facts and reports work with no files shared with the app or the API, so they can run as a lane beside M3's Phases 3 to 5 and be ready for the phone's Today tab; the lock button moves up from M5 to right after the app's first deploy.
+
+**Done when (proposed):** for a real morning in each league, the report says what happened last night in that league's scoring, his day's points and his opponent's match the platform's own daily totals, and in a lock-in league a card never recommends a player Adam has already locked.
+
+---
+
 ## M6 — Grading and timeline graphs · about Nov 29–Dec 4, or Dec 4–9
 
 | Lane | Work |
