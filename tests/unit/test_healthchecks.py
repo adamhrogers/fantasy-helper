@@ -5,6 +5,7 @@ from fantasy_helper.config import Settings
 from fantasy_helper.observability import healthchecks
 from fantasy_helper.observability.healthchecks import (
     MAX_BODY,
+    RETRY_DELAYS,
     HealthchecksHeartbeat,
     NoHeartbeat,
     heartbeat_from_settings,
@@ -31,10 +32,16 @@ def log(monkeypatch: pytest.MonkeyPatch) -> _Log:
     return recorder
 
 
-def _heartbeat(handler: httpx.MockTransport) -> HealthchecksHeartbeat:
+def _heartbeat(
+    handler: httpx.MockTransport, sleeps: list[float] | None = None
+) -> HealthchecksHeartbeat:
     client = httpx.Client(transport=handler)
     return HealthchecksHeartbeat(
-        server="https://hc.example/", ping_key=KEY, slug="snapshot-morning", client=client
+        server="https://hc.example/",
+        ping_key=KEY,
+        slug="snapshot-morning",
+        client=client,
+        sleep=(sleeps if sleeps is not None else []).append,  # never really waits
     )
 
 
@@ -75,6 +82,54 @@ def test_a_failed_ping_never_fails_the_run_or_logs_the_key(
     _heartbeat(transport).success()
     assert [e["event"] for e in log.events] == ["healthchecks_ping_failed"]
     assert KEY not in repr(log.events)
+
+
+def test_a_dropped_connection_is_retried_so_one_blip_doesnt_look_like_a_dead_job(log: _Log) -> None:
+    """2026-11-17: the evening snapshot saved everything, its closing ping hit one dropped
+    connection, and Healthchecks reported it down 30 minutes later."""
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise httpx.RemoteProtocolError("server disconnected", request=request)
+        return httpx.Response(200)
+
+    sleeps: list[float] = []
+    _heartbeat(httpx.MockTransport(handler), sleeps).success()
+    assert calls == 2
+    assert sleeps == [RETRY_DELAYS[0]]
+    assert log.events == []
+
+
+def test_retries_stop_after_three_tries_and_the_log_says_how_many(log: _Log) -> None:
+    calls = 0
+
+    def handler(_r: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(503)
+
+    sleeps: list[float] = []
+    _heartbeat(httpx.MockTransport(handler), sleeps).success()
+    assert calls == 3
+    assert sleeps == list(RETRY_DELAYS)
+    assert [(e["status"], e["attempts"]) for e in log.events] == [(503, 3)]
+
+
+def test_a_bad_key_is_not_retried(log: _Log) -> None:
+    calls = 0
+
+    def handler(_r: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(404)
+
+    sleeps: list[float] = []
+    _heartbeat(httpx.MockTransport(handler), sleeps).success()
+    assert (calls, sleeps) == (1, [])
+    assert [(e["status"], e["attempts"]) for e in log.events] == [(404, 1)]
 
 
 def test_no_ping_key_means_no_pings() -> None:
