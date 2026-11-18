@@ -52,6 +52,7 @@ Nothing to do. **An occasional double start is expected:** Cloud Scheduler deliv
 When something goes wrong:
 - **The run's own alerts** (degraded, failed, crashed) come from the app on the prod topic, as before, and say what went wrong.
 - **Healthchecks** alerts on the prod topic when a run is **late, missing, stuck, or exits with any failure**. A degraded run therefore alerts twice, on purpose: if the app's own alert couldn't be sent, this one still arrives. The check goes back up on the next clean run.
+- **A "down" for a job whose log says it succeeded** means its closing ping never arrived (2026-11-17: one dropped connection). Pings now retry twice (1 s, then 4 s) before giving up; a ping that still fails logs `healthchecks_ping_failed` with the error type, HTTP status and attempts. A failed ntfy send logs `run_event_send_failed` with the HTTP status (429 is a rate limit, 5xx is ntfy's side).
 
 ## Checking
 

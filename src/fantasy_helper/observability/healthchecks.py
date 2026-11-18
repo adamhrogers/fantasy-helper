@@ -9,11 +9,18 @@ A degraded run therefore pings `fail` even though its own events already alerted
 alert is deliberate: run events never let a failed send break a run, so "the app reported it"
 can mean nobody was told (ntfy down), and the watchdog is the one alert that doesn't depend on it.
 
+A single dropped connection on the closing `success` ping would look like a dead job (2026-11-17:
+a false "down" at 17:47 after a snapshot that had saved everything), so a ping that fails to
+connect or gets a server error is tried again, a few times, before it is given up on.
+
 The ping URL holds the project's ping key, so it is never logged, and a failed ping is logged
-by its error type only. **A ping never raises**: a broken watchdog must not cost a snapshot.
+by its error type (and HTTP status, when there was one) only. **A ping never raises**: a broken
+watchdog must not cost a snapshot.
 """
 
+import time
 import uuid
+from collections.abc import Callable
 from typing import Protocol
 
 import httpx
@@ -24,6 +31,14 @@ from fantasy_helper.observability.logs import get_logger
 log = get_logger(__name__)
 
 MAX_BODY = 1000  # Healthchecks keeps up to 10 KB; a short reason is all we send
+RETRY_DELAYS = (1.0, 4.0)  # seconds before the second and third tries: three tries in all
+
+
+def _retryable(exc: Exception) -> bool:
+    """Connection trouble and server errors may pass; a bad key or a 4xx never will."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code >= 500 or exc.response.status_code == 429
+    return isinstance(exc, httpx.TransportError)
 
 
 class Heartbeat(Protocol):
@@ -43,7 +58,9 @@ class HealthchecksHeartbeat:
         slug: str,
         client: httpx.Client | None = None,
         timeout: float = 10.0,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
+        self._sleep = sleep
         self._url = f"{server.rstrip('/')}/{ping_key}/{slug}"
         self._slug = slug
         # One run id pairs this run's start with its end, so Healthchecks shows its duration.
@@ -61,21 +78,32 @@ class HealthchecksHeartbeat:
 
     def _ping(self, suffix: str, body: str) -> None:
         signal = suffix.lstrip("/") or "success"
-        try:
-            response = self._client.post(
-                self._url + suffix,
-                params={"create": "1", "rid": self._rid},
-                content=body[:MAX_BODY].encode(),
-            )
-            response.raise_for_status()
-        except Exception as exc:  # not just httpx.HTTPError: a bad key raises InvalidURL
-            # The exception's text would include the URL, and with it the ping key.
-            log.warning(
-                "healthchecks_ping_failed",
-                check=self._slug,
-                signal=signal,
-                error=type(exc).__name__,
-            )
+        for attempt in range(len(RETRY_DELAYS) + 1):
+            try:
+                response = self._client.post(
+                    self._url + suffix,
+                    params={"create": "1", "rid": self._rid},
+                    content=body[:MAX_BODY].encode(),
+                )
+                response.raise_for_status()
+                return
+            except Exception as exc:  # not just httpx.HTTPError: a bad key raises InvalidURL
+                if attempt < len(RETRY_DELAYS) and _retryable(exc):
+                    self._sleep(RETRY_DELAYS[attempt])
+                    continue
+                # The exception's text would include the URL, and with it the ping key.
+                status = (
+                    exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+                )
+                log.warning(
+                    "healthchecks_ping_failed",
+                    check=self._slug,
+                    signal=signal,
+                    error=type(exc).__name__,
+                    status=status,
+                    attempts=attempt + 1,
+                )
+                return
 
 
 class NoHeartbeat:
