@@ -11,7 +11,7 @@ This is the plan for everything between "part 2 is merged" and "M3 is done": six
 | **0** | Finish part 2's rollout: leagues in prod, history loaded, first chained morning | **Done (2026-11-16).** All 11 runbook steps are ticked; the chain ran on its own at 06:17 on 2026-11-16 (snapshot, `daily`, `weekly` all succeeded by 06:20) |
 | **1** | End the snapshot overlap: retire launchd and the GitHub schedule | **Done 2026-11-16**, laptop steps included (the last copies uploaded, the laptop has its own R2 key, `FH_RAW_STORE=r2`). He ended it after 3 of 4 on-time runs; the Mac's schedule is removed and GitHub's is dropped (PR #19) |
 | **2** | Part 3: the API on Cloud Run, sign-in checked, reports served | **Done 2026-11-16.** Merged (PR #26) and deployed; Adam's cloud setup finished and `scripts/api-smoke.sh` passed every check against the live service: his password sign-in, his 3 leagues, his saved reports, 401 without a token, sign-ups refused. The first smoke run found two things, fixed in PR #28: Cloud Run answers `/healthz` itself, so the health route is `/livez`; and a bare `postgres` user in the API's database secret made every signed-in call fail, so `gcp-secrets.sh` now refuses a pooler URL with no project ref |
-| **3** | Part 4: the phone app | Not started |
+| **3** | Part 4: the phone app | **Built 2026-11-16; PR open, not merged.** `web/` (Vite, React, TypeScript PWA), both tabs, the stale-report banner, password sign-in (the emailed code is built behind a switch), `web.yml`, Dependabot for npm held for a person, ADR 0009 and 0024 Updates, runbook Part 2. Tested against a stand-in for the API and Supabase, with the real service worker, the iPhone install and a live sign-in still unproven until it's deployed. **Adam's steps:** [phone-app.md](runbooks/phone-app.md) Part 2 |
 | **4** | Part 5a: push ("your report is ready") | Not started |
 | **5** | Part 5b: backups, locks, loose ends, the exit test | Not started |
 | **Lane** | The daily "what happened" cards for every league (decision 8; roadmap direction; ADR 0033), beside Phases 2 to 5, engine only | **Merged 2026-11-16** (PR #27, no migration; touches no API, app or schema file). The lock button (decision 9) and lock-in v2 are still to do |
@@ -181,7 +181,7 @@ Phase 0  part 2 rollout ──► Phase 1  end the overlap          (rollout; da
 
 ## Phase 3 (part 4): the phone app
 
-**Goal:** Adam opens the app from his Home Screen, signs in with a code, and reads this morning's Today and This Week. Branch `m3-part4-pwa`.
+**Goal:** Adam opens the app from his Home Screen, signs in with his email and password, and reads this morning's Today and This Week. Branch `m3-part4-pwa`.
 
 ### Decisions for Adam before this phase deploys
 
@@ -190,32 +190,36 @@ Phase 0  part 2 rollout ──► Phase 1  end the overlap          (rollout; da
 
 ### What Adam does (about 15 minutes)
 
-- Node: the laptop has v23.5.0, which should do. If a tool refuses it, install the current LTS from nodejs.org's own installer. **Not Homebrew** (handoff §6).
+- Nothing to install: Cloudflare builds the app. (Node is pinned to 24 in `web/.node-version`; the laptop's v23.5.0 is too old to run the app's tests, so anything run locally uses a standalone Node 24, **never Homebrew**, handoff §6.)
 - In Cloudflare: create the Worker from the GitHub repo (authorize Cloudflare's GitHub app for this one repository), root directory `web`, build command `npm ci && npm run build`, deploy command `npx wrangler deploy`, branch `main`. Add three build variables from Bitwarden: `VITE_API_URL`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`. None is secret (the app ships them), but they stay out of this repo.
 - Add the app's address as `fh-app-origins` (`scripts/gcp-secrets.sh`), then run the Deploy workflow so the API allows it.
-- On the iPhone: open the address in **Safari**, Share → Add to Home Screen, open it from the icon, sign in.
+- On the iPhone: open the address in **Safari**, Share → Add to Home Screen, open it from the icon, sign in with his email and password **inside the Home Screen app** (it has its own storage).
+
+The steps, in order and exact, are [runbooks/phone-app.md](runbooks/phone-app.md) Part 2.
 
 ### Build
 
 1. **`web/`:** Vite, React, TypeScript, `vite-plugin-pwa` in `injectManifest` mode (Phase 4 needs a hand-written service worker for push). `@supabase/supabase-js` for sign-in only. `openapi-typescript` and `openapi-fetch` for a typed client generated from `web/openapi.json`. Pin Node for CI and Cloudflare with `web/.node-version`.
-2. **Sign-in:** email, then the 6-digit code (`inputmode="numeric"`, `autocomplete="one-time-code"`): `signInWithOtp({ email, options: { shouldCreateUser: false } })`, then `verifyOtp({ email, token, type: 'email' })`. No magic link anywhere: a tapped link opens Safari, not the installed app (decided 2026-11-06).
+2. **Sign-in: email and password** (`signInWithPassword`; decided 2026-11-16, Adam), so no email service is needed. **The 6-digit code stays in the code, behind the build variable `VITE_SIGN_IN_WITH_CODE=true`** (off by default; it shows as "Email me a code instead"): `signInWithOtp({ email, options: { shouldCreateUser: false } })`, then `verifyOtp({ email, token, type: 'email' })`, with `inputmode="numeric"` and `autocomplete="one-time-code"`. The beta switches it on once it has a custom email sender and a domain. No magic link anywhere: a tapped link opens Safari, not the installed app (decided 2026-11-06). The app never creates a user.
 3. **Two tabs.** Today (`/v1/reports/daily`) and This Week (`/v1/reports/weekly`), one section per league, one card per decision: title, body, and the reason on its own line. **A card kind the app doesn't know renders as a plain card**, so the API can add kinds without breaking installed apps.
 4. **Honest about freshness.** Each report shows its date and when it was built. If the latest report isn't from today (in the user's time zone, from `/v1/me`), a banner says so. A stale report that looks current is the failure this product can't have.
 5. **Install help:** on iOS Safari outside the installed app, show how to add it to the Home Screen. Manifest with `display: standalone`, icons at 192 and 512 plus a 180 px `apple-touch-icon`, safe-area padding for the tab bar.
 6. **The service worker** precaches the app shell only. Requests to the API always go to the network; nothing signed-in is cached. `sw.js` is served with `Cache-Control: no-cache` so updates land on the next open.
-7. **`web/wrangler.jsonc`:** `assets.directory: "./dist"`, `assets.not_found_handling: "single-page-application"`. Security headers in `web/public/_headers` (a content-security policy that allows the API and Supabase by pattern, not by name). Check first that static assets honor a `_headers` file; if they don't, set the headers the way Cloudflare's docs then say.
+7. **`web/wrangler.jsonc`:** `assets.directory: "./dist"`, `assets.not_found_handling: "single-page-application"`. Security headers from `web/headers.template`, written into `dist/_headers` at build with the exact API and Supabase addresses from the build variables (a content-security policy that allows those two and nothing else; no address lives in the repo). **Checked 2026-11-16:** static assets do honor `_headers` (run with `wrangler dev`: the headers arrive on `/`, the fallback, assets and icons, and `sw.js` is `no-cache`).
 8. **CI:** `.github/workflows/web.yml` on `web/**`: install, typecheck, lint, unit tests (card rendering, the unknown-kind fallback, the stale banner, sign-in states), build, and regenerate the types to prove `openapi.json` is current. Not a required check, like `container.yml`.
 9. **Dependabot:** add the `npm` ecosystem for `/web`, grouped and with the cooldown, and **hold its PRs for a person** (add `^web/` to the held paths in `dependabot-auto-merge.yml`): this code runs with a signed-in session on a phone, and Cloudflare builds it straight from `main`. Record it as an Update to ADR 0024.
 10. **Docs:** ADR 0009 Update, `runbooks/phone-app.md` (install, sign-in, "the app shows yesterday"), repo-structure, the handoff.
 
 ### Traps
 
-- **The app and the API each need the other's address.** Order: Phase 2 deploys the API with no allowed origins; this phase deploys the app; then the origin goes into `fh-app-origins` and the API is redeployed.
+- **The app and the API each need the other's address.** Order: Phase 2 deploys the API with no allowed origins; this phase deploys the app; then the origin goes into `fh-app-origins` and the API is redeployed. The app's three build variables need the API's address first, so Part 2's step 1 comes before the Cloudflare step.
+- **Cloudflare's npm 10 can't install the app's test tools** (an arborist crash on `vitest`). `web/package.json` pins `packageManager: npm@11.x`, which Workers Builds honors; if a build dies on `npm ci`, read which npm it used.
+- **The footer's build id is a hash of the app's sources** (`web/build-id.ts`), not the commit, so Cloudflare's rebuild of every push to `main` doesn't make the service worker look new.
 - **Service workers need HTTPS**, so the installed app can't be tested from the laptop over Wi-Fi. Test in a desktop browser with `npm run dev`, and on the phone at the deployed address. Each merge to `main` deploys.
 - **A broken service worker is sticky.** Keep it small, test an update (deploy twice, see the second version arrive), and never cache the HTML shell with a long lifetime.
 - **Cut line if time is short** (the roadmap's first lever): polish. Plain cards, system font, no animation, no offline copy of the last report. Don't cut the stale banner or the unknown-kind fallback.
 
-**Done when:** on the iPhone, from the Home Screen icon, after a code sign-in, both tabs show the reports the 06:17 chain built that morning; a browser that isn't signed in gets only the sign-in screen; an email that isn't Adam's is refused a code.
+**Done when:** on the iPhone, from the Home Screen icon, after a password sign-in, both tabs show the reports the 06:17 chain built that morning; a browser that isn't signed in gets only the sign-in screen; and the API still refuses a token that isn't Adam's (Phase 2's smoke check). With the emailed code switched on later, an email that isn't a user is refused a code.
 
 ---
 
@@ -336,6 +340,8 @@ Read from each vendor's own documentation on that date. Re-read the one a phase 
 | The built-in email sender reaches only the organization's members, 2 an hour, and isn't for production | supabase.com/docs/guides/auth/auth-smtp | Phase 2, M7 |
 | The publishable key (`sb_publishable_...`) is the one for apps; the old `anon` and `service_role` keys are being retired by the end of 2026 | supabase.com/docs/guides/api/api-keys | Phase 3 |
 | Cloudflare: "Start new projects with Workers"; static assets are served free; `not_found_handling: "single-page-application"`; Workers Builds has a root directory and build variables; custom domains need Cloudflare DNS | developers.cloudflare.com/pages, /workers/static-assets, /workers/ci-cd/builds | Phase 3 |
+| Workers Builds (re-read 2026-11-16): the GitHub app can be limited to "Only select repositories"; the Worker's name in the dashboard must match `name` in the wrangler config; every push to the production branch builds unless **Build watch paths** say otherwise; other branches build by default (previews); build variables are set under Settings → Build; the build reads `.node-version` and the `packageManager` field | developers.cloudflare.com/workers/ci-cd/builds (git-integration, build-watch-paths, configuration) | Phase 3 |
+| Static assets honor a `_headers` file, and `wrangler deploy --dry-run` needs no login (so CI can prove the Worker config offline) | verified by running `wrangler dev` and `--dry-run` locally, 2026-11-16 | Phase 3 |
 | Cloud Run: a public service is made by turning off the invoker check or by granting `allUsers` the invoker role | docs.cloud.google.com/run/docs/authenticating/public | Phase 2 |
 | iOS web push: Home Screen web apps only (16.4+); the prompt needs a tap; every push must show a notification or the permission is revoked; the VAPID subject must be a URL or `mailto:`; payloads up to 4 KB; 410 means the subscription is gone | developer.apple.com, "Sending web push notifications in web apps and browsers" | Phase 4 |
 | `pywebpush` 2.5.0 (2026-08-29), Python 3.10+, maintained | pypi.org/project/pywebpush | Phase 4 |
