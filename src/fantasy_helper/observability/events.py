@@ -156,7 +156,14 @@ class RunEvents:
                 )
             )
         except Exception as exc:  # a notification must never break a run
-            log.error("run_event_send_failed", run_event=event.value, error=type(exc).__name__)
+            # The HTTP status (never the URL or body, which hold the topic) says why ntfy refused.
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            log.error(
+                "run_event_send_failed",
+                run_event=event.value,
+                error=type(exc).__name__,
+                status=status,
+            )
 
 
 def events_from_settings(

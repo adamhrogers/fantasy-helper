@@ -2,8 +2,12 @@
 
 from datetime import UTC, datetime, timedelta
 
+import httpx
+import pytest
+
 from fantasy_helper.domain.ports import Alert, AlertPriority
 from fantasy_helper.domain.runs import RunKind
+from fantasy_helper.observability import events as events_module
 from fantasy_helper.observability.events import RunEvents
 
 
@@ -109,3 +113,40 @@ def test_a_retry_notice_is_normal_and_says_when() -> None:
     assert alert.title == "Daily run: retrying (attempt 2 of 3)"
     assert alert.priority is AlertPriority.DEFAULT
     assert alert.message.endswith("Trying again in 2 min.")
+
+
+def test_a_refused_send_logs_the_http_status_and_nothing_that_names_the_topic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """2026-11-17: ntfy sends failed with only "HTTPStatusError" in the log, so nobody could
+    tell a rate limit from a server error."""
+    logged: list[dict[str, object]] = []
+
+    class _Log:
+        def info(self, *_a: object, **_k: object) -> None:
+            pass
+
+        def error(self, event: str, **fields: object) -> None:
+            logged.append({"event": event, **fields})
+
+    monkeypatch.setattr(events_module, "log", _Log())
+
+    class RefusingNotifier:
+        def send(self, alert: Alert) -> None:
+            request = httpx.Request("POST", "https://ntfy.example/")
+            raise httpx.HTTPStatusError(
+                "429 for topic-secret",
+                request=request,
+                response=httpx.Response(429, request=request),
+            )
+
+    RunEvents(RunKind.INGEST, RefusingNotifier()).failed("still fine")
+    assert logged == [
+        {
+            "event": "run_event_send_failed",
+            "run_event": "failed",
+            "error": "HTTPStatusError",
+            "status": 429,
+        }
+    ]
+    assert "topic-secret" not in repr(logged)
