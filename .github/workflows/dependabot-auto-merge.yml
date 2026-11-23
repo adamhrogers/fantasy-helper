@@ -4,13 +4,12 @@
 # never if they fail. Without required checks, auto-merge could merge before CI finishes, so the
 # first step refuses unless main's ruleset requires both CI jobs (runbooks/dependency-updates.md).
 #
-# Updates that change the deploy path (deploy.yml, the Dockerfile) are left open for a person, even
-# when CI passes. That workflow's identity can deploy code that reads the prod database and the key
-# that decrypts every league login, and any action in its job can ask GitHub for the token that
-# identity uses. A release a week old (the cooldown) is too little review for that (ADR 0028).
-# Updates to the phone app (web/) are held too, for a smaller version of the same reason: that code
-# runs on a phone with a signed-in session, and Cloudflare builds it from `main` as soon as it
-# merges (ADR 0024, Update 2026-11-16).
+# Only updates to deploy.yml itself are left open for a person, even when CI passes: any action in
+# the deploy job can ask GitHub for the token of the identity that deploys to prod (ADR 0028).
+# Everything else merges itself, the Dockerfile and the phone app (web/) included (Adam's call,
+# ADR 0024, Update 2026-11-23): but those two have checks that main's ruleset doesn't require
+# (container.yml's image check, web.yml's app check), so a PR that changes them merges only after
+# that check has passed too. A missing, failed or slow check leaves the PR open.
 #
 # No third-party actions: this job can write to the repo, so it runs only GitHub's own `gh`.
 name: Dependabot auto-merge
@@ -27,14 +26,16 @@ jobs:
       github.event.pull_request.user.login == 'dependabot[bot]'
       && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 25  # time for the app's or the image's check to finish (see below)
     permissions:
       contents: write       # auto-merge merges into main
       pull-requests: write  # and is set on the PR
+      checks: read          # to wait for the image's or the app's check
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       BASE: ${{ github.event.pull_request.base.ref }}
       PR_URL: ${{ github.event.pull_request.html_url }}
+      SHA: ${{ github.event.pull_request.head.sha }}
     steps:
       - name: Require CI on the base branch
         run: |
@@ -48,17 +49,43 @@ jobs:
             exit 1
           fi
 
-      - name: Leave updates to the deploy path and the phone app for a person
+      - name: Leave updates to deploy.yml for a person; wait for the image's or the app's check
         id: deploy_path
         run: |
           # Two steps on purpose: if `gh` itself fails, this step fails and nothing merges. Only
           # grep's "no match" is allowed to be empty.
           files="$(gh pr diff "$PR_URL" --name-only)"
-          held="$(printf '%s\n' "$files" | grep -E '^(\.github/workflows/deploy\.yml|Dockerfile|\.dockerignore)$|^web/' || true)"
+          held="$(printf '%s\n' "$files" | grep -E '^\.github/workflows/deploy\.yml$' || true)"
           if [ -n "$held" ]; then
-            echo "::notice::this PR changes the deploy path or the phone app, so it stays open for a person to review: $(echo "$held" | head -3 | tr '\n' ' ')"
+            echo "::notice::this PR changes deploy.yml, so it stays open for a person to review"
             echo "hold=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          # Checks the ruleset doesn't require: wait until each has passed, or leave the PR open.
+          need=()
+          if printf '%s\n' "$files" | grep -qE '^(Dockerfile|\.dockerignore)$'; then
+            need+=("Image builds and starts")
+          fi
+          if printf '%s\n' "$files" | grep -q '^web/'; then
+            need+=("Types, lint, tests, build")
+          fi
+          for name in "${need[@]}"; do
+            query="$(jq -rn --arg n "$name" '$n | @uri')"
+            result=""
+            for _ in $(seq 1 60); do
+              result="$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/check-runs?check_name=$query" \
+                --jq '[.check_runs[] | .status + ":" + (.conclusion // "")] | first // ""')"
+              case "$result" in
+                completed:success) break ;;
+                completed:*) echo "::error::'$name' ended $result, so this PR stays open"; exit 1 ;;
+              esac
+              sleep 20
+            done
+            if [ "$result" != "completed:success" ]; then
+              echo "::error::'$name' didn't pass within 20 minutes, so this PR stays open"
+              exit 1
+            fi
+          done
 
       - name: Merge once the required checks pass
         if: steps.deploy_path.outputs.hold != 'true'
