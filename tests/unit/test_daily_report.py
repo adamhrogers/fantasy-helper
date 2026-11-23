@@ -127,7 +127,9 @@ def test_the_local_page_draws_bullets_as_a_list_and_the_days_first_game() -> Non
     assert "<ul><li>Player A 61.5 (yours)</li><li>Player &lt;B&gt; 55.0</li></ul>" in page
     assert page.count("<ul>") == 1  # the old card has no list
     assert "First game on Fri Nov 6: 8:00 PM EST" in page
-    pacific = render([report], title="x", league_names={}, games=games, time_zone="US/Pacific")
+    pacific = render(
+        [report], title="x", league_names={}, games=games, time_zone="America/Los_Angeles"
+    )
     assert "First game on Fri Nov 6: 5:00 PM PST" in pacific
     off = render(
         [report], title="x", league_names={}, games=GameDay(day=date(2026, 11, 6), games=0)
