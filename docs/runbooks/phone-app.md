@@ -121,7 +121,9 @@ In the Cloudflare dashboard (the account that holds your R2 bucket): **Workers &
 
 Cloudflare's default npm is 10, which can't install this app's test tools. `web/package.json` pins the npm that can (`packageManager`), and the build reads it. If the log says it used another npm, tell Claude.
 
-Optional, under Settings → Build: **Build watch paths** `web/*`, so a push that doesn't touch the app doesn't rebuild it. Cloudflare also builds other branches by default (a preview each). That is **not** harmless: a branch's build runs its dependencies' install scripts, and Dependabot opens such branches before anyone has reviewed them (the hold only stops the merge, not the build). Cloudflare's **Branch control** screen (checked 2026-11-22) only offers a switch for the production branch, none for other branches, so Dependabot branches do build. That is accepted for now: the build holds no secret of ours (the three variables are public by nature), and a dependency update still can't merge without a person.
+Then, under the Worker's **Settings → Build** (checked 2026-11-22):
+- **Previews Base** tab (next to **Production** at the top): turn **Builds for Preview branches** **off**. It is on for a new Worker, so every pull-request branch, Dependabot's included, would build: unreviewed code would run its install scripts on Cloudflare, and the build would fail anyway, because `npx wrangler preview` wants a `previews` block that `web/wrangler.jsonc` doesn't have (found on the first docs-only PR). Only `main` builds.
+- **Build watch paths:** leave the default include `*`. Every push to `main` rebuilds the app, which is harmless (about a minute, free, and the build code is a hash of the app's own files, so the phone sees no "new version" unless the app changed). Cloudflare's docs don't say whether a path like `web/*` counts from the repository or from the root directory, and a wrong guess would mean an app change never deploys.
 
 When the build finishes, the Worker's page shows its address, `https://fantasy-helper.<your-subdomain>.workers.dev`. Open it. **Right looks like:** a sign-in screen. Signing in will say it can't reach the server until step 4.
 
