@@ -154,8 +154,8 @@ Today (as built):
 The reports exist but are stuck in the database, and only your laptop can pull them out. The remaining part of this milestone (M3) gets them to your phone:
 
 1. **The API.** A small always-ready service that works like a **doorman**. Your phone asks it "show me today's report"; it checks you're really you (via a sign-in), then hands over only your reports. The phone app is never allowed to touch the database directly. **This one is done: it has been running since 2026-11-16.**
-2. **The phone app.** A web app you add to your iPhone's Home Screen, with sign-in by your email and a password and two tabs, Today and This Week. It is written (2026-11-16) and waits for you: merge it, connect it to Cloudflare, and add it to your Home Screen (`docs/runbooks/phone-app.md`, part 2). A banner says so whenever the newest report isn't from today, so an old report can't pass for a fresh one. The emailed code is built too, switched off until friends join.
-3. **Push notifications.** The "your report is ready" message from the app itself.
+2. **The phone app.** A web app you add to your iPhone's Home Screen, with sign-in by your email and a password and two tabs, Today and This Week. **This one is done: it has been live since 2026-11-22.** A banner says so whenever the newest report isn't from today, so an old report can't pass for a fresh one. The emailed code is built too, switched off until friends join.
+3. **Push notifications.** The "your report is ready" message from the app itself, a few minutes after the morning chain finishes (and on Mondays, one for the week's overview). It is written (2026-11-22) and waits for you: two scripts, a merge and one tap in the app (`docs/runbooks/phone-app.md`, part 3). The report jobs send it, once a day, and a problem sending it never costs you the report.
 4. **Backups.** A nightly copy of the irreplaceable tables (the call log, your leagues) to a separate place. (Supabase's free plan has no backups.)
 5. **The final test:** laptop shut, report arrives on the phone; a deliberately broken run raises an alert; a backup restores.
 

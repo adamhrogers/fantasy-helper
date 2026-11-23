@@ -14,7 +14,7 @@ fantasy-helper/
 ├── uv.lock
 ├── .python-version                   # 3.12
 ├── .env.example                      # SYSTEM secrets by name only: FH_ANTHROPIC_API_KEY, LANGSMITH_*,
-│                                     #   DATABASE_URL, FH_ENCRYPTION_KEY, VAPID_*, NTFY_TOPIC
+│                                     #   DATABASE_URL, FH_ENCRYPTION_KEY, FH_VAPID_PRIVATE_KEY, NTFY_TOPIC
 │                                     #   (never league IDs or cookies: those live in the database)
 ├── .gitignore                        # .env, data/, node_modules/
 ├── .pre-commit-config.yaml           # ruff, import contracts, gitleaks
@@ -42,6 +42,7 @@ fantasy-helper/
 │   │   ├── recommendations.py        #   Recommendation, Claim, CallType, Grade, MissCause
 │   │   ├── evaluations.py            #   EvaluationPoint (one point on a timeline graph)
 │   │   ├── reports.py                #   ReportDocument, Card (the contract the PWA renders)
+│   │   ├── push.py                   #   PushDevice, PushMessage (counts and a path, under 4 KB)
 │   │   ├── runs.py                   #   RunRecord
 │   │   └── ports.py                  #   Protocols: LeaguePlatform, ProjectionSource, NewsSource, StatsSource, Notifier, Clock
 │   │
@@ -98,7 +99,8 @@ fantasy-helper/
 │   │   └── replay.py                 # regression + shadow runs over stored FactSheets
 │   │
 │   ├── reports/                      # ReportDocument builders: weekly (M2) · daily (M2 engine-only, M4 brain) · scorecard (M6)
-│   ├── delivery/              (M3)   # publish · web push (VAPID)
+│   ├── delivery/              (M3)   # publish · web push
+│   │   └── push.py                   # PushSender protocol, the pywebpush sender, VAPID key checks, the messages (ADR 0030)
 │   │
 │   ├── pipeline/
 │   │   ├── snapshot.py               # (M1) daily raw snapshots of public data (ADR 0017)
@@ -108,6 +110,7 @@ fantasy-helper/
 │   │   ├── weekly.py                 # (M2)
 │   │   ├── daily.py           (M2)   # engine-only until M4 adds the brain
 │   │   ├── grade.py           (M6)   # grade + evaluate (trajectory points)
+│   │   ├── notify.py                 # "your report is ready": after commit, once per user, kind and date; never fails a run; the Monday-only constant (ADR 0030)
 │   │   ├── preflight.py              # data checks that stop the run (fail closed)
 │   │   └── runlog.py                 # one record per run
 │   │
@@ -116,7 +119,7 @@ fantasy-helper/
 │   │   ├── app.py                    # /livez · /v1/me · /v1/reports · /v1/push (ADR 0029); more routes come with M5
 │   │   ├── auth.py                   # Supabase JWT verification against its public keys; user id on every request
 │   │   └── schemas.py                # the API's request and response models (web/openapi.json is generated from them)
-│   └── cli/                          # Typer: `fh version | keygen | doctor` (M0); `league add | ingest | run | grade | fixtures record | mcp serve | replay` later
+│   └── cli/                          # Typer: `fh version | keygen | doctor` (M0); `league add | ingest | run | push test | grade | fixtures record | mcp serve | replay` later
 │
 ├── web/                       (M3)   # PWA: Vite + React + TypeScript (built 2026-11-16; docs/runbooks/phone-app.md, part 2)
 │   ├── package.json                  # exact pins; `packageManager` pins npm 11 (Cloudflare's npm 10 can't install vitest)
@@ -135,7 +138,10 @@ fantasy-helper/
 │       ├── auth/                     # Supabase sign-in: password, and the emailed code behind VITE_SIGN_IN_WITH_CODE
 │       ├── lib/                      # freshness.ts (today in the user's zone) · install.ts (iOS install help)
 │       ├── components/               # CardView (an unknown kind is a plain card) · ReportsView · SignIn · banners
-│       ├── sw.ts                     # the service worker: app shell only, nothing signed-in cached (push joins it in Phase 4)
+│       ├── sw.ts                     # the service worker: app shell, and a notification for every push (nothing signed-in cached)
+│       ├── notification.ts           # what a push shows, and the two paths a tap may open (shared by the worker and the page)
+│       ├── push.ts · usePush.ts      # turning notifications on and off for this phone; the permission request comes first in the tap
+│       ├── useNotificationOpens.ts   # a tap while the app is open: switch tab and refresh
 │       └── features/ · charts/       # (later) watchlist · scorecard · onboarding · chat · timeline graphs (M6)
 │
 ├── tests/
@@ -151,7 +157,7 @@ fantasy-helper/
 │   └── datasets/              (M6)   # LangSmith dataset exports of graded days
 │
 ├── scripts/                          # cloud setup and ops: gcp-setup.sh · gcp-secrets.sh · jobs.conf · fh-prod.sh ·
-│                                     #   healthchecks-setup.sh · snapshot-schedule.sh · api-smoke.sh
+│                                     #   healthchecks-setup.sh · snapshot-schedule.sh · api-smoke.sh · vapid-setup.sh (the push keys)
 ├── Dockerfile                        # one image: every Cloud Run job, and the API from M3 part 3
 │
 └── docs/

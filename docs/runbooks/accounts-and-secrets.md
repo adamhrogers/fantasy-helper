@@ -55,15 +55,15 @@ Values live in **Bitwarden** and in the places listed below, never in this repo 
 
 ## Coming in M3 parts 3 to 5 (planned names; [m3-plan.md](../m3-plan.md))
 
-**The first three rows belong to the API (Phase 2, [ADR 0029](../decisions/0029-the-phone-apps-api.md)):** `scripts/gcp-setup.sh infra` creates the `fh-api` account and the empty secrets, you fill them with `scripts/gcp-secrets.sh` ([phone-app.md](phone-app.md)), and only `fh-api` can read them. They are not in use until Phase 2 deploys.
+**The first three rows belong to the API (Phase 2, [ADR 0029](../decisions/0029-the-phone-apps-api.md)):** `scripts/gcp-setup.sh infra` creates the `fh-api` account and the empty secrets, you fill them with `scripts/gcp-secrets.sh` ([phone-app.md](phone-app.md)), and only `fh-api` can read them. They are not in use until Phase 2 deploys. **The two `fh-vapid-*` rows are Phase 4's (ADR 0030):** `scripts/gcp-setup.sh infra` creates them empty and says who may read each, `scripts/vapid-setup.sh` fills both with a pair it makes itself, and only the report jobs can read the private half. `fh-app-origins` is also read by the report jobs now.
 
 | Secret (Secret Manager) | Holds | Read by | Part |
 |---|---|---|---|
 | `fh-api-database-url` | Prod's database, the **transaction pooler** (port 6543) | `fh-api` | 3 |
 | `fh-supabase-url` | Prod's Supabase project URL (not secret; kept out of the repo) | `fh-api` | 3 |
-| `fh-app-origins` | The phone app's address, for the API's allow-list | `fh-api` | 3, set in 4 |
-| `fh-vapid-private-key` | The key that signs push notifications | `fh-reports` | 5 |
-| `fh-vapid-public-key` | Its public half | `fh-api` | 5 |
+| `fh-app-origins` | The phone app's address, for the API's allow-list. Its **first** address is also what the push service is told the sender is (ADR 0030) | `fh-api`, and `fh-reports` (the report jobs) | 3, set in 4 |
+| `fh-vapid-private-key` | The key that signs push notifications. **Made by `scripts/vapid-setup.sh`, never typed**; `gcp-secrets.sh` refuses it | `fh-reports` (the `daily` and `weekly` jobs only) | 4 (built; [phone-app.md](phone-app.md) Part 3) |
+| `fh-vapid-public-key` | Its public half, which the API gives the app | `fh-api` | 4 (the same script) |
 | The backups bucket's access key ID and secret | A second R2 token, for `fantasy-helper-backups` only | `fh-backup` | 5 |
 | `fh-anthropic-api-key`, `fh-langsmith-api-key` | The Claude key (with a spend limit) and the LangSmith key, for the report jobs | `fh-reports` | Before M4 |
 

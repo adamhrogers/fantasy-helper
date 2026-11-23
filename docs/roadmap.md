@@ -160,7 +160,7 @@ The lanes as built and planned (the first version of this table had a magic link
 | Lane | Work |
 |---|---|
 | A — API + auth | FastAPI on Cloud Run in **`us-east4`** with one pooled database engine per process, **Supabase Auth** (a password for Adam, who is user one, and a 6-digit email code for the beta; the API checks each token against Supabase's public keys), reports and push-subscription routes, Supabase prod project in **`us-east-1`** (ADR 0020) |
-| B — PWA | **The app is built (2026-11-16; PR open); push is still to do.** Vite + React shell, sign-in, Today and This Week tabs rendering `ReportDocument` cards (the daily lock-or-pass cards and the weekly overview), Web Push (VAPID), hosted on Cloudflare Workers (static assets; Pages was ADR 0009's first plan), iOS Home Screen install |
+| B — PWA | **The app is live (2026-11-22); push is built (2026-11-22; PR open, not merged; ADR 0030).** Vite + React shell, sign-in, Today and This Week tabs rendering `ReportDocument` cards (the daily lock-or-pass cards and the weekly overview), Web Push (VAPID), hosted on Cloudflare Workers (static assets; Pages was ADR 0009's first plan), iOS Home Screen install |
 | C — Scheduling + ops | **Built:** timed jobs on Cloud Run, started by Cloud Scheduler and chained (ADRs 0025, 0028); the raw store on R2; **run events via ntfy**; the missed-run and late-report watchdog (Healthchecks); the database size warning. **Left:** a **nightly backup** of the tables that can't be rebuilt (ADR 0021), a lock on the raw history, the exit test |
 
 **Done when:**
