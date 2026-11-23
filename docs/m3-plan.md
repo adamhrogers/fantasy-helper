@@ -12,7 +12,7 @@ This is the plan for everything between "part 2 is merged" and "M3 is done": six
 | **1** | End the snapshot overlap: retire launchd and the GitHub schedule | **Done 2026-11-16**, laptop steps included (the last copies uploaded, the laptop has its own R2 key, `FH_RAW_STORE=r2`). He ended it after 3 of 4 on-time runs; the Mac's schedule is removed and GitHub's is dropped (PR #19) |
 | **2** | Part 3: the API on Cloud Run, sign-in checked, reports served | **Done 2026-11-16.** Merged (PR #26) and deployed; Adam's cloud setup finished and `scripts/api-smoke.sh` passed every check against the live service: his password sign-in, his 3 leagues, his saved reports, 401 without a token, sign-ups refused. The first smoke run found two things, fixed in PR #28: Cloud Run answers `/healthz` itself, so the health route is `/livez`; and a bare `postgres` user in the API's database secret made every signed-in call fail, so `gcp-secrets.sh` now refuses a pooler URL with no project ref |
 | **3** | Part 4: the phone app | **Done 2026-11-22.** Merged (PR #32) and live on Cloudflare Workers at a `workers.dev` address; Adam added it to the iPhone's Home Screen, signed in with his password and sees his leagues' cards. The API allows the app's address (`fh-app-origins`). The security headers on the live site name exactly the API and Supabase addresses. Not yet checked: that an update arrives (deploy twice and watch the "new version" bar) and the offline copy. Adam has a list of improvements to the screens, to be planned as their own work |
-| **4** | Part 5a: push ("your report is ready") | Next, not started |
+| **4** | Part 5a: push ("your report is ready") | **Built 2026-11-22; PR open, not merged.** Migration 0008, `delivery/push.py` and `pipeline/notify.py` (after commit, once, never fails a run), `fh push test`, `scripts/vapid-setup.sh`, the cloud side (the private key readable by the report jobs only), Enable notifications / Turn off in the app, the service worker's `push` and `notificationclick`, ADR 0030, runbook Part 3. Tested against a fake push service that decrypts the message and checks the VAPID token, and against Postgres. **Not yet seen: a real push on the iPhone**; the first one may surface surprises (Apple's answers can't be reproduced in a test). **Adam's steps:** [phone-app.md](runbooks/phone-app.md) Part 3 |
 | **5** | Part 5b: backups, locks, loose ends, the exit test | Not started |
 | **Lane** | The daily "what happened" cards for every league (decision 8; roadmap direction; ADR 0033), beside Phases 2 to 5, engine only | **Merged 2026-11-16** (PR #27, no migration; touches no API, app or schema file). The lock button (decision 9) and lock-in v2 are still to do |
 
@@ -227,9 +227,10 @@ The steps, in order and exact, are [runbooks/phone-app.md](runbooks/phone-app.md
 
 **Goal:** the phone says "Today's report is ready" a few minutes after 06:17, with the laptop closed, and a tap opens Today. Branch `m3-part5-push`.
 
-### Decision for Adam
+### Decided by Adam (2026-11-22)
 
-- **How often the weekly overview notifies.** It's rebuilt every morning (ADR 0026), and two notifications a minute apart every day is noise. **Recommended: the daily report notifies every morning; the weekly overview notifies on Mondays only** and updates quietly on other days. One constant to change.
+- **How often the weekly overview notifies.** It's rebuilt every morning (ADR 0026), and two notifications a minute apart every day is noise. **The daily report notifies every morning; the weekly overview notifies on Mondays only** and updates quietly on other days. One constant, `WEEKLY_NOTIFY_WEEKDAY` in `pipeline/notify.py`, and it is his to change.
+- **Where the app is hosted:** Cloudflare Workers at a `workers.dev` address, which is never written in the repo (it lives in the secret `fh-app-origins`). The push sender takes its VAPID subject from that same secret, mounted on the report jobs (ADR 0030).
 
 ### Decisions (ADR 0030 in this PR)
 
@@ -237,6 +238,7 @@ The steps, in order and exact, are [runbooks/phone-app.md](runbooks/phone-app.md
 - **After commit, once.** A push announces a report that is saved, never one that could still roll back. Migration 0008 adds `reports.notified_at`; a rerun the same day finds it set and stays quiet.
 - **Push never fails a run.** The report is built either way. A subscription that answers 404 or 410 is deleted; any other failure ends the run with a warning ("report built, push failed"), which is an ops event.
 - **Every push shows a notification.** Safari takes the permission away from a site whose push arrives and shows nothing.
+- **The VAPID subject is the first address in `fh-app-origins`**, mounted on the report jobs as `FH_APP_ORIGINS`: no second secret to drift, and no address or email in the repo.
 
 ### Build
 
@@ -248,6 +250,15 @@ The steps, in order and exact, are [runbooks/phone-app.md](runbooks/phone-app.md
 6. **`fh push test`:** one test notification to the owner's devices, run as the `daily` job with its command replaced: `gcloud run jobs execute daily --region us-east4 --args=push,test --wait`. It sends and exits; it doesn't hand over to `weekly`.
 7. **Cloud side:** the two secrets, `fh-reports` reads the private one, `fh-api` the public one; `deploy.yml` mounts them; workflow tests pin who gets which.
 8. **Tests:** sent once per user, kind and date; quiet on a rerun; 410 deletes the row; a 403 warns and the run still exits 0; no subscriptions means no push and no warning; never on a dry run; Monday-only for weekly.
+
+### Found while building (2026-11-22)
+
+- **`pywebpush` has traps, each pinned by a test:** it changes the claims dictionary it is given (a fresh one per send), it has no timeout unless passed one, its errors are its own exception or a bare `requests` one, and the private key must be the raw 32-byte value in URL-safe base64.
+- **A subscription is tied to the public key it was made with.** After `vapid-setup.sh --rotate` every device's subscription is orphaned, so the app compares the subscription's key with the server's and shows "off" on a mismatch; turning it on replaces the old one (and the server forgets the old address).
+- **`PushSubscription.toJSON()` has an `expirationTime` the API refuses** (its schema rejects extra fields), so the app sends only the address and the two keys.
+- **The review found the jobs would send to any https address a user saved (fixed 2026-11-23).** The API now saves, and the sender sends to, only Apple's, Google's, Mozilla's and Microsoft's push hosts (one list in `domain/push.py`); redirects are never followed; each send has 8 seconds by the clock and the whole push 30, because the 5-second HTTP timeout is per read and a trickling server could outlast it.
+- **A refused push leaves the report unannounced and the device kept**, so a rerun after the fix announces it; only 404 and 410 delete a device.
+- **Only the report jobs can read the private key:** it is mounted on `daily` and `weekly` only (not the snapshot jobs, `migrate` or the API), and a workflow test pins every secret's readers.
 
 ### Traps
 

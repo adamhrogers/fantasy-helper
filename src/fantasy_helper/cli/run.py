@@ -23,11 +23,13 @@ from fantasy_helper.cli._common import (
 from fantasy_helper.cli._runs import (
     REQUIRE_SNAPSHOT_TODAY,
     finish_run,
+    push_report_ready,
     run_to_completion,
     start_next,
 )
 from fantasy_helper.config import get_settings
 from fantasy_helper.domain.ports import SystemClock
+from fantasy_helper.domain.reports import ReportKind
 from fantasy_helper.domain.runs import RunKind, RunRecord
 from fantasy_helper.observability.events import RunEvents, events_from_settings
 from fantasy_helper.observability.healthchecks import heartbeat_from_settings
@@ -107,6 +109,13 @@ def daily(
         failed = [lg for lg in result.leagues if lg.failure] + [
             lg for lg in result.ingest.leagues if lg.failure
         ]
+        # The reports are committed now (the transaction ended when the run did), so the phone can
+        # be told. Never on a dry run, which saved nothing; never able to fail the run (ADR 0030).
+        if not dry_run:
+            problems = problems + push_report_ready(
+                settings, events, url=url, kind=ReportKind.DAILY, reports=result.reports,
+                now=clock.now(),
+            )  # fmt: skip
         finish_run(
             events,
             kind=RunKind.DAILY,
@@ -249,6 +258,11 @@ def weekly(
 
         detail, problems = weekly_summary(result, attempts)
         failed = [lg for lg in result.leagues if lg.failure]
+        # Committed, so the phone can hear about it: on the notifying weekday only (ADR 0030).
+        problems = problems + push_report_ready(
+            settings, events, url=url, kind=ReportKind.WEEKLY, reports=result.reports,
+            now=clock.now(),
+        )  # fmt: skip
         finish_run(
             events,
             kind=RunKind.WEEKLY,

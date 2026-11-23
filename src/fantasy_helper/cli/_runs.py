@@ -9,11 +9,14 @@ from typing import Annotated
 import typer
 
 from fantasy_helper.adapters import cloud_run
-from fantasy_helper.cli._common import REPORTED_EXIT
+from fantasy_helper.cli._common import REPORTED_EXIT, transaction
 from fantasy_helper.config import Settings
+from fantasy_helper.delivery.push import sender_from_settings
+from fantasy_helper.domain.reports import ReportDocument, ReportKind
 from fantasy_helper.domain.runs import RunKind, RunRecord, RunStatus
 from fantasy_helper.observability.events import RunEvents
 from fantasy_helper.pipeline.ingest import MissingSnapshotError
+from fantasy_helper.pipeline.notify import notify_report_ready
 from fantasy_helper.pipeline.retry import RunStoppedError, outcome, run_with_retries
 
 REQUIRE_SNAPSHOT_TODAY = Annotated[
@@ -125,3 +128,31 @@ def start_next(
         typer.echo(f"✗ couldn't start {name}: {exc.kind}", err=True)
         raise typer.Exit(code=REPORTED_EXIT) from exc
     events.step("Next job started", f"{name} was started.")
+
+
+def push_report_ready(
+    settings: Settings,
+    events: RunEvents,
+    *,
+    url: str,
+    kind: ReportKind,
+    reports: Sequence[ReportDocument],
+    now: datetime,
+) -> list[str]:
+    """Tell the phone the reports are ready (ADR 0030), once the run has committed them. Returns
+    the warnings for the run's ending: the push never fails a run, and the report is built either
+    way. Not called on a dry run, which saved nothing."""
+    if not reports:
+        return []
+    notified = notify_report_ready(
+        lambda: transaction(url),
+        lambda: sender_from_settings(settings),
+        user_id=reports[0].user_id,
+        kind=kind,
+        dates={report.for_date for report in reports},
+        now=now,
+    )
+    if notified.delivered:  # a quiet step; problems reach the phone through the run's ending
+        events.step("Push sent", notified.detail())
+    typer.echo(f"push: {notified.detail()}")
+    return list(notified.problems)

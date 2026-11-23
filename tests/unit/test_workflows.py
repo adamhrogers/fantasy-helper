@@ -124,11 +124,17 @@ def test_deployed_secrets_match_the_setup_script_and_the_settings() -> None:
         set(_bash_array(SETUP, "SNAPSHOT_SECRETS"))
         | set(_bash_array(SETUP, "DATABASE_SECRETS"))
         | set(_bash_array(SETUP, "API_SECRETS"))
+        | set(_bash_array(SETUP, "PUSH_SECRETS"))
     )
     assert {secret for _, secret in mounted} == in_setup
-    assert {secret for _, secret in mounted} == set(
-        _bash_array(ROOT / "scripts" / "gcp-secrets.sh", "NAMES")
-    )
+    # The prompts in gcp-secrets.sh cover every secret a person types. The two push keys are made
+    # by scripts/vapid-setup.sh, never typed or pasted, so they aren't prompted for.
+    typed = {secret for _, secret in mounted if not secret.startswith("fh-vapid-")}
+    assert typed == set(_bash_array(ROOT / "scripts" / "gcp-secrets.sh", "NAMES"))
+    assert {secret for _, secret in mounted} - typed == {
+        "fh-vapid-private-key",
+        "fh-vapid-public-key",
+    }
 
 
 def _jobs_conf() -> list[tuple[str, str, int, str]]:
@@ -220,12 +226,21 @@ def test_the_api_has_its_own_account_and_only_its_own_secrets() -> None:
         "DATABASE_URL",
         "FH_SUPABASE_URL",
         "FH_APP_ORIGINS",
+        "FH_VAPID_PUBLIC_KEY",  # the public half of the push key: it serves it to the app
     ]
-    for forbidden in ("ENCRYPTION", "R2", "HEALTHCHECKS", "NTFY", "fh-database-url"):
+    for forbidden in (
+        "ENCRYPTION", "R2", "HEALTHCHECKS", "NTFY", "fh-database-url", "VAPID_PRIVATE",
+        "fh-vapid-private-key",
+    ):  # fmt: skip
         assert forbidden not in api_secrets
     setup = SETUP.read_text()
     api = _bash_array(SETUP, "API_SECRETS")
-    assert api == ["fh-api-database-url", "fh-supabase-url", "fh-app-origins"]
+    assert api == [
+        "fh-api-database-url",
+        "fh-supabase-url",
+        "fh-app-origins",
+        "fh-vapid-public-key",
+    ]
     # Only fh-api reads the API's secrets; the report jobs and the snapshot jobs never do.
     for account in ("SA_REPORTS", "SA_JOBS"):
         assert f'--member "serviceAccount:${account}"' in setup
@@ -236,6 +251,47 @@ def test_the_api_has_its_own_account_and_only_its_own_secrets() -> None:
     ) in setup
     assert 'for secret in "${SNAPSHOT_SECRETS[@]}" "${DATABASE_SECRETS[@]}"; do' in setup
     assert "fh-api-database-url" not in " ".join(_bash_array(SETUP, "DATABASE_SECRETS"))
+
+
+def test_only_the_report_jobs_can_read_the_private_push_key_and_the_api_only_the_public_one() -> (
+    None
+):
+    """The key that signs every push can notify every user, so the internet-facing API never holds
+    it, and neither do the snapshot jobs, which fetch from the public internet (ADR 0030). The
+    report jobs read it, and the app's address, which is the VAPID subject."""
+    text = DEPLOY.read_text()
+    push = text.split("PUSH_SECRETS: >-\n", 1)[1].split("\n", 1)[0]
+    assert re.findall(r"(\w+)=(fh-[\w-]+):latest", push) == [
+        ("FH_VAPID_PRIVATE_KEY", "fh-vapid-private-key"),
+        ("FH_APP_ORIGINS", "fh-app-origins"),
+    ]
+    # Only the daily and weekly runs get it: they send the push, after their reports commit.
+    assert 'REPORT_SECRETS="$SNAPSHOT_SECRETS,$DATABASE_SECRETS,$PUSH_SECRETS"' in text
+    deployed = _deploy_calls()
+    for job, (account, secrets, *_rest) in deployed.items():
+        has_key = "$REPORT_SECRETS" in secrets
+        assert has_key == (job in ("daily", "weekly")), job
+        if job in ("daily", "weekly"):
+            assert account == "REPORTS_SA", job
+    snapshot_secrets = text.split("SNAPSHOT_SECRETS: >-\n", 1)[1].split("\n", 1)[0]
+    database_secrets = text.split("DATABASE_SECRETS: >-\n", 1)[1].split("\n", 1)[0]
+    for group in (snapshot_secrets, database_secrets):
+        assert "VAPID" not in group
+        assert "APP_ORIGINS" not in group
+    assert "DATABASE_URL=fh-database-url:latest migrate" in text  # the migration gets neither
+    # In the setup script: the private key is a push secret read by fh-reports alone.
+    setup = SETUP.read_text()
+    assert _bash_array(SETUP, "PUSH_SECRETS") == ["fh-vapid-private-key"]
+    assert "fh-vapid-private-key" not in _bash_array(SETUP, "API_SECRETS")
+    assert "fh-vapid-private-key" not in _bash_array(SETUP, "SNAPSHOT_SECRETS")
+    binding = (
+        'for secret in "${PUSH_SECRETS[@]}" fh-app-origins; do\n'
+        '    quiet gcloud secrets add-iam-policy-binding "$secret" \\\n'
+        '      --member "serviceAccount:$SA_REPORTS"'
+    )
+    assert binding in setup
+    # No other loop binds a push secret to anyone.
+    assert setup.count("${PUSH_SECRETS[@]}") == 2  # the list of all secrets, and that binding
 
 
 def test_the_api_moves_after_the_migration_and_nothing_makes_it_public_but_the_owner() -> None:
