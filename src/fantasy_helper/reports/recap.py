@@ -4,8 +4,10 @@ Written by code from a `DailySheet`, no model. Each kind of card is a block of i
 from the sheet alone and skipped when it has nothing to say, so a later "customize my report"
 can switch blocks on and off by name (`BLOCKS`) without touching the others:
 
-- `matchup`: last night's points for both teams and where the matchup stands, checked against
-  the platform's own totals where it gives them
+- `matchup`: last night's points for both teams and where the matchup stands
+- `mismatch`: only when our totals and the platform's own disagree, each total with both
+  numbers. Agreement is the system working and is never mentioned; a disagreement is its own
+  card so it can't be missed (Adam, 2026-11-23)
 - `my-team`: who on his team beat or missed what was expected of them, who didn't play
 - `standouts`: the best games of the night across the league
 - `pickups`: recent free-agent and waiver pickups that had a good night
@@ -34,7 +36,7 @@ from fantasy_helper.engine.recap import (
     standouts,
     surprises,
 )
-from fantasy_helper.facts.daily import DailySheet, MatchupDay, MatchupMode, Side
+from fantasy_helper.facts.daily import DailySheet, MatchupDay, MatchupMode, Side, TotalsDifference
 
 STANDOUTS_SHOWN = 5
 PICKUPS_SHOWN = 4
@@ -222,18 +224,6 @@ def _side_data(s: Side) -> dict[str, JsonValue]:
     }
 
 
-def _check_note(m: MatchupDay, platform: str) -> list[str]:
-    c = m.checked
-    if c.total == 0:
-        return []
-    if c.matched == c.total:
-        return [f"Our totals match {platform}'s own ({c.matched} of {c.total})"]
-    return [
-        f"Our totals differ from {platform}'s own in {c.total - c.matched} of {c.total}: "
-        "the saved lineups or box scores may be off"
-    ]
-
-
 _Matchup = tuple[str, str, list[str], str]  # title, body, items, reason
 
 
@@ -241,7 +231,7 @@ def _points_matchup(sheet: DailySheet, m: MatchupDay, platform: str) -> _Matchup
     me, them = m.me, m.them
     reason = (
         "Each starter's game from last night, scored by this league's rules, for the lineup "
-        f"each team had that day; {platform}'s own daily totals only check it."
+        "each team had that day."
     )
     if me.day_points is None or them.day_points is None:
         body = (
@@ -269,7 +259,7 @@ def _points_matchup(sheet: DailySheet, m: MatchupDay, platform: str) -> _Matchup
             )
     else:
         items.append("The week's total isn't known: a day's lineup wasn't saved")
-    return title, "", items + _check_note(m, platform), reason
+    return title, "", items, reason
 
 
 def _categories_matchup(sheet: DailySheet, m: MatchupDay, platform: str) -> _Matchup:
@@ -277,7 +267,7 @@ def _categories_matchup(sheet: DailySheet, m: MatchupDay, platform: str) -> _Mat
     me, them = m.me, m.them
     reason = (
         "Each team's starters' games for the week so far, from the lineup each had on each day, "
-        f"counted category by category; {platform}'s own running totals only check it."
+        "counted category by category."
     )
     if me.week_categories is None or them.week_categories is None:
         body = (
@@ -299,7 +289,7 @@ def _categories_matchup(sheet: DailySheet, m: MatchupDay, platform: str) -> _Mat
         f"Week {m.week} {verb.lower()} against {them.name} through {_day(sheet)} "
         f"(won-lost-tied: {standing.record})."
     )
-    return title, body, items + _check_note(m, platform), reason
+    return title, body, items, reason
 
 
 def _lock_in_matchup(m: MatchupDay, platform: str) -> _Matchup:
@@ -333,6 +323,59 @@ def _lock_in_matchup(m: MatchupDay, platform: str) -> _Matchup:
     return title, body, items, reason
 
 
+# --------------------------------------------------------------------------- mismatch
+
+
+def _mismatch_card(sheet: DailySheet) -> Card | None:
+    """Our totals against the platform's own, only when they disagree."""
+    m = sheet.matchup
+    if m is None or m.checked.matched == m.checked.total:
+        return None
+    platform = _PLATFORM[sheet.league.platform]
+    spans = {"last night" if d.what == "day" else "this week" for d in m.differences}
+    when = " and ".join(sorted(spans)) if spans else "this matchup"
+    differ = m.checked.total - m.checked.matched
+    return Card(
+        id="daily-mismatch",
+        kind=CardKind.MATCHUP,
+        title=f"Our numbers differ from {platform}'s for {when}"[:120],
+        body=(
+            f"{differ} of the {m.checked.total} totals we compare with {platform}'s own don't "
+            "agree. A saved lineup or box score is probably off, so treat this league's matchup "
+            "numbers with care until it's fixed."
+        ),
+        items=bullets(_difference(sheet, m, d, platform) for d in m.differences),
+        reason=(
+            "Every number here is counted from box scores and the lineup each team had that "
+            f"day; {platform}'s own totals for the same lineups should come out the same."
+        ),
+        data={
+            "differences": [_difference_data(d) for d in m.differences],
+            "checked": {"matched": m.checked.matched, "total": m.checked.total},
+        },
+    )
+
+
+def _difference_data(d: TotalsDifference) -> dict[str, JsonValue]:
+    return {"side": d.side, "what": d.what, "ours": _round(d.ours), "theirs": _round(d.theirs)}
+
+
+def _difference(sheet: DailySheet, m: MatchupDay, d: TotalsDifference, platform: str) -> str:
+    who = "you" if d.side == "me" else m.them.name
+    if d.what == "day":
+        what, ours, theirs = "Last night", f"{d.ours:.1f}", f"{d.theirs:.1f}"
+    elif d.what == "week":
+        what = f"Week {m.week}" + ("" if m.final else " so far")
+        ours, theirs = f"{d.ours:.1f}", f"{d.theirs:.1f}"
+    else:
+        ratio = any(c.name == d.what and c.ratio_of for c in sheet.rules.scoring.categories)
+        what = f"{d.what} this week"
+        ours, theirs = (
+            (f"{d.ours:.3f}", f"{d.theirs:.3f}") if ratio else (f"{d.ours:g}", f"{d.theirs:g}")
+        )
+    return f"{what} ({who}): ours {ours}, {platform} {theirs}"
+
+
 # --------------------------------------------------------------------------- my team
 
 
@@ -364,7 +407,7 @@ def _my_team_card(sheet: DailySheet) -> Card | None:
             for p in bench
             if p.played and p.value >= sheet.good_line
         ]
-    if not items and not body:
+    if not items:
         if not played:
             return None
         body = f"{len(played)} of your starters played, and none was far off what was expected."
@@ -515,6 +558,7 @@ def _surprise_rows(sheet: DailySheet, perfs: Iterable[Performance]) -> list[str]
 
 BLOCKS: dict[str, Callable[[DailySheet], Card | None]] = {
     "matchup": _matchup_card,
+    "mismatch": _mismatch_card,
     "my-team": _my_team_card,
     "standouts": _standouts_card,
     "pickups": _pickups_card,

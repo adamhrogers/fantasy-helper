@@ -418,3 +418,58 @@ def recent_adds(
                     Add(item["source"], str(item["external_id"]), str(team), t.proposed_at, t.kind)
                 )
     return out
+
+
+@dataclass(frozen=True)
+class RosterMove:
+    """A player joining or leaving a team, at the moment it took effect, with the platform's own
+    player ID (identity resolves it when read)."""
+
+    source: str
+    external_id: str
+    team_external_id: str
+    joined: bool  # True: added to the team; False: dropped by it
+    at: datetime
+
+
+# Moves that take effect the moment they're made. Checked against Sleeper's recorded responses
+# (2026-11-06): a free-agent or commissioner move's `created` equals its `status_updated`. A waiver
+# claim is processed later (overnight, 03:08 Eastern in the recording), and a trade goes through
+# when it's accepted, so their stored time isn't when the player moved.
+IMMEDIATE_KINDS = ("free_agent", "commissioner")
+
+
+def immediate_moves(
+    session: Session, league_id: UUID, since: datetime, until: datetime
+) -> list[RosterMove]:
+    """Executed free-agent and commissioner adds and drops from `since` (inclusive) up to `until`
+    (exclusive), oldest first."""
+    rows = session.scalars(
+        select(TransactionRow)
+        .where(
+            TransactionRow.league_id == league_id,
+            TransactionRow.kind.in_(IMMEDIATE_KINDS),
+            TransactionRow.status == "executed",
+            TransactionRow.proposed_at >= since,
+            TransactionRow.proposed_at < until,
+        )
+        .order_by(TransactionRow.proposed_at)
+    )
+    out = []
+    for t in rows:
+        for item in t.items:
+            action = item.get("action")
+            if action not in ("add", "drop") or t.proposed_at is None:
+                continue
+            team = item.get("to_team" if action == "add" else "from_team") or t.team_external_id
+            if team is not None:
+                out.append(
+                    RosterMove(
+                        item["source"],
+                        str(item["external_id"]),
+                        str(team),
+                        action == "add",
+                        t.proposed_at,
+                    )
+                )
+    return out

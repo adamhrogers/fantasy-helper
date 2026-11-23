@@ -284,7 +284,8 @@ Every number is valued by the league's own rules (a categories league, which has
 **Adam's point, 2026-11-22:** having read the live reports on his iPhone, he asked for four batches of changes, in this order. The first two are built; the other two are next and are recorded here so they aren't lost.
 
 **A. Fixes (built 2026-11-22, PR #39; ADR 0033 and ADR 0029 Updates):**
-1. **A pickup that paid off must still have been on the team that added him** on the night he played, judged by the lineup stored for that day; with no lineup stored, none is listed. The card used to credit a team for a player it had dropped before the game. Rosters weren't stale (ingest replaces them every morning); the check was missing.
+1. **A pickup that paid off must still have been on the team that added him** for the game he played, judged by the lineup stored for that day (on Sleeper, which keeps no lineup per day, the morning's roster and the day's moves up to his tip); with no roster stored, none is listed. The card used to credit a team for a player it had dropped before the game. Rosters weren't stale (ingest replaces them every morning); the check was missing.
+4. **Matches are silent, mismatches are loud** (Adam, 2026-11-23): nothing says our totals agree with the platform's; when they don't, it's a card of its own with both numbers for each total.
 2. **When today's games start, once at the top of the Today tab:** the first tip-off in the user's own time zone, or "No NBA games today". Only the time: Adam was explicit that he doesn't want a note about how the day's count changes after it.
 3. **"N of M adds left this week" on the weekly overview,** for a league that limits adds; nothing for one that doesn't.
 

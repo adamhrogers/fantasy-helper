@@ -56,7 +56,7 @@ from fantasy_helper.domain.stats import Stat
 from fantasy_helper.domain.users import Role, User
 from fantasy_helper.engine.distributions import blended_mean
 from fantasy_helper.engine.recap import good_game_line
-from fantasy_helper.facts.daily import DailySheet, MatchupMode, load_daily
+from fantasy_helper.facts.daily import DailySheet, MatchupMode, TotalsDifference, load_daily
 from fantasy_helper.pipeline.ingest import _finished_days
 from fantasy_helper.reports.recap import recap_cards
 from fantasy_helper.storage.repositories import league_data, leagues, nba, users
@@ -388,8 +388,7 @@ def test_the_cards_say_it_in_the_leagues_points(session: Session) -> None:
     assert matchup.items == (
         "Last night (Wed Nov 4): you 68.0, Rivals 22.0",
         "Week 1 so far: you 150.0, Rivals 133.0 (you lead Rivals by 17.0)",
-        "Our totals match ESPN's own (4 of 4)",
-    )
+    )  # nothing says that ESPN's totals agree: they do, and that's the system working
     assert matchup.data["checked"] == {"matched": 4, "total": 4}
 
     standouts = cards["daily-standouts"]
@@ -439,9 +438,19 @@ def test_a_totals_gap_against_the_platform_is_reported_not_hidden(session: Sessi
     assert s.matchup.checked.total == 4
     assert s.matchup.checked.matched == 2  # their day and their week both differ
     assert s.matchup.checked.gaps == (2.0, 2.0)
-    items = {c.id: c for c in recap_cards(s)}["daily-matchup"].items
-    assert any(item.startswith("Our totals differ from ESPN's own in 2 of 4") for item in items)
-    assert "Last night (Wed Nov 4): you 68.0, Rivals 22.0" in items  # still our number
+    assert s.matchup.differences == (
+        TotalsDifference(side="them", what="day", ours=22.0, theirs=20.0),
+        TotalsDifference(side="them", what="week", ours=133.0, theirs=131.0),
+    )
+    cards = {c.id: c for c in recap_cards(s)}
+    assert list(cards)[:2] == ["daily-matchup", "daily-mismatch"]
+    assert "Last night (Wed Nov 4): you 68.0, Rivals 22.0" in cards["daily-matchup"].items
+    mismatch = cards["daily-mismatch"]
+    assert mismatch.title == "Our numbers differ from ESPN's for last night and this week"
+    assert mismatch.items == (
+        "Last night (Rivals): ours 22.0, ESPN 20.0",
+        "Week 1 so far (Rivals): ours 133.0, ESPN 131.0",
+    )
 
 
 def test_a_day_without_a_saved_lineup_leaves_the_totals_unknown_not_zero(session: Session) -> None:
@@ -504,7 +513,6 @@ def test_a_categories_league_counts_each_category_for_the_week(session: Session)
         "You lead: PTS, AST, FG%",
         "You trail: REB",
         "Tied: TO",
-        "Our totals match ESPN's own (10 of 10)",
     )
 
 
@@ -539,9 +547,13 @@ def test_the_platforms_category_totals_disagreeing_is_reported(session: Session)
                 "PTS": 79.0, "REB": 32.0, "AST": 11.0, "TO": 7.0, "FG%": 0.52}),
         )],
     )  # fmt: skip
-    m = sheet(session, world).matchup
+    s = sheet(session, world)
+    m = s.matchup
     assert m is not None
     assert (m.checked.matched, m.checked.total) == (9, 10)
+    card = {c.id: c for c in recap_cards(s)}["daily-mismatch"]
+    assert card.title == "Our numbers differ from ESPN's for this week"
+    assert card.items == ("FG% this week (Rivals): ours 0.485, ESPN 0.520",)
 
 
 # ------------------------------------------------------------------------- a lock-in league
@@ -727,6 +739,117 @@ def test_no_pickup_is_listed_when_the_game_days_lineup_was_not_stored(session: S
     s = sheet(session, world)
     assert s.pickups == ()
     assert "daily-pickups" not in {c.id for c in recap_cards(s)}
+
+
+WED_TIP = datetime(2026, 11, 5, 0, 30, tzinfo=UTC)  # Wednesday's game: 7:30 PM Eastern
+
+
+def move(
+    session: Session,
+    world: World,
+    external_id: str,
+    at: datetime,
+    *,
+    drop: bool = False,
+    kind: TransactionKind = TransactionKind.FREE_AGENT,
+) -> None:
+    """Team 3 adds (or drops) H, at `at`."""
+    item = TransactionItem(
+        player=PlayerKey(source=IdSource(world.league.platform.value), external_id=world.pickup_id),
+        action=ItemAction.DROP if drop else ItemAction.ADD,
+        from_team="3" if drop else None,
+        to_team=None if drop else "3",
+    )
+    league_data.upsert_transactions(session, world.league.id, [TransactionRecord(
+        external_id=external_id, kind=kind, status=TransactionStatus.EXECUTED,
+        team_external_id="3", proposed_at=at, scoring_period=1, items=(item,),
+    )])  # fmt: skip
+
+
+def sleeper_world(session: Session) -> World:
+    """The world on Sleeper, whose stored roster for a day is the one ingested that morning:
+    Wednesday morning's has H on nobody's team."""
+    world = build_world(session, platform=Platform.SLEEPER, lock_in=True)
+    wednesday_lineup(session, world, h_on=None)
+    return world
+
+
+def test_on_sleeper_a_pickup_made_on_the_game_day_before_his_game_counts(
+    session: Session,
+) -> None:
+    # Regression (PR #39 review): Sleeper keeps no lineup per day, so a free agent added at noon
+    # who scored 41 that night was never in that day's stored roster, and never listed.
+    world = sleeper_world(session)
+    move(session, world, "noon", WED_START + timedelta(hours=12))
+    s = sheet(session, world)
+    (pick,) = s.pickups
+    assert (pick.team, pick.added_day, pick.kind) == ("3", "2026-11-04", "free_agent")
+    h = player(s, world, "H")
+    assert (h.owner, h.slot) == ("3", None)  # the morning's roster didn't have him: no slot
+    cards = {c.id: c for c in recap_cards(s)}
+    assert cards["daily-pickups"].items == (
+        "Player H 41.0, expected 15.0 (added by Third Team on Wed Nov 4)",
+    )
+    assert "Player H 41.0 (Third Team)" in cards["daily-standouts"].items
+
+
+def test_on_sleeper_a_same_day_pickup_dropped_before_his_game_does_not_count(
+    session: Session,
+) -> None:
+    world = sleeper_world(session)
+    move(session, world, "noon", WED_START + timedelta(hours=12))
+    move(session, world, "five", WED_START + timedelta(hours=17), drop=True)
+    s = sheet(session, world)
+    assert s.pickups == ()
+    assert player(s, world, "H").owner is None
+    # Added again after his game had tipped: that game still wasn't team 3's.
+    move(session, world, "eight", WED_TIP + timedelta(minutes=30))
+    assert sheet(session, world).pickups == ()
+
+
+def test_on_sleeper_a_drop_before_his_game_takes_him_off_the_morning_roster(
+    session: Session,
+) -> None:
+    # The morning's roster has H on team 3 (picked up Tuesday); team 3 drops him at 3 PM.
+    world = build_world(session, platform=Platform.SLEEPER, lock_in=True)
+    move(session, world, "three", WED_START + timedelta(hours=15), drop=True)
+    s = sheet(session, world)
+    assert s.pickups == ()
+    assert player(s, world, "H").owner is None
+    # A drop after his game changes nothing about the game.
+    later = build_world(session, platform=Platform.SLEEPER, lock_in=True)
+    move(session, later, "late", WED_TIP + timedelta(hours=3), drop=True)
+    (pick,) = sheet(session, later).pickups
+    assert (pick.team, pick.added_day) == ("3", "2026-11-03")
+    assert player(sheet(session, later), later, "H").slot == "BENCH"  # still where he was
+
+
+def test_on_sleeper_a_waiver_claim_made_on_the_game_day_waits_for_the_overnight_run(
+    session: Session,
+) -> None:
+    # Waiver claims are processed overnight (03:08 Eastern in Sleeper's recorded responses), so a
+    # claim made at noon didn't put him on the team for that night's game.
+    world = sleeper_world(session)
+    move(session, world, "claim", WED_START + timedelta(hours=12), kind=TransactionKind.WAIVER)
+    s = sheet(session, world)
+    assert s.pickups == ()
+    assert player(s, world, "H").owner is None
+
+
+def test_on_espn_the_days_own_lineup_stays_the_truth(session: Session) -> None:
+    # ESPN's stored roster for a finished day is that day's lineup, which already includes a
+    # same-day add: a move it doesn't show didn't happen in time, and nothing is replayed.
+    world = build_world(session)
+    wednesday_lineup(session, world, h_on=None)
+    move(session, world, "noon", WED_START + timedelta(hours=12))
+    s = sheet(session, world)
+    assert s.pickups == ()
+    assert player(s, world, "H").owner is None
+    # And a drop the day's lineup doesn't show changes nothing either.
+    other = build_world(session)
+    move(session, other, "three", WED_START + timedelta(hours=15), drop=True)
+    (pick,) = sheet(session, other).pickups
+    assert pick.team == "3"
 
 
 def test_the_lineup_fetch_always_covers_last_night_even_on_the_first_day_of_a_week(

@@ -82,7 +82,7 @@ The engine is a set of programs that only do arithmetic. They don't touch the in
 - **Win probability** for your weekly matchup.
 - **Streaming moves**: which free agent to add and who to drop, within your league's limits.
 
-Its numbers are checked against ESPN and Sleeper's own totals every morning.
+Its numbers are checked against ESPN and Sleeper's own totals every morning. The report says nothing when they agree; when they don't, the daily report shows a card saying which totals differ, with both numbers.
 
 ### The reports
 The daily and weekly jobs turn the engine's results into **reports made of short cards**, one decision per card, each with its reason. A card that lists several players or numbers shows each on its own bullet line:
