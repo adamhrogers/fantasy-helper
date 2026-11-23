@@ -3,10 +3,19 @@
 from datetime import UTC, date, datetime
 from uuid import uuid4
 
-from fantasy_helper.domain.facts import FactDay, FactMatchup, FactPlayer, FactSheet, SheetKind
+from fantasy_helper.domain.facts import (
+    FactAdds,
+    FactDay,
+    FactMatchup,
+    FactPlayer,
+    FactSheet,
+    SheetKind,
+)
+from fantasy_helper.domain.recommendations import CallType
 from fantasy_helper.domain.reports import CardKind
 from fantasy_helper.engine.distributions import blended_mean
 from fantasy_helper.reports.weekly import weekly_report
+from tests.unit.test_domain import make_recommendation
 
 NOW = datetime(2026, 11, 2, 12, 0, tzinfo=UTC)
 
@@ -32,9 +41,11 @@ def test_a_whole_week_overview() -> None:
     matchup, games, below = report.cards
     assert matchup.kind is CardKind.MATCHUP
     assert matchup.title == "Week 3 vs Rival: 74% to win"
-    assert "Mon 8/10 (1 on the bench)" in games.body
-    assert "Bench Guy (-4.5)" in below.body
-    assert "Hurt Star" not in below.body  # IR players aren't judged
+    assert games.body == "26 of your 30 games fit a starting slot."  # no add limit: nothing said
+    assert games.items == ("Mon: 8 of 10 slots, 1 on the bench",)
+    assert below.items == ("Bench Guy: -4.5 a game",)  # IR players aren't judged
+    assert matchup.body == "Projected for Mon Nov 2 to Sunday."
+    assert matchup.items == ("Projected: you 1050 (± 80), Rival 980 (± 75)",)
 
 
 def test_mid_week_with_points_banked() -> None:
@@ -45,8 +56,11 @@ def test_mid_week_with_points_banked() -> None:
     banked = s.model_copy(update={"matchup": so_far})
     card = weekly_report(banked, [], user_id=uuid4(), generated_at=NOW).cards[0]
     assert card.title == "Week 3 vs Rival: 21% to win"
-    assert card.body.startswith("So far this week: you 512, Rival 560.")
-    assert "with Thu Nov 5 to Sunday still to play" in card.body
+    assert card.body == "Thu Nov 5 to Sunday still to play."
+    assert card.items == (
+        "So far: you 512, Rival 560",
+        "Projected final: you 1050 (± 80), Rival 980 (± 75)",
+    )
 
 
 def test_mid_week_says_so_instead_of_guessing() -> None:
@@ -59,3 +73,33 @@ def test_projections_blend_with_what_he_actually_does() -> None:
     assert blended_mean(28.4, []) == 28.4  # no games yet: the projection alone
     eight_games = [10.875] * 8
     assert round(blended_mean(28.4, eight_games), 1) == 20.6  # (10 * 28.4 + 87) / 18
+
+
+def test_the_adds_left_this_week_are_shown_where_the_league_limits_them() -> None:
+    limited = sheet(date(2026, 11, 2), 0.74).model_copy(
+        update={"adds": FactAdds(allowed=4, left=3)}
+    )
+    games = weekly_report(limited, [], user_id=uuid4(), generated_at=NOW).cards[1]
+    assert games.id == "weekly-games"
+    assert games.body == "26 of your 30 games fit a starting slot. 3 of 4 adds left this week."
+    assert games.data["adds"] == {"allowed": 4, "left": 3}
+    spent = limited.model_copy(update={"adds": FactAdds(allowed=1, left=0)})
+    games = weekly_report(spent, [], user_id=uuid4(), generated_at=NOW).cards[1]
+    assert games.body.endswith(" 0 of 1 add left this week.")
+    # A league with no limit says nothing about adds.
+    unlimited = weekly_report(sheet(date(2026, 11, 2), 0.74), [], user_id=uuid4(), generated_at=NOW)
+    assert "adds" not in unlimited.cards[1].body
+    assert "adds" not in unlimited.cards[1].data
+
+
+def test_each_move_is_its_own_card_with_its_numbers_as_bullets() -> None:
+    s = sheet(date(2026, 11, 2), 0.74)
+    rec = make_recommendation(
+        league_id=s.league_id, call_type=CallType.STREAM, confidence=0.71,
+        detail={"add_name": "New Guy", "drop_name": "Old Guy", "gain": 12.34, "games_added": 1},
+    )  # fmt: skip
+    move = weekly_report(s, [("move", rec)], user_id=uuid4(), generated_at=NOW).cards[2]
+    assert move.kind is CardKind.MOVE
+    assert move.title == "Add New Guy, drop Old Guy"
+    assert move.items == ("+12.3 expected points this week", "1 more game in a starting slot")
+    assert move.recommendation_id == rec.id  # still one logged call per card

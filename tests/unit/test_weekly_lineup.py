@@ -154,10 +154,13 @@ def test_the_report_says_who_the_plan_left_out_and_why() -> None:
         c for c in weekly_report(s, [], user_id=uuid4(), generated_at=NOW).cards
         if c.id == "weekly-lineup"
     )  # fmt: skip
-    assert "Hurt (in your lineup, not expected to play) on Mon, Tue" in card.body
-    assert "Bench (better players fill the slots) on Mon" in card.body
-    assert "Lost (XYZ), Teamless (no team on file)" in card.body
-    assert card.body.index("Hurt") < card.body.index("Bench")  # your lineup first
+    assert card.body == "Games the plan doesn't count, and why."
+    assert card.items == (  # one line per player, your lineup first
+        "Hurt: in your lineup, not expected to play (Mon, Tue)",
+        "Bench: better players fill the slots (Mon)",
+        "Lost: no games in the schedule this week (XYZ)",
+        "Teamless: no games in the schedule this week (no team on file)",
+    )
 
 
 def test_the_card_only_appears_when_there_is_something_to_say() -> None:

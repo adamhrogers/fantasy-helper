@@ -351,10 +351,22 @@ def compare_totals(
     """Totals in both maps (keys: a side, a category): does ours equal the platform's? A key the
     platform doesn't report isn't compared. `gaps` holds ours minus theirs for each mismatch."""
     keys = [k for k in reported if k in ours]
-    gaps = []
-    for k in keys:
+    gaps = [round(ours[k] - reported[k], 3) for k in differing(ours, reported, tolerance=tolerance)]
+    return Agreement(len(keys) - len(gaps), len(keys), tuple(gaps))
+
+
+def differing(
+    ours: Mapping[str, float],
+    reported: Mapping[str, float],
+    *,
+    tolerance: float | Mapping[str, float] = DAY_TOLERANCE,
+) -> list[str]:
+    """The keys in both maps where ours and the platform's differ by more than the tolerance, in
+    the platform's order."""
+    out = []
+    for k in (k for k in reported if k in ours):
         # A number (int or float) is one tolerance for every key; a mapping is one per key.
         limit = tolerance.get(k, DAY_TOLERANCE) if isinstance(tolerance, Mapping) else tolerance
         if abs(ours[k] - reported[k]) > limit:
-            gaps.append(round(ours[k] - reported[k], 3))
-    return Agreement(len(keys) - len(gaps), len(keys), tuple(gaps))
+            out.append(k)
+    return out

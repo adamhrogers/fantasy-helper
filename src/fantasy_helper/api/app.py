@@ -90,9 +90,15 @@ def get_reports(
     session: DbSession,
     on: Annotated[date | None, Query(alias="date")] = None,
 ) -> schemas.ReportsOut:
-    """The latest reports of this kind (or those of one date), one per league: one query."""
-    found = reports.for_user(session, user.id, ReportKind(kind), on)
-    return schemas.ReportsOut(for_date=found[0].for_date if found else None, reports=found)
+    """The latest reports of this kind (or those of one date), one per league: one query. Daily
+    reports come with that date's games (how many, and when the first tips), from the same query."""
+    if kind == "daily":
+        found, games = reports.with_game_day(session, user.id, ReportKind.DAILY, on)
+    else:
+        found, games = reports.for_user(session, user.id, ReportKind.WEEKLY, on), None
+    return schemas.ReportsOut(
+        for_date=found[0].for_date if found else None, reports=found, games=games
+    )
 
 
 @router.get("/v1/push/public-key", response_model=schemas.PushKey, tags=["push"])

@@ -82,12 +82,12 @@ The engine is a set of programs that only do arithmetic. They don't touch the in
 - **Win probability** for your weekly matchup.
 - **Streaming moves**: which free agent to add and who to drop, within your league's limits.
 
-Its numbers are checked against ESPN and Sleeper's own totals every morning.
+Its numbers are checked against ESPN and Sleeper's own totals every morning. The report says nothing when they agree; when they don't, the daily report shows a card saying which totals differ, with both numbers.
 
 ### The reports
-The daily and weekly jobs turn the engine's results into **reports made of short cards**, one decision per card, each with its reason:
-- **Daily** (your Sleeper league only, today): "Lock this player's 48 points" or "Pass".
-- **Weekly** (all three leagues): your matchup and win chance, how many games each side can actually start, and add/drop suggestions. The 9-category league only gets the basics for now.
+The daily and weekly jobs turn the engine's results into **reports made of short cards**, one decision per card, each with its reason. A card that lists several players or numbers shows each on its own bullet line:
+- **Daily** (every league): what happened last night (your matchup, your team against its projections, the night's best games, recent pickups that paid off, surprises), plus "Lock this player's 48 points" or "Pass" in the Sleeper league. The top of the app's Today tab says when the day's first game tips.
+- **Weekly** (all three leagues): your matchup and win chance, how many games each side can actually start, how many adds you have left where the league limits them, and add/drop suggestions. The 9-category league only gets the basics for now.
 
 Each report is saved in the database.
 

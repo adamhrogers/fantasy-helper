@@ -225,6 +225,17 @@ input {
   white-space: pre-line;
 }
 
+.card-items {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+.card-items li::marker {
+  color: var(--muted);
+}
+
 .card-reason {
   padding-left: 0.6rem;
   border-left: 3px solid var(--line);
@@ -234,6 +245,10 @@ input {
 
 .card-plain {
   color: var(--muted);
+}
+
+.first-game {
+  font-weight: 600;
 }
 
 .banner {

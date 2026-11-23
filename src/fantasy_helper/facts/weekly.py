@@ -98,6 +98,7 @@ class WeeklySheet:
     opponent: TeamWeek | None
     free_agents: tuple[WeekPlayer, ...]
     adds_left: int | None  # None: no limit
+    adds_allowed: int | None  # this week's limit; None: no limit
     projection_snapshot_ids: tuple[UUID, ...]
     first_tip_utc: datetime | None  # the earliest game left this week, for call deadlines
     # Points banked this week before today, from our box scores and each day's lineup. None when
@@ -218,13 +219,15 @@ def load_weekly(
             their_banked = _banked(session, league.id, opp_id, days, by_day)
         if league.platform is Platform.ESPN:
             reported = sum(reported_by_day.get(scoring_period_of(d, opening), 0.0) for d in days)
+    adds_left, adds_allowed = _add_budget(session, league, rules, week_start, week_end)
     return WeeklySheet(
         league=league, rules=rules, settings_version=version, week=week,
         week_start=week_start, week_end=week_end, from_day=from_day, as_of=now,
         mine=team(league.my_team_external_id),
         opponent=team(opp_id) if opp_id else None,
         free_agents=free_agents,
-        adds_left=_adds_left(session, league, rules, week_start, week_end),
+        adds_left=adds_left,
+        adds_allowed=adds_allowed,
         projection_snapshot_ids=tuple(s for s in snapshots.values() if s),
         first_tip_utc=min(future_tips) if future_tips else None,
         my_banked=my_banked, their_banked=their_banked, my_banked_reported=reported,
@@ -310,15 +313,16 @@ def _lockable(
     return by_day[(player_id, latest)]
 
 
-def _adds_left(
+def _add_budget(
     session: Session, league: League, rules: LeagueRules, week_start: date, week_end: date
-) -> int | None:
+) -> tuple[int | None, int | None]:
+    """(adds left, adds allowed) this matchup week; (None, None) when the league has no limit."""
     allowed = matchup_add_limit(rules.acquisition_limits, (week_end - week_start).days + 1)
     if allowed is None:
-        return None
+        return None, None
     since = datetime.combine(week_start, time(0), NBA_TIMEZONE)
     used = league_data.adds_since(session, league.id, league.my_team_external_id or "", since)
-    return max(allowed - used, 0)
+    return max(allowed - used, 0), allowed
 
 
 def expected_week(players: Sequence[WeekPlayer]) -> list[PlayerWeek]:

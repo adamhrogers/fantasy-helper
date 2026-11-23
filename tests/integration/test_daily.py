@@ -198,6 +198,16 @@ def test_the_weekly_run_builds_every_league_and_stores_its_facts(
     assert points.sheet.matchup is not None
     assert points.sheet.matchup.my_banked is not None
     assert points.sheet.matchup.win_probability is not None
+    # The recorded ESPN league limits adds (4 per 7-day matchup): the overview says what's left.
+    adds = points.sheet.adds
+    assert adds is not None
+    assert 0 <= adds.left <= adds.allowed
+    assert points.report is not None
+    games = next(c for c in points.report.cards if c.id == "weekly-games")
+    assert f"{adds.left} of {adds.allowed} adds left this week." in games.body
+    sleeper = next(lg for lg in result.leagues if lg.league.platform is Platform.SLEEPER)
+    assert sleeper.sheet is not None
+    assert sleeper.sheet.adds is None  # no limit, nothing said
     sheets = count(session, FactSheetRow.id)
     values = count(session, LeaguePlayerValueRow.player_id)
     calls = count(session, RecommendationRow.id)

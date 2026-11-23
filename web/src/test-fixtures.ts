@@ -17,6 +17,7 @@ export function card(overrides: Partial<Card> = {}): Card {
     kind: 'move',
     title: 'Add a player, drop another',
     body: 'A short body that says what to do.',
+    items: [],
     reason: 'Because the numbers say so.',
     ...overrides,
   };

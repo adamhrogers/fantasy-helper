@@ -279,6 +279,30 @@ What keeps the door open, so it isn't rebuilt later:
 
 Every number is valued by the league's own rules (a categories league, which has no points, gets an index in standard deviations). **Checked against the platform:** ESPN's own daily points for points leagues and its running category totals for categories leagues; the run reports a disagreement as a warning. A lock-in league gets the same cards, with the matchup card showing last night's game scores before locks next to the platform's own week score: it gives no total of ours and guesses no locks. **Not built, and still open:** the opponent-aware part of lock-in v2, the "I locked / I passed" button (needs the API and the app), and the raw per-stat running totals ESPN sends for points leagues as a further check on box scores.
 
+## Direction: reports that read well on the phone (stated 2026-11-22, after the first week of reading them there)
+
+**Adam's point, 2026-11-22:** having read the live reports on his iPhone, he asked for four batches of changes, in this order. The first two are built; the other two are next and are recorded here so they aren't lost.
+
+**A. Fixes (built 2026-11-22, PR #39; ADR 0033 and ADR 0029 Updates):**
+1. **A pickup that paid off must still have been on the team that added him** for the game he played, judged by the lineup stored for that day (on Sleeper, which keeps no lineup per day, the morning's roster and the day's moves up to his tip); with no roster stored, none is listed. The card used to credit a team for a player it had dropped before the game. Rosters weren't stale (ingest replaces them every morning); the check was missing.
+4. **Matches are silent, mismatches are loud** (Adam, 2026-11-23): nothing says our totals agree with the platform's; when they don't, it's a card of its own with both numbers for each total.
+2. **When today's games start, once at the top of the Today tab:** the first tip-off in the user's own time zone, or "No NBA games today". Only the time: Adam was explicit that he doesn't want a note about how the day's count changes after it.
+3. **"N of M adds left this week" on the weekly overview,** for a league that limits adds; nothing for one that doesn't.
+
+**B. Bullets instead of blocks of text (built 2026-11-22).** A card that lists several players or facts (the night's top games, pickups, expected against unexpected, his team's over and under, the weekly moves, who a day's count left out, and the like) gives each its own bullet, with at most a one-line summary above. It is a typed field on the card (`items`), built by code and drawn as a real list.
+
+**C. A points chart on the weekly overview (next, after B).** Running totals from Monday to Sunday for **both his team and his opponent's**, each with a dotted projected line and a solid actual line, so he sees where the week stands and where it's heading. Points leagues first: a categories league has no points total (it may get a per-category view later). Every point on the chart is computed by code from what the weekly sheet already holds (banked points per day from box scores and each day's lineup, the projection for the days left); the app only draws it. It needs a typed series on the weekly report (a card's data or a new field), and a chart in the app that stays readable in light and dark and on a phone.
+
+**D. A smarter weekly planner (next; builds on "a smarter weekly planner" above, items 2 and 3).**
+- **Which day to add and drop**, not "add now": from each player's game schedule, the open lineup slots each day and the adds left, so a swap waits until after the dropped player's last useful game and lands before the added player's best stretch.
+- **Injured-reserve returns:** players on injured reserve who may come back this week, as planned roster events ("if he's cleared, drop this player").
+- **Adam's requirements for the injury side:**
+  - **One source of truth for injury news,** read the same way everywhere in the app: ESPN or Sleeper, whichever is more practical (RotoWire directly is likely behind a paywall).
+  - **Judge from the whole recent history of a player's news, not the latest line.** A note saying out for about ten days, followed the next day by "questionable", most likely means he still won't play; the latest status alone would say otherwise.
+  - **Keep that history from now on.** Like the snapshots (rule 8), news can't be fetched back later, so it has to be saved as it arrives.
+  - **Plan it before any code,** with real responses recorded and tested against first (rule 4), the way every source has been added.
+  - **Start from what is already kept.** `injury_observations` records each provider's status and short note whenever either changes, from every snapshot (twice a day) since the snapshots began. The plan should say what that history already answers, and what it lacks (the longer news text, expected return dates, one provider chosen as the truth), before adding anything.
+
 ---
 
 ## M6 — Grading and timeline graphs · about Nov 29–Dec 4, or Dec 4–9

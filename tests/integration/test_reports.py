@@ -12,8 +12,9 @@ from typer.testing import CliRunner
 
 from fantasy_helper.cli.main import app
 from fantasy_helper.domain.league import League, Platform
-from fantasy_helper.domain.reports import Card, CardKind, ReportDocument, ReportKind
-from fantasy_helper.storage.repositories import database, leagues, users
+from fantasy_helper.domain.records import ScheduledGameRecord
+from fantasy_helper.domain.reports import Card, CardKind, GameDay, ReportDocument, ReportKind
+from fantasy_helper.storage.repositories import database, leagues, nba, users
 from fantasy_helper.storage.repositories import reports as saved_reports
 from fantasy_helper.storage.tables import LeagueRow, ReportRow, UserRow
 from tests.integration.test_ingest import count, setup_owner
@@ -107,6 +108,62 @@ def test_the_latest_reports_come_in_one_query_in_league_name_order(
     names = {lg.id: lg.name for lg in mine}
     assert [names[r.league_id] for r in found] == sorted(names[lg.id] for lg in mine)
     assert {r.for_date for r in found} == {date(2026, 11, 15)}  # the latest date, in the same query
+
+
+def test_daily_reports_come_with_that_days_games_in_the_same_query(
+    session: Session, engine: Engine
+) -> None:
+    owner = setup_owner(session)
+    mine = leagues.list_for_user(session, owner.id)
+    for lg in mine:
+        saved_reports.save(session, report(owner.id, lg.id, day=date(2026, 11, 15)))
+    saved_reports.save(session, report(owner.id, mine[0].id, day=date(2026, 11, 16)))
+    # Sunday 2026-11-15 in New York (UTC-5): games are dated by their Eastern tip-off.
+    nba.upsert_games(session, 2027, [
+        game("sat-late", datetime(2026, 11, 15, 3, 30, tzinfo=UTC)),  # 10:30 PM Saturday
+        game("sun-early", datetime(2026, 11, 15, 20, 0, tzinfo=UTC)),  # 3:00 PM Sunday: first
+        game("sun-late", datetime(2026, 11, 16, 3, 30, tzinfo=UTC)),  # 10:30 PM Sunday
+        game("mon", datetime(2026, 11, 16, 5, 0, tzinfo=UTC)),  # midnight: Monday's
+    ])  # fmt: skip
+    statements: list[str] = []
+
+    def record(_conn, _cursor, statement, *_rest):  # type: ignore[no-untyped-def]
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        found, games = saved_reports.with_game_day(
+            session, owner.id, ReportKind.DAILY, date(2026, 11, 15)
+        )
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+    assert len([s for s in statements if s.lstrip().upper().startswith("SELECT")]) == 1
+    assert len(found) == len(mine)
+    assert found == saved_reports.for_user(session, owner.id, ReportKind.DAILY, date(2026, 11, 15))
+    assert games == GameDay(
+        day=date(2026, 11, 15), games=2, first_tip_utc=datetime(2026, 11, 15, 20, 0, tzinfo=UTC)
+    )
+    # The latest date by default: Monday, whose only game tips at midnight.
+    _, monday = saved_reports.with_game_day(session, owner.id, ReportKind.DAILY)
+    assert monday == GameDay(
+        day=date(2026, 11, 16), games=1, first_tip_utc=datetime(2026, 11, 16, 5, 0, tzinfo=UTC)
+    )
+    # A day with no games says so; a date with no reports has nothing to say.
+    saved_reports.save(session, report(owner.id, mine[0].id, day=date(2026, 11, 26)))
+    _, off_day = saved_reports.with_game_day(
+        session, owner.id, ReportKind.DAILY, date(2026, 11, 26)
+    )
+    assert off_day == GameDay(day=date(2026, 11, 26), games=0)
+    assert saved_reports.with_game_day(session, owner.id, ReportKind.DAILY, date(2026, 1, 1)) == (
+        [],
+        None,
+    )
+
+
+def game(external_id: str, tip: datetime) -> ScheduledGameRecord:
+    return ScheduledGameRecord(
+        external_id=external_id, scoring_period=1, tip_utc=tip, home_team="BOS", away_team="NYK"
+    )
 
 
 def test_one_users_reports_are_never_anothers(session: Session) -> None:

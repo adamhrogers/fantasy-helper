@@ -131,6 +131,8 @@ def test_each_user_sees_only_their_own_leagues_and_reports(
         assert [lg["name"] for lg in mine["leagues"]] == ["Ana's league"]
         got = client.get("/v1/reports/daily", headers=a.headers()).json()
         assert got["for_date"] == "2026-11-15"
+        # The day's games come with the daily reports (none are scheduled in this test).
+        assert got["games"] == {"day": "2026-11-15", "games": 0, "first_tip_utc": None}
         assert [c["title"] for r in got["reports"] for c in r["cards"]] == ["Ana's recap"]
         assert {r["league_id"] for r in got["reports"]} == {str(a.league.id)}
 
@@ -139,10 +141,11 @@ def test_each_user_sees_only_their_own_leagues_and_reports(
 
         # A date with nothing saved is an empty answer, not an error and not someone else's.
         empty = client.get("/v1/reports/weekly", headers=a.headers()).json()
-        assert empty == {"for_date": None, "reports": []}
+        assert empty == {"for_date": None, "reports": [], "games": None}
         assert client.get("/v1/reports/daily?date=2020-01-01", headers=a.headers()).json() == {
             "for_date": None,
             "reports": [],
+            "games": None,
         }
         assert client.get("/v1/reports/scorecard", headers=a.headers()).status_code == 422
 

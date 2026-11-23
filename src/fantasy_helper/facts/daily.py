@@ -3,8 +3,10 @@ scoring (ADR 0022: one box score per player and game, valued by each league's ow
 
 For every league, whatever its format:
 - every player's night (`Performance`): what he did in league value, what was expected of him
-  going in, and who owns him
-- the free-agent and waiver pickups of the past week, with their night
+  going in, and who had him for his game (the lineup stored for that day on ESPN; on Sleeper,
+  whose stored roster is the morning's, that roster and the day's moves up to his tip)
+- the free-agent and waiver pickups of the past week, with their night, counted only when the
+  team that added him still had him for that game
 - the matchup: last night's points and the matchup so far, for both teams, checked against the
   platform's own totals where it gives them
 
@@ -51,6 +53,7 @@ from fantasy_helper.engine.recap import (
     Pickup,
     category_totals,
     compare_totals,
+    differing,
     expected_game,
     good_game_line,
     league_sd,
@@ -65,6 +68,10 @@ from fantasy_helper.storage.repositories import league_data, nba, players
 from fantasy_helper.storage.tables import PlayerGameStatRow, stat_line
 
 PICKUP_DAYS = 7  # how far back an add still counts as a recent pickup
+# Platforms whose stored roster for a finished day is that day's own lineup (ESPN: ingest fetches
+# each finished day's lineup). Elsewhere (Sleeper) the stored roster for a day is the one ingested
+# that morning, so who had a player at his game is worked out from it and the day's moves.
+DAY_LINEUP_PLATFORMS = frozenset({Platform.ESPN})
 
 
 class MatchupMode(StrEnum):
@@ -94,6 +101,16 @@ class Side:
 
 
 @dataclass(frozen=True)
+class TotalsDifference:
+    """One total where ours and the platform's disagree (beyond the tolerance)."""
+
+    side: str  # "me" or "them"
+    what: str  # "day", "week", or a category's name (the week so far)
+    ours: float
+    theirs: float
+
+
+@dataclass(frozen=True)
 class MatchupDay:
     mode: MatchupMode
     week: int
@@ -101,6 +118,7 @@ class MatchupDay:
     me: Side
     them: Side
     checked: Agreement  # our totals against the platform's, both teams: matched out of compared
+    differences: tuple[TotalsDifference, ...] = ()  # each total that disagreed, both numbers
 
 
 @dataclass(frozen=True)
@@ -169,12 +187,20 @@ def load_daily(
         snapshot_ids = tuple(s for s in snapshots.values() if s)
         book = ProjectionBook(session, snapshots, ids, sitting(session, ids, as_of=first_tip))
         profiles = players.profiles(session, ids)
-        # Who owned whom comes only from the lineup stored for that day. Today's roster is no
+        # Who owned whom comes only from the roster stored for that day. Today's roster is no
         # stand-in: a player traded or dropped since would be credited to the wrong team. With no
-        # lineup stored, every player is shown without an owner.
+        # roster stored, every player is shown without an owner.
         day_roster = league_data.roster_on(session, league.id, game_day)
         lineup_known = bool(day_roster)
-        roster = {pid: (team, slot) for team, pid, slot in day_roster}
+        roster: dict[UUID, tuple[str, str | None]] = {
+            pid: (team, slot) for team, pid, slot in day_roster
+        }
+        if lineup_known and league.platform not in DAY_LINEUP_PLATFORMS:
+            tips = {gid: tip for gid, tip, _, _, _ in games}
+            roster = _at_tip(
+                session, league, game_day, roster,
+                {r.player_id: tips[r.game_id] for r in night if r.game_id in tips},
+            )  # fmt: skip
         prior_cv = league_cv(list(history.values()))
         prior_sd = league_sd(list(history.values()))
         for r in night:
@@ -216,27 +242,75 @@ def load_daily(
 def _pickups(
     session: Session, league: League, game_day: date, performances: Sequence[Performance]
 ) -> tuple[Pickup, ...]:
+    """Adds of the past week whose player played last night for the team that added him.
+
+    A pickup only counts when the adding team had him for his game (his `owner`: the lineup stored
+    for the game day, or on Sleeper the morning's roster and the day's moves up to his tip, see
+    `_at_tip`). One dropped (or traded) before the game didn't pay off for them. With no roster
+    stored for that day, every owner is unknown, so nothing is listed rather than guessed."""
     since = datetime.combine(game_day - timedelta(days=PICKUP_DAYS - 1), time(0), NBA_TIMEZONE)
     # Only adds made by the end of the game day (Eastern): a player added the next morning wasn't
     # a pickup that did well last night.
     until = datetime.combine(game_day + timedelta(days=1), time(0), NBA_TIMEZONE)
     adds = league_data.recent_adds(session, league.id, since, until)
-    by_source: dict[str, list[str]] = defaultdict(list)
-    for add in adds:
-        by_source[add.source].append(add.external_id)
-    resolved = {
-        (source, ext): pid
-        for source, ids in by_source.items()
-        for ext, pid in players.resolve_external(session, source, ids).items()
-    }
+    resolved = _resolve(session, [(add.source, add.external_id) for add in adds])
     night = {p.player_id: p for p in performances}
     latest: dict[UUID, Pickup] = {}
     for add in adds:  # oldest first, so a player added twice keeps his latest add
         pid = resolved.get((add.source, add.external_id))
-        if pid is not None and pid in night:
+        if pid is not None and pid in night and night[pid].owner == add.team_external_id:
             added_day = add.proposed_at.astimezone(NBA_TIMEZONE).date()
             latest[pid] = Pickup(night[pid], add.team_external_id, added_day.isoformat(), add.kind)
     return tuple(latest.values())
+
+
+def _resolve(session: Session, keys: Sequence[tuple[str, str]]) -> dict[tuple[str, str], UUID]:
+    """(source, the platform's player ID) to our player, for the ones identity knows."""
+    by_source: dict[str, list[str]] = defaultdict(list)
+    for source, ext in keys:
+        by_source[source].append(ext)
+    return {
+        (source, ext): pid
+        for source, ids in by_source.items()
+        for ext, pid in players.resolve_external(session, source, ids).items()
+    }
+
+
+def _at_tip(
+    session: Session,
+    league: League,
+    game_day: date,
+    morning: dict[UUID, tuple[str, str | None]],
+    tips: dict[UUID, datetime],
+) -> dict[UUID, tuple[str, str | None]]:
+    """Who had each of the night's players when his own game tipped, for a platform whose stored
+    roster for a day is that morning's (Sleeper). Start from the morning's roster, then apply the
+    game day's moves that take effect when made (free-agent and commissioner adds and drops) in
+    order, each player's only up to his tip. So a player added at noon who played that night is
+    the adding team's, and one dropped before his game isn't.
+
+    Waiver claims process overnight, before the morning ingest, so the morning's roster already
+    has them. A trade's stored time is when it was proposed, not when it went through, so a trade
+    on the game day isn't seen. A move made before the morning ingest is applied again, which
+    changes nothing (an add puts him where he already is; a drop only removes him from that
+    team). A player's slot is known only while he's where the morning's roster had him."""
+    start = datetime.combine(game_day, time(0), NBA_TIMEZONE)
+    end = max(tips.values(), default=start)
+    moves = league_data.immediate_moves(session, league.id, start, end)
+    resolved = _resolve(session, [(m.source, m.external_id) for m in moves])
+    owner = {pid: team for pid, (team, _) in morning.items()}
+    for move in moves:  # oldest first
+        pid = resolved.get((move.source, move.external_id))
+        if pid is None or pid not in tips or move.at >= tips[pid]:
+            continue
+        if move.joined:
+            owner[pid] = move.team_external_id
+        elif owner.get(pid) == move.team_external_id:
+            del owner[pid]
+    return {
+        pid: (team, morning[pid][1] if morning.get(pid, (None, None))[0] == team else None)
+        for pid, team in owner.items()
+    }
 
 
 # ------------------------------------------------------------------------------ the matchup
@@ -424,5 +498,13 @@ def _lineup_matchup(
 
     me, them = side(teams[0], "me"), side(teams[1], "them")
     mode = MatchupMode.POINTS if points else MatchupMode.CATEGORIES
-    checked = compare_totals(ours, reported, tolerance=tolerances or DAY_TOLERANCE)
-    return MatchupDay(mode, week, final, me, them, checked)
+    tolerance = tolerances or DAY_TOLERANCE
+    checked = compare_totals(ours, reported, tolerance=tolerance)
+    differences = tuple(
+        TotalsDifference(
+            side=key.partition(":")[0], what=key.partition(":")[2],
+            ours=ours[key], theirs=reported[key],
+        )
+        for key in differing(ours, reported, tolerance=tolerance)
+    )  # fmt: skip
+    return MatchupDay(mode, week, final, me, them, checked, differences)

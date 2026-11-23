@@ -56,13 +56,14 @@ export function formatDay(day: string): string {
   }).format(new Date(`${day}T12:00:00Z`));
 }
 
-/** "6:19 AM" in the user's zone. */
-export function formatTime(iso: string, timeZone: string): string {
+/** "6:19 AM" in the user's zone; "6:19 AM EST" with `zoneName`. */
+export function formatTime(iso: string, timeZone: string, { zoneName = false } = {}): string {
   const moment = new Date(iso);
   if (Number.isNaN(moment.getTime())) return '';
   return new Intl.DateTimeFormat('en-US', {
     hour: 'numeric',
     minute: '2-digit',
     timeZone: zoneOrDevice(timeZone),
+    ...(zoneName ? { timeZoneName: 'short' as const } : {}),
   }).format(moment);
 }
