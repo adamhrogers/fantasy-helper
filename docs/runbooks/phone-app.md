@@ -1,6 +1,6 @@
 # The phone app: setup and day to day
 
-**Written:** 2026-11-16. **Who:** Adam, with Claude checking each step. **Design:** [ADR 0029](../decisions/0029-the-phone-apps-api.md) (the API) and [ADR 0009](../decisions/0009-pwa-vite-react.md) (the app); its push comes in M3 Phase 4 ([m3-plan.md](../m3-plan.md)) and adds a section here.
+**Written:** 2026-11-16. **Who:** Adam, with Claude checking each step. **Design:** [ADR 0029](../decisions/0029-the-phone-apps-api.md) (the API), [ADR 0009](../decisions/0009-pwa-vite-react.md) (the app) and [ADR 0030](../decisions/0030-push-the-report-jobs-tell-the-phone.md) (push, Part 3). The plan is [m3-plan.md](../m3-plan.md).
 
 All commands run in your own Terminal app, from `~/projects/fantasy-helper`. Values come from Bitwarden and go in at hidden prompts; none is ever typed into the chat.
 
@@ -188,3 +188,123 @@ Start with the banner: it says which day the newest report is from.
 
 ## Later: the emailed code, for friends at the beta
 You sign in with a password. Friends can't be given a password you made for them, so the beta signs people in with a 6-digit code emailed to them (a tapped link would open Safari, not the app on the Home Screen). **The code is already in the app**: set the build variable `VITE_SIGN_IN_WITH_CODE` to `true` in Cloudflare and rebuild, and the sign-in screen gains "Email me a code instead". It never creates an account (sign-ups stay off), so an email that isn't a user is refused. What it needs first, in Supabase: a **custom email sender** (Authentication → SMTP Settings; Supabase's built-in one reaches only your own organization's members, 2 an hour, and no longer lets you edit the templates), and the **Magic Link** template showing `{{ .Token }}`. A sender on a domain you own is the right one for friends (Resend's free test address, `onboarding@resend.dev`, delivers only to its own account's email). This is part of the beta's setup, with the domain decision in [m3-plan.md](../m3-plan.md), and none of it is needed for you alone. `scripts/api-smoke.sh` already supports it: press Enter at the password prompt.
+
+## Part 3: notifications (Phase 4). About 15 minutes of your time
+
+Every morning, a few minutes after 06:17 Eastern, your phone says **Today's report is ready**; on Mondays it also says **This week's overview is ready**. A tap opens the app on that tab. The report jobs send it (after the report is saved, once a day), the app only asks for permission and says where to send it. Design and the reasons: [ADR 0030](../decisions/0030-push-the-report-jobs-tell-the-phone.md).
+
+**It needs an iPhone on iOS 16.4 or later, with the app on the Home Screen** (Part 2, step 5). Safari's own tabs can't get notifications, and the app shows a hint instead of a button when it isn't running from the Home Screen.
+
+**Do these in order.** The key (step 3) has to exist before the merge, because the deploy mounts it and a secret with no value fails the deploy. Nothing here costs money, and nothing is sent to your phone until step 7.
+
+### 1. Check out the PR's branch, without taking it over
+Until the PR is merged, the new scripts exist only on its branch. (After the merge they are on `main`, and you can skip this step and the "back to main" step.)
+
+```bash
+git worktree list
+```
+
+If a line shows `claude/m3-part5-push-7f9cf6`, a Claude session still holds that branch, so a normal checkout would fail. This works either way:
+
+```bash
+git fetch && git checkout --detach origin/claude/m3-part5-push-7f9cf6
+```
+
+### 2. Create the two empty secrets
+```bash
+scripts/gcp-setup.sh infra
+```
+
+It only adds: the two secrets (`fh-vapid-private-key`, which only the morning report jobs may read, and `fh-vapid-public-key`, which the API serves to the app) and the permissions around them. It is safe to run again.
+
+### 3. Make the keys
+```bash
+scripts/vapid-setup.sh
+```
+
+It makes the key pair and sends each half straight to Google. **You type nothing and there is nothing to paste.** It prints the public key (that one isn't secret: every browser is handed it) and says where each half went. It refuses to run a second time, on purpose: a new pair breaks every phone that has notifications on (see "Changing the keys" below).
+
+### 4. Back to main
+
+```bash
+git checkout main
+```
+
+### 5. Merge the PR
+Merge it in GitHub (Claude can do it when you say so). The deploy migrates the database (migration 0008 adds `reports.notified_at`), then moves the API and the report jobs onto the new image. Watch it:
+
+```bash
+gh run watch
+```
+
+Cloudflare rebuilds the app from `main` at the same time (about a minute).
+
+### 6. Turn notifications on, in the app, on your iPhone
+1. Open **Fantasy** from the Home Screen icon (not Safari). If a bar says "A new version is ready", tap **Update**. If it doesn't show, close the app from the app switcher and open it twice.
+2. On **Today**, scroll to the bottom, above "Signed in as…". Tap **Enable notifications**.
+3. iOS asks to allow notifications. Tap **Allow**. (iOS asks once. If you tap Don't Allow, the app says notifications are blocked and how to allow them in Settings.)
+
+**Right looks like:** the button turns into "Notifications are on." with **Turn off** beside it.
+
+### 7. Check the whole path
+```bash
+gcloud run jobs execute daily --region us-east4 --args=push,test --wait
+```
+
+This runs the `daily` job with its command replaced, so it has the same key and database as the morning run. It sends one **Test notification** to every phone that has notifications on. It isn't a morning run: it changes no report and starts nothing after it.
+
+**Right looks like:** the command ends with "Execution ... has successfully completed" and your phone shows **Test notification** within a few seconds. The answer also arrives as an ops notification on your phone ("Push test: sent"), with a line per device. If it fails, the same notification says why ("Push test: not delivered"); "No notification came" below has the meanings.
+
+### 8. Wait for a real morning
+Leave it. The next morning, a few minutes after 06:17 Eastern, **Today's report is ready** arrives (the chain finishes around 06:20), and a tap opens Today. A rerun the same day stays quiet. **Right looks like:** one notification, a tap that lands on Today, and no second one. On a Monday there is a second, for the weekly overview, with a tap that lands on This Week.
+
+To see whether a report was announced (the `notified_at` column is empty when it wasn't):
+
+```bash
+scripts/fh-sql.sh "select kind, for_date, notified_at from reports order by generated_at desc limit 6"
+```
+
+## No notification came
+
+Start with step 7's answer (the ops notification on your phone): it names the push service, the status and what it means. For a morning run, the run's warning says the same ("Report built, but the push service refused the push…"). The job's own log has the same lines:
+
+```bash
+gcloud logging read 'resource.type="cloud_run_job" AND resource.labels.job_name="daily"' --freshness 2h --limit 40 --format 'value(textPayload)'
+```
+
+| What you see | Meaning and fix |
+|---|---|
+| The app shows a hint about the Home Screen and no button | It was opened from Safari. Open it from the Home Screen icon. If there is no icon, Part 2, step 5. |
+| "This browser can't show notifications from this app" | The iPhone is older than iOS 16.4, or the browser isn't Safari-based. Update iOS. |
+| "Notifications are blocked for this app" | iOS was told no. iPhone Settings → Notifications → **Fantasy** → Allow Notifications, then open the app again. |
+| Tapping Enable says "Couldn't turn on notifications on this phone (AbortError)" | Apple's push service didn't register the device. Close and reopen the app and tap again; if it repeats, remove the Home Screen icon and add it again (Part 2, step 5). Tell Claude if it still fails. |
+| Tapping Enable says "The server had a problem (status 503)" | The API has no public key: step 3 hasn't run, or the API hasn't restarted since. Actions → Deploy → Run workflow (the API reads its secrets when it starts). |
+| The push test says "no device has notifications on" | Step 6 hasn't worked yet, or it was done in a copy of the app that has since been removed (a re-added icon is a new device). Do step 6 again. |
+| The push test says `FH_VAPID_PRIVATE_KEY isn't set` | The job doesn't have the key: step 3 hasn't run, or the deploy hasn't run since. Run Actions → Deploy → Run workflow and try again. |
+| The push test says `FH_APP_ORIGINS has no https address` | `fh-app-origins` still holds the placeholder. Part 2, step 4 puts the app's address in it. |
+| `refused HTTP 403` or `401` (the reason is often `BadJwtToken`) | Apple didn't accept our key or our address. Two causes: **the address**: the **first** address in `fh-app-origins` must be the app's own `https://…` address, exactly (no path, no trailing `/`): `scripts/gcp-secrets.sh fh-app-origins`, then run the test again (the jobs read secrets each time they start; the API needs Actions → Deploy → Run workflow too); or **the key pair**: the phone subscribed with a different pair than the job holds. Turn notifications off and on again in the app. If it still refuses, `scripts/vapid-setup.sh --rotate` (see below). |
+| `refused HTTP 413` | A message over the size limit, which can't happen with counts only. Tell Claude. |
+| `gone HTTP 410` (or 404) | The phone's subscription is dead (the icon was removed, or notifications were withdrawn). The job deleted it. Open the app and tap Enable notifications again. |
+| `failed … couldn't be reached or is having trouble` | A push service outage or a timeout. Run the test again in a minute. A morning run that hit this left the report unannounced, so a rerun of that run announces it. |
+| The push test passes but the phone shows nothing | The phone is hiding it. iPhone Settings → Notifications → **Fantasy**: Allow Notifications on, with Lock Screen and Banners ticked; check Focus and Do Not Disturb. |
+| The morning report was built but nothing came, and no warning | Check `notified_at` (step 8). **Empty** and no warning means no phone had notifications on at 06:20 (the app's button, step 6). **Set** means a push was accepted: look at the phone's settings (the row above). On a day that isn't Monday the weekly overview is never announced, on purpose. |
+| Two notifications at the same time | One per phone that has notifications on. A phone and a laptop each get one. |
+| A tap opens the app, but not on Today | Tell Claude: the tap's path is one of two fixed ones, and a test pins it. |
+
+## Turning notifications off
+In the app, **Turn off** at the bottom of Today: the phone drops its subscription and the server forgets it. (Removing the Home Screen icon does the same, one push later: the push service answers "gone" and the job deletes the device.)
+
+## Which days the weekly overview notifies
+Mondays, in your time zone. The weekday is one number, `WEEKLY_NOTIFY_WEEKDAY` in `src/fantasy_helper/pipeline/notify.py` (0 is Monday, 6 is Sunday). It is yours to change: tell Claude, or change it and merge. The daily report notifies every morning.
+
+## Changing the keys
+Almost never needed, and it costs you a few taps: **a new pair stops every phone that has notifications on from getting them,** until each is turned off and on again in the app. Do it only if the private key may have leaked, or the table above sends you here.
+
+```bash
+scripts/vapid-setup.sh --rotate
+```
+
+It tells you what it will break and waits for you to type `rotate`. Afterwards run **Actions → Deploy → Run workflow** (the API reads its key when it starts), then on each phone open the app: it says notifications are off (it noticed its subscription belongs to the old key) and the button makes a new one. Then run step 7 again.
+
+## Changing the app's address
+The push subscription belongs to the app's address, and so does the installed app (Part 2): moving to a domain means a reinstall, and then step 6 again. The job takes the address it presents to the push service from the first address in `fh-app-origins`, so put the new address first.
