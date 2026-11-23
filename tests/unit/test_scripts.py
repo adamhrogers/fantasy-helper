@@ -3,9 +3,12 @@ they send, what they refuse, and that a secret never lands in a command line (AD
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
+
+from fantasy_helper.delivery.push import public_key_of
 
 ROOT = Path(__file__).parents[2]
 SCRIPTS = ROOT / "scripts"
@@ -411,3 +414,117 @@ def test_the_sql_script_fetches_only_the_readonly_url_and_never_writes_it(tmp_pa
     assert "fh-database-url" not in (tmp_path / "gcloud.log").read_text()
     assert {p.name for p in ROOT.iterdir()} == before
     assert run("fh-sql.sh", env=env).returncode == 2
+
+
+# ------------------------------------------------------------------- the push keys (ADR 0030)
+
+
+@pytest.fixture
+def fake_vapid_cloud(tmp_path: Path) -> dict[str, str]:
+    """A `gcloud` that records every call and what it is given on stdin, over a Secret Manager with
+    two empty secrets, and a `uv` that runs the project's own Python (the real key generator)."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "gcloud").write_text(
+        """#!/bin/sh
+echo "$*" >> "$FAKE_DIR/gcloud.log"
+case "$1 $2" in
+  "secrets describe") [ -f "$FAKE_DIR/missing" ] && exit 1; exit 0 ;;
+  "secrets versions")
+    case "$3" in
+      list) cat "$FAKE_DIR/enabled-$4" 2>/dev/null; exit 0 ;;
+      add) cat > "$FAKE_DIR/stored-$4"; echo "$4" >> "$FAKE_DIR/added.log"; exit 0 ;;
+      disable) echo "$6 $4" >> "$FAKE_DIR/disabled.log"; exit 0 ;;
+    esac ;;
+esac
+exit 9
+"""
+    )
+    (bin_dir / "uv").write_text(
+        '#!/bin/sh\n[ "$1 $2" = "run python" ] || exit 9\nshift 2\nexec "$REAL_PYTHON" "$@"\n'
+    )
+    for tool in ("gcloud", "uv"):
+        (bin_dir / tool).chmod(0o755)
+    return {
+        "PATH": f"{bin_dir}:/usr/bin:/bin",
+        "FAKE_DIR": str(tmp_path),
+        "REAL_PYTHON": sys.executable,
+    }
+
+
+def test_the_push_keys_are_made_in_one_process_and_only_the_public_one_is_printed(
+    fake_vapid_cloud: dict[str, str], tmp_path: Path
+) -> None:
+    done = run("vapid-setup.sh", env=fake_vapid_cloud)
+    assert done.returncode == 0, done.stderr
+    private = (tmp_path / "stored-fh-vapid-private-key").read_text()
+    public = (tmp_path / "stored-fh-vapid-public-key").read_text()
+    # What was saved is a working pair: the library derives this public key from that private one.
+    assert public_key_of(private) == public
+    assert f"public key: {public}" in done.stdout
+    # The private key reached Secret Manager on stdin and nowhere else.
+    for where in (done.stdout, done.stderr, (tmp_path / "gcloud.log").read_text()):
+        assert private not in where
+    # The public one first, so a failure between the two is safe to repeat.
+    assert (tmp_path / "added.log").read_text().split() == [
+        "fh-vapid-public-key",
+        "fh-vapid-private-key",
+    ]
+
+
+def test_the_push_keys_script_refuses_to_run_twice_without_rotate(
+    fake_vapid_cloud: dict[str, str], tmp_path: Path
+) -> None:
+    (tmp_path / "enabled-fh-vapid-private-key").write_text("1\n")
+    done = run("vapid-setup.sh", env=fake_vapid_cloud)
+    assert done.returncode == 1
+    assert "already has a key" in done.stderr
+    assert "--rotate" in done.stderr
+    assert not (tmp_path / "added.log").exists()  # nothing was changed
+    assert not (tmp_path / "disabled.log").exists()
+
+
+def test_rotating_needs_a_typed_yes_then_replaces_the_pair_and_disables_the_old_one(
+    fake_vapid_cloud: dict[str, str], tmp_path: Path
+) -> None:
+    (tmp_path / "enabled-fh-vapid-private-key").write_text("1\n")
+    (tmp_path / "enabled-fh-vapid-public-key").write_text("1\n")
+    declined = run("vapid-setup.sh", "--rotate", stdin="yes\n", env=fake_vapid_cloud)
+    assert declined.returncode == 1
+    assert not (tmp_path / "added.log").exists()  # only the word "rotate" goes on
+
+    done = run("vapid-setup.sh", "--rotate", stdin="rotate\n", env=fake_vapid_cloud)
+    assert done.returncode == 0, done.stderr
+    assert "turned off and on again" in done.stdout  # said before it asks
+    assert sorted((tmp_path / "added.log").read_text().split()) == [
+        "fh-vapid-private-key",
+        "fh-vapid-public-key",
+    ]
+    assert sorted((tmp_path / "disabled.log").read_text().splitlines()) == [
+        "fh-vapid-private-key 1",
+        "fh-vapid-public-key 1",
+    ]
+
+
+def test_the_push_keys_script_needs_the_secrets_to_exist_first(
+    fake_vapid_cloud: dict[str, str], tmp_path: Path
+) -> None:
+    (tmp_path / "missing").write_text("")
+    done = run("vapid-setup.sh", env=fake_vapid_cloud)
+    assert done.returncode == 1
+    assert "scripts/gcp-setup.sh infra" in done.stderr
+    assert not (tmp_path / "added.log").exists()
+    assert run("vapid-setup.sh", "--nonsense", env=fake_vapid_cloud).returncode == 2
+
+
+def test_the_secrets_script_wont_take_a_push_key_typed_in(tmp_path: Path) -> None:
+    """A key pair is generated and checked, never pasted: a typo would sign nothing."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "gcloud").write_text("#!/bin/sh\nexit 0\n")
+    (bin_dir / "gcloud").chmod(0o755)
+    env = {"PATH": f"{bin_dir}:/usr/bin:/bin"}
+    for name in ("fh-vapid-private-key", "fh-vapid-public-key"):
+        done = run("gcp-secrets.sh", name, stdin="anything\n", env=env)
+        assert done.returncode == 2
+        assert "scripts/vapid-setup.sh" in done.stderr

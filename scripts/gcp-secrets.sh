@@ -10,7 +10,8 @@
 #   scripts/gcp-secrets.sh fh-ntfy-topic       # just one (to rotate it)
 #
 # Values come from Bitwarden. The R2 values are the Cloud Run token's, its own token, not the
-# laptop's or GitHub's (docs/runbooks/scheduled-jobs.md).
+# laptop's or GitHub's (docs/runbooks/scheduled-jobs.md). The two push keys (fh-vapid-*) aren't
+# here: they are generated, not pasted (scripts/vapid-setup.sh).
 set -euo pipefail
 
 # macOS ships bash 3.2, so no associative arrays here.
@@ -26,13 +27,17 @@ prompt_for() {
     fh-encryption-key) echo "The prod encryption key (the one GitHub's prod FH_ENCRYPTION_KEY holds)" ;;
     fh-api-database-url) echo "The prod database URL for the API (Supabase's TRANSACTION pooler string, port 6543)" ;;
     fh-supabase-url) echo "The prod Supabase project URL (https://<project>.supabase.co)" ;;
-    fh-app-origins) echo "The app's address(es), comma-separated (https://not-set.invalid until the app exists)" ;;
+    fh-app-origins) echo "The app's address(es), comma-separated; the FIRST is the app itself (https://not-set.invalid until the app exists)" ;;
     *) return 1 ;;
   esac
 }
 
 [[ $# -eq 0 ]] || NAMES=("$@")
 for name in "${NAMES[@]}"; do
+  if [[ "$name" == fh-vapid-* ]]; then
+    echo "$name is made, not typed: scripts/vapid-setup.sh (ADR 0030)" >&2
+    exit 2
+  fi
   prompt="$(prompt_for "$name")" || { echo "unknown secret: $name" >&2; exit 2; }
   read -rsp "$prompt: " value
   echo

@@ -9,7 +9,8 @@
 #   scripts/gcp-setup.sh schedule   # Cloud Scheduler entries, after the first deploy
 #   scripts/gcp-setup.sh show       # what exists, no changes
 #
-# Secret values are added separately, by Adam, with scripts/gcp-secrets.sh.
+# Secret values are added separately, by Adam, with scripts/gcp-secrets.sh (the two push keys:
+# scripts/vapid-setup.sh).
 set -euo pipefail
 
 REGION=us-east4                       # the jobs, the image repository
@@ -45,8 +46,14 @@ DATABASE_SECRETS=(fh-database-url fh-encryption-key)
 # The API gets its own three and nothing else: its database URL (Supabase's transaction pooler, a
 # different string from the jobs'), the Supabase project it trusts sign-ins from, and the app's
 # addresses. No encryption key, no R2, no ping key, so it can never decrypt a league login.
-API_SECRETS=(fh-api-database-url fh-supabase-url fh-app-origins)
-SECRETS=("${SNAPSHOT_SECRETS[@]}" "${DATABASE_SECRETS[@]}" "${API_SECRETS[@]}")
+# The API's fourth is the PUBLIC half of the push key, which it serves to the app (ADR 0030).
+API_SECRETS=(fh-api-database-url fh-supabase-url fh-app-origins fh-vapid-public-key)
+# The PRIVATE half of the push key signs every push, so only the report jobs may read it: the API,
+# which faces the internet, never can. The report jobs also read fh-app-origins, whose first address
+# is the VAPID subject (the app's own address; one source, so it can't drift from the CORS list).
+# Both VAPID secrets are made by scripts/vapid-setup.sh, never typed.
+PUSH_SECRETS=(fh-vapid-private-key)
+SECRETS=("${SNAPSHOT_SECRETS[@]}" "${DATABASE_SECRETS[@]}" "${API_SECRETS[@]}" "${PUSH_SECRETS[@]}")
 # Public sample images, only until the first deploy replaces them.
 PLACEHOLDER=us-docker.pkg.dev/cloudrun/container/job:latest
 PLACEHOLDER_SERVICE=us-docker.pkg.dev/cloudrun/container/hello:latest
@@ -118,6 +125,11 @@ JSON
   for secret in "${SNAPSHOT_SECRETS[@]}"; do
     quiet gcloud secrets add-iam-policy-binding "$secret" \
       --member "serviceAccount:$SA_JOBS" --role roles/secretmanager.secretAccessor
+  done
+  # The report jobs sign pushes: the private key, and the app's address (the VAPID subject).
+  for secret in "${PUSH_SECRETS[@]}" fh-app-origins; do
+    quiet gcloud secrets add-iam-policy-binding "$secret" \
+      --member "serviceAccount:$SA_REPORTS" --role roles/secretmanager.secretAccessor
   done
   for secret in "${API_SECRETS[@]}"; do
     quiet gcloud secrets add-iam-policy-binding "$secret" \
