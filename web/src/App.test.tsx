@@ -61,7 +61,7 @@ describe('signed in', () => {
       reports: vi.fn(async (kind: string) =>
         ok(
           reports('2026-11-16', [
-            report(LEAGUE_A, { kind: kind as 'daily', cards: [{ id: 'x', kind: 'move', title: `The ${kind} card`, body: 'b' }] }),
+            report(LEAGUE_A, { kind: kind as 'daily', cards: [{ id: 'x', kind: 'move', title: `The ${kind} card`, body: 'b', items: [] }] }),
           ]),
         ),
       ),

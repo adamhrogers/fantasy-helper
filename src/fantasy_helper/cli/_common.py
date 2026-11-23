@@ -10,7 +10,8 @@ from sqlalchemy import pool
 from sqlalchemy.orm import Session
 
 from fantasy_helper.config import Settings
-from fantasy_helper.domain.reports import ReportDocument
+from fantasy_helper.domain.calendar import NBA_TIMEZONE
+from fantasy_helper.domain.reports import GameDay, ReportDocument
 from fantasy_helper.domain.runs import RunKind
 from fantasy_helper.observability.events import events_from_settings
 from fantasy_helper.observability.healthchecks import Heartbeat
@@ -126,13 +127,21 @@ def write_report_page(
     title: str,
     *,
     for_date: date | None = None,
+    games: GameDay | None = None,
+    time_zone: str | None = None,
 ) -> Path | None:
-    """Until the phone app (M3 parts 3 and 4), a report is a local page under the git-ignored
-    data dir: reports/<date>/<name>.html."""
+    """A report as a local page under the git-ignored data dir: reports/<date>/<name>.html.
+    `games` (the day's NBA schedule) adds the first game's time, in `time_zone`, at the top."""
     if not reports:
         return None
     day = for_date or reports[0].for_date
-    page = render(list(reports), title=title, league_names=names)
+    page = render(
+        list(reports),
+        title=title,
+        league_names=names,
+        games=games,
+        time_zone=time_zone or NBA_TIMEZONE.key,
+    )
     path = data_dir / "reports" / day.isoformat() / f"{name}.html"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(page, encoding="utf-8")

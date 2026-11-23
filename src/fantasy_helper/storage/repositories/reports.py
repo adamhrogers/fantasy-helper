@@ -1,15 +1,17 @@
 """Saved reports: what the scheduled runs built, read back for the phone app and `fh report open`
 (ADR 0026). One row per league, kind and date, replaced when a run repeats."""
 
-from datetime import date
+from datetime import date, timedelta
+from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import DateTime, Select, and_, cast, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from fantasy_helper.domain.reports import ReportDocument, ReportKind
-from fantasy_helper.storage.tables import LeagueRow, ReportRow
+from fantasy_helper.domain.calendar import NBA_TIMEZONE
+from fantasy_helper.domain.reports import GameDay, ReportDocument, ReportKind
+from fantasy_helper.storage.tables import LeagueRow, NbaGameRow, ReportRow
 
 
 def save(session: Session, report: ReportDocument) -> UUID:
@@ -56,6 +58,32 @@ def for_user(
     """A user's reports of one kind for one date (default: the latest date that has any), one per
     league, by league name. One query either way: the phone app calls this on every open (the hot
     read path, ADR 0020), so the latest date is a subquery, not a first round trip."""
+    rows = session.scalars(_reports(user_id, kind, for_date))
+    return [to_domain(row) for row in rows]
+
+
+def with_game_day(
+    session: Session, user_id: UUID, kind: ReportKind, for_date: date | None = None
+) -> tuple[list[ReportDocument], GameDay | None]:
+    """`for_user`'s reports, plus that date's NBA schedule: how many games, and when the first
+    tips. Still one query: the schedule comes from two small subqueries on `nba_games`' indexed
+    tip-off time. None when there are no reports."""
+    day = ReportRow.for_date
+    start = func.timezone(NBA_TIMEZONE.key, cast(day, DateTime))  # midnight Eastern, as UTC
+    end = func.timezone(NBA_TIMEZONE.key, cast(day, DateTime) + timedelta(days=1))
+    on_day = and_(NbaGameRow.tip_utc >= start, NbaGameRow.tip_utc < end)
+    first_tip = select(func.min(NbaGameRow.tip_utc)).where(on_day).scalar_subquery()
+    games = select(func.count()).select_from(NbaGameRow).where(on_day).scalar_subquery()
+    rows = session.execute(_reports(user_id, kind, for_date, first_tip, games)).all()
+    if not rows:
+        return [], None
+    row, tip, count = rows[0]
+    return [to_domain(r[0]) for r in rows], GameDay(
+        day=row.for_date, games=count, first_tip_utc=tip
+    )
+
+
+def _reports(user_id: UUID, kind: ReportKind, for_date: date | None, *columns: Any) -> Select[Any]:
     day = (
         for_date
         if for_date is not None
@@ -63,15 +91,14 @@ def for_user(
         .where(ReportRow.user_id == user_id, ReportRow.kind == kind.value)
         .scalar_subquery()
     )
-    rows = session.scalars(
-        select(ReportRow)
+    return (
+        select(ReportRow, *columns)
         .join(LeagueRow, LeagueRow.id == ReportRow.league_id)
         .where(
             ReportRow.user_id == user_id, ReportRow.kind == kind.value, ReportRow.for_date == day
         )
         .order_by(LeagueRow.name, ReportRow.league_id)
     )
-    return [to_domain(row) for row in rows]
 
 
 def to_domain(row: ReportRow) -> ReportDocument:

@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from fantasy_helper.domain.calendar import NBA_TIMEZONE
 from fantasy_helper.domain.facts import (
+    FactAdds,
     FactDay,
     FactLeftOut,
     FactMatchup,
@@ -314,6 +315,11 @@ def _league_week(
             for p in ws.mine.active if p.team_games_this_week == 0
         ),
         matchup=matchup,
+        adds=(
+            FactAdds(allowed=ws.adds_allowed, left=ws.adds_left)
+            if ws.adds_allowed is not None and ws.adds_left is not None
+            else None
+        ),
         my_players=tuple(
             FactPlayer(
                 player_id=p.player_id, name=p.name, nba_team=p.nba_team, slot=p.slot,

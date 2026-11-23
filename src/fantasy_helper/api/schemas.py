@@ -7,7 +7,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from fantasy_helper.domain.reports import ReportDocument
+from fantasy_helper.domain.reports import GameDay, ReportDocument
 
 
 class Strict(BaseModel):
@@ -34,6 +34,9 @@ class Me(Strict):
 class ReportsOut(Strict):
     for_date: date | None  # None when nothing is saved yet
     reports: list[ReportDocument]
+    # Daily reports only: the NBA games on `for_date` (the same for every league, so the app
+    # shows it once). None for weekly reports and when nothing is saved.
+    games: GameDay | None = None
 
 
 class PushKey(Strict):

@@ -13,7 +13,7 @@ from uuid import UUID
 
 from fantasy_helper.domain.calendar import NBA_TIMEZONE
 from fantasy_helper.domain.recommendations import Action, Recommendation
-from fantasy_helper.domain.reports import Card, CardKind, ReportDocument, ReportKind
+from fantasy_helper.domain.reports import Card, CardKind, ReportDocument, ReportKind, bullets
 from fantasy_helper.facts.lock_in import LockInSheet, StarterWeek
 
 
@@ -108,15 +108,14 @@ def _lock_card(starter: StarterWeek, rec: Recommendation) -> Card:
         if action is Action.LOCK
         else f"Pass on {starter.name}'s {score:.1f}"
     )
-    body = (
-        f"{starter.slot} · His last game ({_day(d['latest_game_date'])}): {score:.1f} points. "
+    body = f"{starter.slot} · Decide before {_tip(rec.first_tip_utc)}."
+    items = [
+        f"His last game ({_day(d['latest_game_date'])}): {score:.1f} points",
         f"Waiting is worth {wait:.1f} with {len(upcoming)} game"
-        f"{'s' if len(upcoming) != 1 else ''} left ({games}). "
-        f"Decide before {_tip(rec.first_tip_utc)}."
-    )
-    notes = []
+        f"{'s' if len(upcoming) != 1 else ''} left" + (f": {games}" if games else ""),
+    ]
     if d.get("near_tie"):
-        notes.append("Close call: within 2 points either way.")
+        items.append("Close call: within 2 points either way")
     edge = abs(margin)
     reason = (
         f"{'Locking' if action is Action.LOCK else 'Waiting'} is ahead by {edge:.1f} points; "
@@ -126,7 +125,8 @@ def _lock_card(starter: StarterWeek, rec: Recommendation) -> Card:
         id=f"lock-{starter.player_id}",
         kind=CardKind.LOCK_OR_PASS,
         title=title[:120],
-        body=(body + (" " + " ".join(notes) if notes else ""))[:1000],
+        body=body[:1000],
+        items=bullets(items),
         reason=reason,
         recommendation_id=rec.id,
         data={k: v for k, v in d.items() if k != "prior_cv"},
@@ -147,12 +147,13 @@ def _recap(sheet: LockInSheet, decided: set[UUID]) -> Card | None:
     lines = [LOCKS_NOTE] if decided else []
     if quiet:
         lines.append(
-            "Nothing to decide (no game yet this week, sat out, next game already started, or "
-            "no games left): " + ", ".join(s.name for s in quiet) + "."
+            "Nothing to decide for these starters (no game yet this week, sat out, next game "
+            "already started, or no games left):"
         )
     return Card(
         id="lock-in-recap",
         kind=CardKind.RECAP,
         title=f"Week {sheet.week}: {len(decided)} to decide",
         body=" ".join(lines)[:1000],
+        items=bullets(s.name for s in quiet),
     )

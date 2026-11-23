@@ -62,6 +62,36 @@ describe('ReportsView', () => {
     expect(screen.getByRole('region', { name: 'Test League A' })).toHaveTextContent('This report has no cards.');
   });
 
+  it('says once, above every league, when today’s first game tips, in the user’s zone', () => {
+    const games = { day: '2026-11-16', games: 9, first_tip_utc: '2026-11-17T00:00:00Z' }; // 7 PM in New York
+    render(<ReportsView reports={{ ...reports('2026-11-16', [report(LEAGUE_A), report(LEAGUE_B)]), games }} me={ME} now={NOW} />);
+    const lines = screen.getAllByText(/^First game today:/);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toHaveTextContent(/^First game today: 7:00\sPM EST$/);
+    // It sits above the leagues, not inside one of them.
+    expect(within(screen.getByRole('region', { name: 'Test League A' })).queryByText(/First game/)).toBeNull();
+    const zoned = { ...ME, timezone: 'America/Los_Angeles' };
+    render(<ReportsView reports={{ ...reports('2026-11-16', [report(LEAGUE_A)]), games }} me={zoned} now={NOW} />);
+    expect(screen.getByText(/4:00\sPM PST/)).toBeInTheDocument();
+  });
+
+  it('says plainly when there are no games today', () => {
+    const games = { day: '2026-11-16', games: 0, first_tip_utc: null };
+    render(<ReportsView reports={{ ...reports('2026-11-16', [report(LEAGUE_A)]), games }} me={ME} now={NOW} />);
+    expect(screen.getByText('No NBA games today.')).toBeInTheDocument();
+  });
+
+  it('shows no first game for an older report, or when the API sent no schedule', () => {
+    const old = report(LEAGUE_A, { for_date: '2026-11-15' });
+    const games = { day: '2026-11-15', games: 9, first_tip_utc: '2026-11-16T00:00:00Z' };
+    const { rerender } = render(<ReportsView reports={{ ...reports('2026-11-15', [old]), games }} me={ME} now={NOW} />);
+    expect(screen.queryByText(/First game|No NBA games/)).toBeNull();
+    rerender(<ReportsView reports={reports('2026-11-16', [report(LEAGUE_A)])} me={ME} now={NOW} />);
+    expect(screen.queryByText(/First game|No NBA games/)).toBeNull();
+    rerender(<ReportsView reports={{ ...reports('2026-11-16', [report(LEAGUE_A)]), games: null }} me={ME} now={NOW} />);
+    expect(screen.queryByText(/First game|No NBA games/)).toBeNull();
+  });
+
   it('keeps the cards in the order the report gave them, even for kinds it does not know', () => {
     const cards = [
       card({ id: '1', title: 'First', kind: 'recap' }),

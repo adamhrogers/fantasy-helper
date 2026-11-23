@@ -12,7 +12,8 @@ can switch blocks on and off by name (`BLOCKS`) without touching the others:
 - `surprises`: what was expected against what wasn't, across the league
 
 A card's `id` is `daily-<block>`. The kinds are the ones the app already draws (MATCHUP, RECAP,
-LEAGUE_MOVES): a new kind would change the API's schema for no gain.
+LEAGUE_MOVES): a new kind would change the API's schema for no gain. Each player or fact is its
+own line in the card's `items` (bullets on the phone), under at most a one-line `body`.
 """
 
 from collections.abc import Callable, Collection, Iterable
@@ -21,7 +22,7 @@ from datetime import date
 from pydantic import JsonValue
 
 from fantasy_helper.domain.league import NON_STARTING_SLOTS, Platform
-from fantasy_helper.domain.reports import Card, CardKind
+from fantasy_helper.domain.reports import Card, CardKind, bullets
 from fantasy_helper.engine.recap import (
     GOOD_GAME_QUANTILE,
     MY_TEAM_Z,
@@ -173,16 +174,17 @@ def _matchup_card(sheet: DailySheet) -> Card | None:
         return None
     platform = _PLATFORM[sheet.league.platform]
     if m.mode is MatchupMode.POINTS:
-        title, body, reason = _points_matchup(sheet, m, platform)
+        title, body, items, reason = _points_matchup(sheet, m, platform)
     elif m.mode is MatchupMode.CATEGORIES:
-        title, body, reason = _categories_matchup(sheet, m, platform)
+        title, body, items, reason = _categories_matchup(sheet, m, platform)
     else:
-        title, body, reason = _lock_in_matchup(m, platform)
+        title, body, items, reason = _lock_in_matchup(m, platform)
     return Card(
         id="daily-matchup",
         kind=CardKind.MATCHUP,
         title=title[:120],
         body=body[:1000],
+        items=bullets(items),
         reason=reason,
         data={
             "mode": m.mode.value,
@@ -220,19 +222,22 @@ def _side_data(s: Side) -> dict[str, JsonValue]:
     }
 
 
-def _check_note(m: MatchupDay, platform: str) -> str:
+def _check_note(m: MatchupDay, platform: str) -> list[str]:
     c = m.checked
     if c.total == 0:
-        return ""
+        return []
     if c.matched == c.total:
-        return f" Our totals match {platform}'s own ({c.matched} of {c.total})."
-    return (
-        f" Our totals differ from {platform}'s own in {c.total - c.matched} of {c.total}: "
-        "the saved lineups or box scores may be off."
-    )
+        return [f"Our totals match {platform}'s own ({c.matched} of {c.total})"]
+    return [
+        f"Our totals differ from {platform}'s own in {c.total - c.matched} of {c.total}: "
+        "the saved lineups or box scores may be off"
+    ]
 
 
-def _points_matchup(sheet: DailySheet, m: MatchupDay, platform: str) -> tuple[str, str, str]:
+_Matchup = tuple[str, str, list[str], str]  # title, body, items, reason
+
+
+def _points_matchup(sheet: DailySheet, m: MatchupDay, platform: str) -> _Matchup:
     me, them = m.me, m.them
     reason = (
         "Each starter's game from last night, scored by this league's rules, for the lineup "
@@ -243,31 +248,31 @@ def _points_matchup(sheet: DailySheet, m: MatchupDay, platform: str) -> tuple[st
             "Last night's lineups weren't saved, so the day's points can't be counted. "
             f"{platform}'s totals are not used in their place."
         )
-        return f"Week {m.week} vs {them.name}: last night's points unknown", body, reason
+        return f"Week {m.week} vs {them.name}: last night's points unknown", body, [], reason
     title = f"Last night: you {me.day_points:.1f}, {them.name} {them.day_points:.1f}"
-    body = (
-        f"Last night ({_day(sheet)}): you {me.day_points:.1f}, {them.name} {them.day_points:.1f}."
-    )
+    items = [
+        f"Last night ({_day(sheet)}): you {me.day_points:.1f}, {them.name} {them.day_points:.1f}"
+    ]
     if me.week_points is not None and them.week_points is not None:
         if m.final:
             result = "you won" if me.week_points > them.week_points else "you lost"
             if me.week_points == them.week_points:
                 result = "tied"
-            body += (
-                f" Week {m.week} final: you {me.week_points:.1f}, {them.name} "
-                f"{them.week_points:.1f} ({result})."
+            items.append(
+                f"Week {m.week} final: you {me.week_points:.1f}, {them.name} "
+                f"{them.week_points:.1f} ({result})"
             )
         else:
-            body += (
-                f" Week {m.week} so far: you {me.week_points:.1f}, {them.name} "
-                f"{them.week_points:.1f} ({_lead(me.week_points, them.week_points, them.name)})."
+            items.append(
+                f"Week {m.week} so far: you {me.week_points:.1f}, {them.name} "
+                f"{them.week_points:.1f} ({_lead(me.week_points, them.week_points, them.name)})"
             )
     else:
-        body += " The week's total isn't known: a day's lineup wasn't saved."
-    return title, body + _check_note(m, platform), reason
+        items.append("The week's total isn't known: a day's lineup wasn't saved")
+    return title, "", items + _check_note(m, platform), reason
 
 
-def _categories_matchup(sheet: DailySheet, m: MatchupDay, platform: str) -> tuple[str, str, str]:
+def _categories_matchup(sheet: DailySheet, m: MatchupDay, platform: str) -> _Matchup:
     cats = sheet.rules.scoring.categories
     me, them = m.me, m.them
     reason = (
@@ -279,25 +284,25 @@ def _categories_matchup(sheet: DailySheet, m: MatchupDay, platform: str) -> tupl
             "A day's lineup wasn't saved, so this week's category totals can't be counted. "
             f"{platform}'s totals are not used in their place."
         )
-        return f"Week {m.week} vs {them.name}: category totals unknown", body, reason
+        return f"Week {m.week} vs {them.name}: category totals unknown", body, [], reason
     standing = category_standing(me.week_categories, them.week_categories, cats)
     verb = "Final" if m.final else "So far"
     title = f"Week {m.week} vs {them.name}: {verb.lower()} {standing.record}"
-    parts = []
+    items = []
     if standing.leading:
-        parts.append("you lead " + ", ".join(standing.leading))
+        items.append("You lead: " + ", ".join(standing.leading))
     if standing.trailing:
-        parts.append("you trail in " + ", ".join(standing.trailing))
+        items.append("You trail: " + ", ".join(standing.trailing))
     if standing.tied:
-        parts.append("tied in " + ", ".join(standing.tied))
+        items.append("Tied: " + ", ".join(standing.tied))
     body = (
         f"Week {m.week} {verb.lower()} against {them.name} through {_day(sheet)} "
-        f"(won-lost-tied: {standing.record}): " + "; ".join(parts) + "."
+        f"(won-lost-tied: {standing.record})."
     )
-    return title, body + _check_note(m, platform), reason
+    return title, body, items + _check_note(m, platform), reason
 
 
-def _lock_in_matchup(m: MatchupDay, platform: str) -> tuple[str, str, str]:
+def _lock_in_matchup(m: MatchupDay, platform: str) -> _Matchup:
     me, them = m.me, m.them
     reason = (
         "In a lock-in league each starter counts one locked game a week, and the app can't see "
@@ -305,18 +310,19 @@ def _lock_in_matchup(m: MatchupDay, platform: str) -> tuple[str, str, str]:
         "for the starters in each team's lineup that day, before locks: not a comparable total. "
         f"{platform}'s score is its own number."
     )
+    items = []
     if me.day_points is None or them.day_points is None:
         body = "Last night's lineups weren't saved, so last night's games can't be added up."
     else:
-        body = (
-            f"Your starters' games last night added up to {me.day_points:.1f} in this league's "
-            f"scoring; {them.name}'s to {them.day_points:.1f}. That is game scores before locks, "
-            "not your score: only a locked game counts."
+        body = "These are game scores before locks, not your score: only a locked game counts."
+        items.append(
+            f"Last night's games, before locks: you {me.day_points:.1f}, "
+            f"{them.name} {them.day_points:.1f}"
         )
     if me.reported_week is not None and them.reported_week is not None:
-        body += (
-            f" {platform}'s own score for week {m.week}{'' if m.final else ' so far'}: you "
-            f"{me.reported_week:.1f}, {them.name} {them.reported_week:.1f}."
+        items.append(
+            f"{platform}'s own score for week {m.week}{'' if m.final else ' so far'}: you "
+            f"{me.reported_week:.1f}, {them.name} {them.reported_week:.1f}"
         )
         title = (
             f"Week {m.week} vs {them.name}: {platform} shows {me.reported_week:.1f} to "
@@ -324,7 +330,7 @@ def _lock_in_matchup(m: MatchupDay, platform: str) -> tuple[str, str, str]:
         )
     else:
         title = f"Week {m.week} vs {them.name}: last night's games"
-    return title, body, reason
+    return title, body, items, reason
 
 
 # --------------------------------------------------------------------------- my team
@@ -339,7 +345,8 @@ def _my_team_card(sheet: DailySheet) -> Card | None:
     played = [p for p in starters if p.played]
     beat, missed = surprises(starters, MY_TEAM_SHOWN, min_z=MY_TEAM_Z, rostered_only=True)
     sat = expected_but_sat(starters)
-    parts: list[str] = []
+    body = ""
+    items: list[str] = []
     title = "Your team last night"
     if sheet.value.is_points:
         compared = [p for p in played if p.expected_to_play]
@@ -347,35 +354,26 @@ def _my_team_card(sheet: DailySheet) -> Card | None:
             actual = sum(p.value for p in compared)
             expected = sum(p.expected.mean for p in compared if p.expected)
             title = f"Your starters: {actual:.1f} against {expected:.1f} expected"
-            parts.append(
-                f"The {len(compared)} of your starters with a projection scored {actual:.1f} "
-                f"against about {expected:.1f} expected."
-            )
-    if beat:
-        parts.append("Beat the projection: " + _names(sheet, beat) + ".")
-    if missed:
-        parts.append("Missed it: " + _names(sheet, missed) + ".")
-    if sat:
-        parts.append("Expected to play but didn't: " + ", ".join(p.name for p in sat) + ".")
+            body = f"Counting the {len(compared)} of your starters with a projection."
+    items += [f"Over: {row}" for row in _against_expected(sheet, beat)]
+    items += [f"Under: {row}" for row in _against_expected(sheet, missed)]
+    items += [f"Didn't play: {p.name} (expected to)" for p in sat]
     if sheet.good_line is not None:
-        big = [p for p in bench if p.played and p.value >= sheet.good_line]
-        if big:
-            parts.append(
-                "On your bench, with a good game: "
-                + ", ".join(f"{p.name} {_val(sheet, p.value)}" for p in big)
-                + "."
-            )
-    if not parts:
+        items += [
+            f"Bench: {p.name} {_val(sheet, p.value)}, a good game"
+            for p in bench
+            if p.played and p.value >= sheet.good_line
+        ]
+    if not items and not body:
         if not played:
             return None
-        parts.append(
-            f"{len(played)} of your starters played, and none was far off what was expected."
-        )
+        body = f"{len(played)} of your starters played, and none was far off what was expected."
     return Card(
         id="daily-my-team",
         kind=CardKind.RECAP,
         title=title,
-        body=" ".join(parts)[:1000],
+        body=body[:1000],
+        items=bullets(items),
         reason=(
             "Expected is the projection pulled before the games, blended with the player's own "
             f"games this season. {_scoring_note(sheet)}"
@@ -388,12 +386,12 @@ def _my_team_card(sheet: DailySheet) -> Card | None:
     )
 
 
-def _names(sheet: DailySheet, perfs: Iterable[Performance]) -> str:
-    return ", ".join(
+def _against_expected(sheet: DailySheet, perfs: Iterable[Performance]) -> list[str]:
+    return [
         f"{p.name} {_val(sheet, p.value)} (expected {_val(sheet, p.expected.mean)})"
         for p in perfs
         if p.expected is not None
-    )
+    ]
 
 
 # --------------------------------------------------------------------------- standouts
@@ -405,15 +403,19 @@ def _standouts_card(sheet: DailySheet) -> Card | None:
         return None
     rows = []
     for p in top:
+        line = _line(sheet, p)
         rows.append(
-            f"{p.name} {_val(sheet, p.value)}" + _paren(_line(sheet, p), _owner(sheet, p.owner))
+            f"{p.name} {_val(sheet, p.value)}"
+            + (f": {line}" if line else "")
+            + _paren(_owner(sheet, p.owner))
         )
     first = top[0]
     return Card(
         id="daily-standouts",
         kind=CardKind.RECAP,
         title=f"Last night's top game: {first.name}, {_val(sheet, first.value)}"[:120],
-        body=(f"The best games of {_day(sheet)}: " + "; ".join(rows) + ".")[:1000],
+        body=f"The best games of {_day(sheet)}.",
+        items=bullets(rows),
         reason=_scoring_note(sheet),
         data={"standouts": [_entry(sheet, p) for p in top], "unit": sheet.value.unit},
     )
@@ -435,15 +437,16 @@ def _pickups_card(sheet: DailySheet) -> Card | None:
             else ""
         )
         rows.append(
-            f"{p.name} {_val(sheet, p.value)} (added by {_who(sheet, pick.team)} on "
-            f"{_short_day(pick.added_day)}{expected})"
+            f"{p.name} {_val(sheet, p.value)}{expected} (added by {_who(sheet, pick.team)} on "
+            f"{_short_day(pick.added_day)})"
         )
     first = good[0].performance
     return Card(
         id="daily-pickups",
         kind=CardKind.LEAGUE_MOVES,
         title=f"A recent pickup paid off: {first.name}, {_val(sheet, first.value)}"[:120],
-        body=("Added in the last week and good last night: " + "; ".join(rows) + ".")[:1000],
+        body="Added in the last week, still on that team last night, and good.",
+        items=bullets(rows),
         reason=(
             f"A good game beats {GOOD_GAME_QUANTILE:.0%} of the games played this season "
             f"(at least {_val(sheet, sheet.good_line)} here). {_scoring_note(sheet)}"
@@ -478,23 +481,16 @@ def _surprises_card(sheet: DailySheet) -> Card | None:
     sat = expected_but_sat(sheet.performances)[:SURPRISES_SHOWN]
     if not (beat or missed or sat):
         return None
-    parts = []
-    if beat:
-        parts.append("Better than expected: " + _surprise_rows(sheet, beat) + ".")
-    if missed:
-        parts.append("Worse than expected: " + _surprise_rows(sheet, missed) + ".")
-    if sat:
-        parts.append(
-            "Expected to play, didn't: "
-            + ", ".join(f"{p.name}{_paren(_owner(sheet, p.owner))}" for p in sat)
-            + "."
-        )
+    items = [f"Better: {row}" for row in _surprise_rows(sheet, beat)]
+    items += [f"Worse: {row}" for row in _surprise_rows(sheet, missed)]
+    items += [f"Sat out: {p.name}{_paren(_owner(sheet, p.owner))} (expected to play)" for p in sat]
     return Card(
         id="daily-surprises",
         kind=CardKind.RECAP,
         title=f"Against expectations: {len(beat)} better, {len(missed)} worse"
         + (f", {len(sat)} sat out" if sat else ""),
-        body=" ".join(parts)[:1000],
+        body="",
+        items=bullets(items),
         reason=(
             "Expected is the projection pulled before the games, blended with the player's own "
             f"games before last night; a surprise is at least {SURPRISE_Z:g} spread off it. "
@@ -508,13 +504,13 @@ def _surprises_card(sheet: DailySheet) -> Card | None:
     )
 
 
-def _surprise_rows(sheet: DailySheet, perfs: Iterable[Performance]) -> str:
-    return "; ".join(
-        f"{p.name} {_val(sheet, p.value)} against {_val(sheet, p.expected.mean)} expected"
+def _surprise_rows(sheet: DailySheet, perfs: Iterable[Performance]) -> list[str]:
+    return [
+        f"{p.name} {_val(sheet, p.value)}, expected {_val(sheet, p.expected.mean)}"
         + _paren(_owner(sheet, p.owner))
         for p in perfs
         if p.expected is not None
-    )
+    ]
 
 
 BLOCKS: dict[str, Callable[[DailySheet], Card | None]] = {

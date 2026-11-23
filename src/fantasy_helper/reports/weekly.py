@@ -1,13 +1,16 @@
 """The weekly overview: one ReportDocument per league, cards written by code from the FactSheet
-(and, for moves and the matchup forecast, from what the registry logged)."""
+(and, for moves and the matchup forecast, from what the registry logged). A card that lists
+several days, players or numbers gives each its own line in `items` (bullets on the phone)."""
 
 from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID
 
-from fantasy_helper.domain.facts import FactSheet, LeftOut
+from pydantic import JsonValue
+
+from fantasy_helper.domain.facts import FactAdds, FactSheet, LeftOut
 from fantasy_helper.domain.recommendations import CallType, Recommendation
-from fantasy_helper.domain.reports import Card, CardKind, ReportDocument, ReportKind
+from fantasy_helper.domain.reports import Card, CardKind, ReportDocument, ReportKind, bullets
 
 BELOW_REPLACEMENT_SHOWN = 3
 
@@ -50,17 +53,17 @@ def _matchup(sheet: FactSheet, rec: Recommendation | None, lock_in: bool) -> Car
     m = sheet.matchup
     if m is None:
         return None
+    mine = f"you {m.my_points:.0f} (± {m.my_sd:.0f})"
+    theirs = f"{m.opponent} {m.their_points:.0f} (± {m.their_sd:.0f})"
     if m.my_banked is not None and m.their_banked is not None:
-        body = (
-            f"So far this week: you {m.my_banked:.0f}, {m.opponent} {m.their_banked:.0f}. "
-            f"Projected final, with {_span(sheet)} still to play: you {m.my_points:.0f} "
-            f"(± {m.my_sd:.0f}), {m.opponent} {m.their_points:.0f} (± {m.their_sd:.0f})."
-        )
+        body = f"{_span(sheet)} still to play."
+        items = [
+            f"So far: you {m.my_banked:.0f}, {m.opponent} {m.their_banked:.0f}",
+            f"Projected final: {mine}, {theirs}",
+        ]
     else:
-        body = (
-            f"Projected for {_span(sheet)}: you {m.my_points:.0f} (± {m.my_sd:.0f}), "
-            f"{m.opponent} {m.their_points:.0f} (± {m.their_sd:.0f})."
-        )
+        body = f"Projected for {_span(sheet)}."
+        items = [f"Projected: {mine}, {theirs}"]
     if m.win_probability is None:
         body += " The score so far isn't known here (locks aren't visible), so no win probability."
         title = f"Week {sheet.week} vs {m.opponent}: rest of the week"
@@ -73,6 +76,7 @@ def _matchup(sheet: FactSheet, rec: Recommendation | None, lock_in: bool) -> Car
         kind=CardKind.MATCHUP,
         title=title[:120],
         body=body[:1000],
+        items=bullets(items),
         reason="A normal approximation over both teams' projected started games.",
         recommendation_id=rec.id if rec else None,
         data=m.model_dump(mode="json"),
@@ -80,28 +84,40 @@ def _matchup(sheet: FactSheet, rec: Recommendation | None, lock_in: bool) -> Car
 
 
 def _games(sheet: FactSheet, lock_in: bool) -> Card:
+    items: list[str] = []
     if lock_in:
         body = (
             f"{sheet.games} games left on your active roster this week; {sheet.startable} "
             "starters have at least one game."
         )
     else:
-        days = "; ".join(
-            f"{d.day:%a} {d.started}/{d.slots}"
-            + (f" ({d.games - d.started} on the bench)" if d.games > d.started else "")
+        body = f"{sheet.startable} of your {sheet.games} games fit a starting slot."
+        if not sheet.days:
+            body += " No games left this week."
+        items = [
+            f"{d.day:%a}: {d.started} of {d.slots} slots"
+            + (f", {d.games - d.started} on the bench" if d.games > d.started else "")
             for d in sheet.days
-        )
-        body = (
-            f"{sheet.startable} of your {sheet.games} games fit a starting slot. Started per day: "
-            f"{days or 'no games left'}."
-        )
+        ]
+    if sheet.adds is not None:
+        body += f" {adds_left(sheet.adds)}."
+    data: dict[str, JsonValue] = {"games": sheet.games, "startable": sheet.startable}
+    if sheet.adds is not None:
+        data["adds"] = sheet.adds.model_dump(mode="json")
     return Card(
         id="weekly-games",
         kind=CardKind.RECAP,
         title=f"Week {sheet.week}: {sheet.startable} startable games",
         body=body[:1000],
-        data={"games": sheet.games, "startable": sheet.startable},
+        items=bullets(items),
+        data=data,
     )
+
+
+def adds_left(adds: FactAdds) -> str:
+    """ "3 of 4 adds left this week", for a league that limits adds."""
+    plural = "s" if adds.allowed != 1 else ""
+    return f"{adds.left} of {adds.allowed} add{plural} left this week"
 
 
 _WHY = {
@@ -118,27 +134,25 @@ def _lineup(sheet: FactSheet) -> Card | None:
     for d in sheet.days:
         for e in d.left_out:
             left.setdefault((e.name, e.reason, e.in_lineup), []).append(f"{d.day:%a}")
-    parts = []
+    items = []
     for (name, reason, in_lineup), days in sorted(
         left.items(), key=lambda kv: (not kv[0][2], kv[0])
     ):
         where = "in your lineup, " if in_lineup and reason is not LeftOut.OUTRANKED else ""
-        parts.append(f"{name} ({where}{_WHY[reason]}) on {', '.join(days)}")
-    body = ""
-    if parts:
-        body += "Games the plan doesn't count: " + "; ".join(parts) + "."
-    if sheet.without_games:
-        who = ", ".join(
-            f"{g.name} ({g.nba_team or 'no team on file'})" for g in sheet.without_games
-        )
-        body += f" No games found in the schedule this week for: {who}."
-    if not body:
+        items.append(f"{name}: {where}{_WHY[reason]} ({', '.join(days)})")
+    body = "Games the plan doesn't count, and why." if items else ""
+    items += [
+        f"{g.name}: no games in the schedule this week ({g.nba_team or 'no team on file'})"
+        for g in sheet.without_games
+    ]
+    if not items:
         return None
     return Card(
         id="weekly-lineup",
         kind=CardKind.RECAP,
         title="Who the plan counted, and who it left out",
-        body=body.strip()[:1000],
+        body=body,
+        items=bullets(items),
         data={
             "days": [d.model_dump(mode="json") for d in sheet.days if d.left_out],
             "without_games": [g.model_dump(mode="json") for g in sheet.without_games],
@@ -148,13 +162,17 @@ def _lineup(sheet: FactSheet) -> Card | None:
 
 def _move(index: int, rec: Recommendation) -> Card:
     d = rec.detail
+    added = int(d["games_added"])  # type: ignore[arg-type]
     return Card(
         id=f"weekly-move-{index}",
         kind=CardKind.MOVE,
         title=f"Add {d['add_name']}, drop {d['drop_name']}"[:120],
-        body=(
-            f"+{float(d['gain']):.1f} expected points this week: {d['games_added']} more games in "  # type: ignore[arg-type]
-            "a starting slot."
+        body="",
+        items=bullets(
+            [
+                f"+{float(d['gain']):.1f} expected points this week",  # type: ignore[arg-type]
+                f"{added} more game{'s' if added != 1 else ''} in a starting slot",
+            ]
         ),
         reason=f"Comes out ahead {rec.confidence:.0%} of the time, judging by the games' spread.",
         recommendation_id=rec.id,
@@ -177,9 +195,6 @@ def _below_replacement(sheet: FactSheet) -> Card | None:
         id="weekly-below-replacement",
         kind=CardKind.RECAP,
         title="Below replacement on the season",
-        body=(
-            "Each scores less a game than the best free agent who could fill his slot: "
-            + ", ".join(f"{p.name} ({p.value_over_replacement:+.1f})" for p in below)
-            + "."
-        )[:1000],
+        body="Each scores less a game than the best free agent who could fill his slot.",
+        items=bullets(f"{p.name}: {p.value_over_replacement:+.1f} a game" for p in below),
     )

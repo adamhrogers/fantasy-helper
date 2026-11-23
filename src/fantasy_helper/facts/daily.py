@@ -4,7 +4,8 @@ scoring (ADR 0022: one box score per player and game, valued by each league's ow
 For every league, whatever its format:
 - every player's night (`Performance`): what he did in league value, what was expected of him
   going in, and who owns him
-- the free-agent and waiver pickups of the past week, with their night
+- the free-agent and waiver pickups of the past week, with their night, counted only when the
+  lineup stored for that night still had the player on the team that added him
 - the matchup: last night's points and the matchup so far, for both teams, checked against the
   platform's own totals where it gives them
 
@@ -216,6 +217,11 @@ def load_daily(
 def _pickups(
     session: Session, league: League, game_day: date, performances: Sequence[Performance]
 ) -> tuple[Pickup, ...]:
+    """Adds of the past week whose player played last night for the team that added him.
+
+    A pickup only counts when the lineup stored for the game day has him on the adding team: one
+    dropped (or traded) before the game didn't pay off for them. With no lineup stored for that
+    day, every performance's owner is unknown, so nothing is listed rather than guessed."""
     since = datetime.combine(game_day - timedelta(days=PICKUP_DAYS - 1), time(0), NBA_TIMEZONE)
     # Only adds made by the end of the game day (Eastern): a player added the next morning wasn't
     # a pickup that did well last night.
@@ -233,7 +239,8 @@ def _pickups(
     latest: dict[UUID, Pickup] = {}
     for add in adds:  # oldest first, so a player added twice keeps his latest add
         pid = resolved.get((add.source, add.external_id))
-        if pid is not None and pid in night:
+        # `owner` comes from the lineup stored for the game day (None when none was stored).
+        if pid is not None and pid in night and night[pid].owner == add.team_external_id:
             added_day = add.proposed_at.astimezone(NBA_TIMEZONE).date()
             latest[pid] = Pickup(night[pid], add.team_external_id, added_day.isoformat(), add.kind)
     return tuple(latest.values())

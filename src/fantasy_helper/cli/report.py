@@ -1,6 +1,7 @@
-"""`fh report open`: read a saved report back and show it as a local page, until the phone app
-(M3 parts 3 and 4) shows them. Works against whichever database DATABASE_URL names, so
-`scripts/fh-prod.sh report open` shows what the scheduled jobs built in the cloud (ADR 0026)."""
+"""`fh report open`: read a saved report back and show it as a local page, drawn the way the phone
+app shows it (the day's first game at the top of a daily report, each card's bullets). Works
+against whichever database DATABASE_URL names, so `scripts/fh-prod.sh report open` shows what the
+scheduled jobs built in the cloud (ADR 0026)."""
 
 import webbrowser
 from datetime import date
@@ -44,7 +45,10 @@ def open_saved(
         owner = users.get_owner(session)
         if owner is None:
             raise fail("no user yet: run `fh league add` first")
-        found = reports.for_user(session, owner.id, ReportKind(kind.value), day)
+        if kind is OpenKind.DAILY:
+            found, games = reports.with_game_day(session, owner.id, ReportKind.DAILY, day)
+        else:
+            found, games = reports.for_user(session, owner.id, ReportKind.WEEKLY, day), None
         names = {str(lg.id): lg.name for lg in leagues.list_for_user(session, owner.id)}
     if not found:
         when = f"for {day}" if day else "yet"
@@ -58,6 +62,8 @@ def open_saved(
         f"{kind.value}-saved",
         f"{kind.value.title()} report",
         for_date=found[0].for_date,
+        games=games,
+        time_zone=owner.timezone,
     )
     assert path is not None  # noqa: S101 (found is not empty)
     cards = sum(len(r.cards) for r in found)

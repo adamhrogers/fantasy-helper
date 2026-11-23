@@ -96,13 +96,16 @@ def test_cards_say_what_was_logged_and_when_to_decide() -> None:
     assert report.engine_only
     assert first.kind is CardKind.LOCK_OR_PASS
     assert first.title == "Lock Big Night: 52.0"
-    assert "Decide before Fri 8:00 PM ET." in first.body
+    assert first.body == "UTIL · Decide before Fri 8:00 PM ET."
+    assert first.items[0] == "His last game (Wed): 52.0 points"
+    assert first.items[1].startswith("Waiting is worth ")
+    assert first.items[1].endswith(" with 2 games left: Fri ~30.0, Sun ~28.0")
     assert first.recommendation_id == calls[0][1].id
     assert calls[0][1].first_tip_utc == TONIGHT  # the deadline is his next tip-off
     assert "Sleeper" not in second.body  # its numbers don't show locks, so no hint
     assert recap.kind is CardKind.RECAP
     assert recap.body.startswith(LOCKS_NOTE)
-    assert "No Games Left" in recap.body
+    assert recap.items == ("No Games Left",)  # one line per starter with nothing to decide
 
     page = render([report], title="Daily report", league_names={str(s.league.id): s.league.name})
     assert "Lock Big Night: 52.0" in page

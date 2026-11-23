@@ -71,6 +71,13 @@ class FactDay(DomainModel):
     left_out: tuple[FactLeftOut, ...] = ()  # who had a game but wasn't counted, and why
 
 
+class FactAdds(DomainModel):
+    """The league's add limit for this matchup week, and how much of it is left."""
+
+    allowed: int = Field(ge=0)
+    left: int = Field(ge=0)
+
+
 class FactMatchup(DomainModel):
     opponent: str
     my_points: float
@@ -101,6 +108,7 @@ class FactSheet(DomainModel):
     days: tuple[FactDay, ...] = ()
     without_games: tuple[FactNoGames, ...] = ()
     matchup: FactMatchup | None = None
+    adds: FactAdds | None = None  # None: the league doesn't limit adds
     my_players: tuple[FactPlayer, ...]
     free_agents: tuple[FactPlayer, ...] = ()  # the best few, for context
     moves: tuple[FactMove, ...] = ()

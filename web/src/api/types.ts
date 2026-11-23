@@ -7,4 +7,5 @@ export type League = components['schemas']['LeagueOut'];
 export type ReportsOut = components['schemas']['ReportsOut'];
 export type ReportDocument = components['schemas']['ReportDocument'];
 export type Card = components['schemas']['Card'];
+export type GameDay = components['schemas']['GameDay'];
 export type ReportKind = 'daily' | 'weekly';

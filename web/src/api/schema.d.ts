@@ -82,7 +82,8 @@ export interface paths {
         };
         /**
          * Get Reports
-         * @description The latest reports of this kind (or those of one date), one per league: one query.
+         * @description The latest reports of this kind (or those of one date), one per league: one query. Daily
+         *     reports come with that date's games (how many, and when the first tips), from the same query.
          */
         get: operations["get_reports_v1_reports__kind__get"];
         put?: never;
@@ -107,6 +108,11 @@ export interface components {
             };
             /** Id */
             id: string;
+            /**
+             * Items
+             * @default []
+             */
+            items: string[];
             kind: components["schemas"]["CardKind"];
             /** Reason */
             reason?: string | null;
@@ -120,6 +126,22 @@ export interface components {
          * @enum {string}
          */
         CardKind: "move" | "lock_or_pass" | "signal" | "recap" | "league_moves" | "news" | "matchup" | "self_review" | "report_card";
+        /**
+         * GameDay
+         * @description The NBA schedule for one date, the same for every league: how many games, and when the
+         *     first tips. The phone shows it once at the top of a day's reports.
+         */
+        GameDay: {
+            /**
+             * Day
+             * Format: date
+             */
+            day: string;
+            /** First Tip Utc */
+            first_tip_utc?: string | null;
+            /** Games */
+            games: number;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -214,6 +236,7 @@ export interface components {
         ReportsOut: {
             /** For Date */
             for_date: string | null;
+            games?: components["schemas"]["GameDay"] | null;
             /** Reports */
             reports: components["schemas"]["ReportDocument"][];
         };
