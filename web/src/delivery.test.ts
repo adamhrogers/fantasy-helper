@@ -16,6 +16,23 @@ describe('the service worker', () => {
     expect(worker).toContain('NavigationRoute');
   });
 
+  it('shows a notification for every push, even one it can’t read: Safari on iOS drops apps that show none', () => {
+    const handler = /addEventListener\('push'[\s\S]*?\n\}\);/.exec(worker)?.[0] ?? '';
+    expect(handler).toContain('showNotification');
+    expect(handler).toContain('describeNotification'); // which always gives something to show
+    expect(handler).not.toMatch(/\breturn\b/); // nothing can leave the handler before it shows one
+    expect(handler).not.toMatch(/\bif \(/); // and nothing decides not to
+    expect(worker).not.toContain('userVisibleOnly: false');
+  });
+
+  it('opens the app on a tap, only on its own two tabs', () => {
+    const handler = /addEventListener\('notificationclick'[\s\S]*?\n\}\);/.exec(worker)?.[0] ?? '';
+    expect(handler).toContain('event.notification.close()');
+    expect(handler).toContain('safePath('); // a path from the message is never opened as it came
+    expect(worker).toContain('clients.openWindow(path)');
+    expect(worker).not.toMatch(/openWindow\((?!path\))/);
+  });
+
   it('is registered by the page, which decides when an update takes over', () => {
     expect(config).toContain("registerType: 'prompt'");
     expect(config).toContain("strategies: 'injectManifest'");

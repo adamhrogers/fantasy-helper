@@ -291,6 +291,19 @@ input {
   color: var(--accent);
 }
 
+.notify {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  padding-top: 0.5rem;
+}
+
+.notify .banner {
+  flex-basis: 100%;
+}
+
 .foot {
   display: flex;
   align-items: center;

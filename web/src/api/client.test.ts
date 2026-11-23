@@ -56,6 +56,48 @@ describe('the API client', () => {
   });
 });
 
+describe('the push calls', () => {
+  it('asks for the public key', async () => {
+    const { client, fetchMock } = api(() => json({ public_key: 'abc' }));
+    expect(await client.pushPublicKey()).toEqual({ ok: true, data: { public_key: 'abc' } });
+    const request = fetchMock.mock.calls[0]![0];
+    expect(request.method).toBe('GET');
+    expect(request.url).toBe('https://api.example.run.app/v1/push/public-key');
+    expect(request.headers.get('Authorization')).toBe('Bearer abc');
+  });
+
+  it('saves a device with exactly the address and the two keys', async () => {
+    const body = { endpoint: 'https://push.example.test/x', keys: { p256dh: 'p', auth: 'a' } };
+    const { client, fetchMock } = api(() => json({ endpoint: body.endpoint }));
+    expect(await client.saveSubscription(body)).toEqual({ ok: true, data: { endpoint: body.endpoint } });
+    const request = fetchMock.mock.calls[0]![0];
+    expect(request.method).toBe('PUT');
+    expect(request.url).toBe('https://api.example.run.app/v1/push/subscriptions');
+    expect(JSON.parse(await request.text())).toEqual(body);
+  });
+
+  it('removes a device by address, and reads the empty 204 answer as success', async () => {
+    const { client, fetchMock } = api(() => new Response(null, { status: 204 }));
+    expect(await client.removeSubscription('https://push.example.test/x')).toEqual({ ok: true, data: null });
+    const request = fetchMock.mock.calls[0]![0];
+    expect(request.method).toBe('DELETE');
+    expect(JSON.parse(await request.text())).toEqual({ endpoint: 'https://push.example.test/x' });
+  });
+
+  it('still reads a failed removal as a failure, not as the empty success', async () => {
+    const { client } = api(() => json({ detail: 'no' }, 500));
+    expect(await client.removeSubscription('https://push.example.test/x')).toMatchObject({
+      ok: false,
+      error: { kind: 'server' },
+    });
+  });
+
+  it('answers 503 from the key route as a server problem the app can show', async () => {
+    const { client } = api(() => json({ detail: 'notifications aren’t set up yet' }, 503));
+    expect(await client.pushPublicKey()).toMatchObject({ ok: false, error: { kind: 'server' } });
+  });
+});
+
 describe('when the sign-in service can’t be reached to get a token', () => {
   it('says the server couldn’t be reached, rather than throwing or saying the sign-in expired', async () => {
     const api = createApi({

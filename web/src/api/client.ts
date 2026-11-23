@@ -1,6 +1,6 @@
 import createClient from 'openapi-fetch';
 import type { paths } from './schema';
-import type { Me, ReportKind, ReportsOut } from './types';
+import type { Me, PushKey, ReportKind, ReportsOut, SubscriptionBody } from './types';
 
 export type ApiErrorKind = 'unauthorized' | 'forbidden' | 'network' | 'server';
 
@@ -14,6 +14,12 @@ export type ApiResult<T> = { ok: true; data: T } | { ok: false; error: ApiError 
 export interface Api {
   me(): Promise<ApiResult<Me>>;
   reports(kind: ReportKind): Promise<ApiResult<ReportsOut>>;
+  /** The server's public push key, which the browser needs to make a subscription. */
+  pushPublicKey(): Promise<ApiResult<PushKey>>;
+  /** Saves this device's subscription (idempotent: the same address replaces itself). */
+  saveSubscription(subscription: SubscriptionBody): Promise<ApiResult<{ endpoint: string }>>;
+  /** Forgets one device's subscription; there is no body to read in the answer. */
+  removeSubscription(endpoint: string): Promise<ApiResult<null>>;
 }
 
 export interface ApiOptions {
@@ -43,8 +49,10 @@ export function createApi({ baseUrl, getToken, fetch: fetchImpl }: ApiOptions): 
     ...(fetchImpl ? { fetch: (request: Request) => fetchImpl(request) } : {}),
   });
 
+  /** `empty` is the result of an answer that has no body (204): without it, no data is a failure. */
   async function call<T>(
     run: (headers: Record<string, string>) => Promise<{ data?: T; response: Response }>,
+    empty?: T,
   ): Promise<ApiResult<T>> {
     let token: string | null;
     try {
@@ -57,6 +65,7 @@ export function createApi({ baseUrl, getToken, fetch: fetchImpl }: ApiOptions): 
     try {
       const { data, response } = await run({ Authorization: `Bearer ${token}` });
       if (response.ok && data !== undefined) return { ok: true, data };
+      if (response.ok && empty !== undefined) return { ok: true, data: empty };
       return failureFor(response.status);
     } catch {
       return failure('network', 'Couldn’t reach the server. Check your connection and try again.');
@@ -67,5 +76,10 @@ export function createApi({ baseUrl, getToken, fetch: fetchImpl }: ApiOptions): 
     me: () => call((headers) => client.GET('/v1/me', { headers })),
     reports: (kind) =>
       call((headers) => client.GET('/v1/reports/{kind}', { params: { path: { kind } }, headers })),
+    pushPublicKey: () => call((headers) => client.GET('/v1/push/public-key', { headers })),
+    saveSubscription: (subscription) =>
+      call((headers) => client.PUT('/v1/push/subscriptions', { body: subscription, headers })),
+    removeSubscription: (endpoint) =>
+      call<null>((headers) => client.DELETE('/v1/push/subscriptions', { body: { endpoint }, headers }), null),
   };
 }
