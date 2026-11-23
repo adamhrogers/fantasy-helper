@@ -5,7 +5,9 @@ through Apple's, Google's or Mozilla's push service on its way to the phone.
 """
 
 import json
+import re
 from typing import Literal
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from pydantic import Field
@@ -19,6 +21,55 @@ MAX_PAYLOAD_BYTES = 4096
 
 # Where a tap lands: the app's two tabs, and nothing else. The service worker allows the same two.
 PushPath = Literal["/today", "/week"]
+
+# The push services a browser subscribes through: the only hosts a device's address may name. The
+# API refuses to save any other address and the sender refuses to send to one, because the address
+# comes from the browser, through a signed-in user, and the report jobs would otherwise send a
+# request to wherever it points (ADR 0030). Exact hosts, plus one exact suffix for Microsoft's
+# service, whose hosts are regional (wns2-<region>.notify.windows.com). A new browser's service is
+# added here, in one place: the API and the sender both read this list.
+PUSH_SERVICE_HOSTS = frozenset(
+    {
+        "web.push.apple.com",  # Safari, on the iPhone and the Mac
+        "fcm.googleapis.com",  # Chrome, and the other Chromium browsers except Edge
+        "updates.push.services.mozilla.com",  # Firefox
+    }
+)
+PUSH_SERVICE_SUFFIXES = (".notify.windows.com",)  # Edge: Windows Push Notification Services
+
+_HOST_NAME = re.compile(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+")
+
+
+def endpoint_host(endpoint: str) -> str:
+    """A device address's host, for a log line or a warning: never the rest of the address (the
+    path is the device's own secret), and "unknown" for anything that isn't a plain host name."""
+    try:
+        host = urlsplit(endpoint).hostname or ""
+    except ValueError:
+        return "unknown"
+    return host if _HOST_NAME.fullmatch(host) else "unknown"
+
+
+def is_push_service(endpoint: str) -> bool:
+    """Whether a device's address is https on one of the push services above, written so that
+    every URL parser reads the same host: plain ASCII, no whitespace or backslash, and no user
+    name, password or port (a real push address has none of them)."""
+    if not endpoint.isascii() or "\\" in endpoint:
+        return False
+    if any(ch.isspace() or not ch.isprintable() for ch in endpoint):
+        return False
+    try:
+        parts = urlsplit(endpoint)
+    except ValueError:
+        return False
+    host = parts.hostname
+    if parts.scheme != "https" or not host or parts.netloc != host:
+        return False
+    if host in PUSH_SERVICE_HOSTS:
+        return True
+    return any(
+        host.endswith(suffix) and len(host) > len(suffix) for suffix in PUSH_SERVICE_SUFFIXES
+    )
 
 
 class PushDevice(DomainModel):

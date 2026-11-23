@@ -6,9 +6,13 @@ and date (`reports.notified_at`), tells nobody on a rerun, deletes a device the 
 is gone, and **never raises**: whatever goes wrong comes back as a problem for the run's warning,
 and the report is built either way.
 
-Network calls happen between two short transactions, never inside one.
+Network calls happen between two short transactions, never inside one, and they are capped by the
+clock: each send, and the whole push, has a limit, so a slow push service can't hold the morning
+job open (the chain's next job starts after this).
 """
 
+import threading
+import time
 from collections import Counter
 from collections.abc import Callable, Collection, Sequence
 from contextlib import AbstractContextManager
@@ -26,7 +30,7 @@ from fantasy_helper.delivery.push import (
     PushStatus,
     report_ready,
 )
-from fantasy_helper.domain.push import PushDevice, PushMessage
+from fantasy_helper.domain.push import PushDevice, PushMessage, endpoint_host
 from fantasy_helper.domain.reports import ReportKind
 from fantasy_helper.domain.users import User
 from fantasy_helper.observability.logs import get_logger
@@ -39,6 +43,13 @@ log = get_logger(__name__)
 # every day would be noise: it notifies on this weekday, Monday, and updates quietly on the others.
 # 0 is Monday (`date.weekday()`). Adam's to change (ADR 0030): one number.
 WEEKLY_NOTIFY_WEEKDAY = 0
+
+# The clock's limits on sending. The HTTP timeout (delivery/push.py, 5 seconds) is per read, so a
+# server that trickles its answer could outlast it; these can't be outlasted. A device past its
+# limit, or left when the whole push is out of time, is a failed send: a warning, and a rerun
+# tries again. Two phones take well under a second.
+SEND_LIMIT_SECONDS = 8.0
+PUSH_LIMIT_SECONDS = 30.0
 
 OpenSession = Callable[[], AbstractContextManager[Session]]
 
@@ -61,16 +72,47 @@ class NotifyOutcome:
         return ", ".join(bits) + "."
 
 
+def _send_within(
+    sender: PushSender, device: PushDevice, message: PushMessage, seconds: float
+) -> PushResult:
+    """One send, given at most `seconds` by the clock. It runs on a daemon thread, so a send that
+    never finishes is abandoned rather than waited for, and can't keep the process alive either.
+    A sender that raises is a failed send, not a crash."""
+    answer: list[PushResult] = []
+
+    def work() -> None:
+        try:
+            answer.append(sender.send(device, message))
+        except Exception as exc:
+            answer.append(PushResult(PushStatus.FAILED, "unknown", reason=type(exc).__name__))
+
+    worker = threading.Thread(target=work, name="push-send", daemon=True)
+    worker.start()
+    worker.join(seconds)
+    if answer:
+        return answer[0]
+    return PushResult(PushStatus.FAILED, endpoint_host(device.endpoint), reason="timed out")
+
+
 def deliver(
-    sender: PushSender, devices: Sequence[PushDevice], message: PushMessage
+    sender: PushSender,
+    devices: Sequence[PushDevice],
+    message: PushMessage,
+    *,
+    send_limit: float = SEND_LIMIT_SECONDS,
+    push_limit: float = PUSH_LIMIT_SECONDS,
 ) -> list[tuple[PushDevice, PushResult]]:
-    """Send one message to every device. A sender that raises is a failed send, not a crash."""
+    """Send one message to every device, each send within `send_limit` seconds and all of them
+    within `push_limit`. A device not reached in time is a failed send."""
+    started = time.monotonic()
     out: list[tuple[PushDevice, PushResult]] = []
     for device in devices:
-        try:
-            result = sender.send(device, message)
-        except Exception as exc:
-            result = PushResult(PushStatus.FAILED, "unknown", reason=type(exc).__name__)
+        left = push_limit - (time.monotonic() - started)
+        if left <= 0:
+            host = endpoint_host(device.endpoint)
+            result = PushResult(PushStatus.FAILED, host, reason="out of time")
+        else:
+            result = _send_within(sender, device, message, min(send_limit, left))
         log.info("push_sent", result=result.describe())
         out.append((device, result))
     return out
@@ -79,9 +121,10 @@ def deliver(
 def record(
     session: Session, user: User, results: Sequence[tuple[PushDevice, PushResult]], now: datetime
 ) -> int:
-    """Write down what the push services said: lost devices are deleted, accepted ones stamped.
-    Returns how many devices were removed."""
-    gone = [d.id for d, r in results if r.status is PushStatus.GONE]
+    """Write down what the push services said: lost devices are deleted, and so are devices whose
+    address isn't on a known push service (the API would never save them again); accepted ones are
+    stamped. Returns how many devices were removed."""
+    gone = [d.id for d, r in results if r.status in (PushStatus.GONE, PushStatus.BLOCKED)]
     delivered = [d.id for d, r in results if r.status is PushStatus.DELIVERED]
     push_subscriptions.mark_success(session, user.id, delivered, now)
     return push_subscriptions.delete_by_ids(session, user.id, gone)
@@ -91,6 +134,14 @@ def problems_in(results: Sequence[tuple[PushDevice, PushResult]]) -> list[str]:
     """What went wrong, in words for the run's warning: which push service, which HTTP status and
     reason, and what it probably means. Never an endpoint, a key or a card's text."""
     out: list[str] = []
+    blocked = [r for _d, r in results if r.status is PushStatus.BLOCKED]
+    if blocked:
+        hosts = ", ".join(sorted({r.host for r in blocked}))
+        out.append(
+            f"{len(blocked)} device(s) had an address that isn't on a known push service "
+            f"({hosts}): nothing was sent to them, and they were removed. If that is a real "
+            "browser's push service, it needs adding to the list in domain/push.py (ADR 0030)."
+        )
     refused = [r for _d, r in results if r.status is PushStatus.REFUSED]
     failed = [r for _d, r in results if r.status is PushStatus.FAILED]
     if refused:

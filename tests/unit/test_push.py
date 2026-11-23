@@ -32,7 +32,13 @@ from fantasy_helper.delivery.push import (
     report_ready,
     sender_from_settings,
 )
-from fantasy_helper.domain.push import MAX_PAYLOAD_BYTES, PushDevice, PushMessage
+from fantasy_helper.domain.push import (
+    MAX_PAYLOAD_BYTES,
+    PushDevice,
+    PushMessage,
+    endpoint_host,
+    is_push_service,
+)
 from fantasy_helper.domain.reports import ReportKind
 
 SUBJECT = "https://app.example.test"
@@ -84,12 +90,17 @@ class FakePushService(requests.adapters.BaseAdapter):
     answers with whatever status the test wants."""
 
     def __init__(
-        self, status: int = 201, body: bytes = b"", error: Exception | None = None
+        self,
+        status: int = 201,
+        body: bytes = b"",
+        error: Exception | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         super().__init__()
         self.status = status
         self.body = body
         self.error = error
+        self.headers = headers or {}
         self.received: list[tuple[requests.PreparedRequest, Any]] = []
 
     def send(
@@ -107,6 +118,7 @@ class FakePushService(requests.adapters.BaseAdapter):
         response = requests.Response()
         response.status_code = self.status
         response._content = self.body  # what the adapter would have read off the wire
+        response.headers.update(self.headers)
         response.url = request.url or ""
         response.request = request
         return response
@@ -173,8 +185,9 @@ def test_a_push_is_readable_by_the_phone_signed_by_us_and_kept_six_hours() -> No
     assert header(request, "TTL") == str(TTL_SECONDS) == str(6 * 60 * 60)
     assert header(request, "Content-Encoding") == "aes128gcm"
     assert len(body_of(request)) < MAX_PAYLOAD_BYTES
-    # A timeout is always passed: the library's own default is none at all.
+    # A short timeout is always passed: the library's own default is none at all.
     assert timeout == TIMEOUT_SECONDS
+    assert TIMEOUT_SECONDS <= 5
 
     # The VAPID header is a token signed with our key, for this push service, naming the app.
     auth = header(request, "Authorization")
@@ -273,6 +286,83 @@ def test_keys_a_browser_could_never_have_made_mean_a_lost_device_without_a_send(
         result = sender.send(bad, MESSAGE)
         assert result.status is PushStatus.GONE
     assert service.received == []  # nothing went on the wire
+
+
+# ---------------------------------------------------------- only a known push service is sent to
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "https://web.push.apple.com/QGuQyavXutnMH9nfu0ApRNCUDhLbR0GVz8Jg6jXzxsqVpWsV",
+        "https://fcm.googleapis.com/fcm/send/dKSkXxFtA7A:APA91bH",
+        "https://updates.push.services.mozilla.com/wpush/v2/gAAAAABl",
+        "https://wns2-bl2p.notify.windows.com/w/?token=BQYAAAB",
+    ],
+)
+def test_the_four_push_services_are_known(endpoint: str) -> None:
+    assert is_push_service(endpoint)
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "",
+        "https://push.example.test/x",  # any other server
+        "http://web.push.apple.com/x",  # not https
+        "https://web.push.apple.com.attacker.example/x",  # a known host as a prefix
+        "https://attacker.example/web.push.apple.com",  # a known host in the path
+        "https://attacker.example/?fcm.googleapis.com",  # or in the query
+        "https://web.push.apple.com@attacker.example/x",  # a user name that looks like the host
+        "https://user@web.push.apple.com/x",  # a user name at all
+        "https://web.push.apple.com:443/x",  # a port, even the right one
+        "https://web.push.apple.com\\@attacker.example/x",  # parsers disagree on a backslash
+        "https://web.push.apple.com /x",  # whitespace
+        "https://web.push.apple.com\t/x",  # a tab, which some parsers drop
+        "https://web.push.\u0430pple.com/x",  # a Cyrillic a
+        "https://WEB.PUSH.APPLE.COM/x",  # browsers send lowercase; anything else is suspect
+        "https://notify.windows.com/x",  # the suffix alone is not a host of the service
+        "https://evilnotify.windows.com/x",  # a suffix match must start at a dot
+        "https://notify.windows.com.attacker.example/x",
+        "https://169.254.169.254/computeMetadata/v1/",  # the cloud's metadata server
+        "https://[::1]/x",
+        "https://[broken/x",  # one the parser itself refuses
+    ],
+)
+def test_anything_else_is_not(endpoint: str) -> None:
+    assert not is_push_service(endpoint)
+
+
+def test_a_device_on_another_server_is_never_sent_to() -> None:
+    """A row saved before the list existed, or written another way, can't make the job send a
+    request to some other server: the sender checks the list itself."""
+    service = FakePushService()
+    result = sender_with(service).send(Phone("https://attacker.example/x").device, MESSAGE)
+    assert result.status is PushStatus.BLOCKED
+    assert result.host == "attacker.example"
+    assert service.received == []  # nothing went on the wire
+
+
+def test_a_redirect_is_never_followed() -> None:
+    """A push service answers where it was asked; following a redirect would send the push, and
+    our signed token, somewhere else."""
+    service = FakePushService(status=307, headers={"Location": "https://attacker.example/x"})
+    result = sender_with(service).send(Phone().device, MESSAGE)
+    assert result.status is PushStatus.FAILED
+    assert len(service.received) == 1  # the first request only
+    assert service.received[0][0].url == APPLE
+
+
+def test_a_host_in_a_log_line_is_a_plain_host_name_or_unknown() -> None:
+    assert endpoint_host(APPLE) == "web.push.apple.com"
+    assert endpoint_host("https://web.push.apple.com/secret-path") == "web.push.apple.com"
+    for odd in (
+        "not a url",
+        "https://[broken/x",
+        "https://ex ample.com/x",
+        "https://a_b.example/x",
+    ):
+        assert endpoint_host(odd) == "unknown"
 
 
 # ------------------------------------------------------------------------------ the setting

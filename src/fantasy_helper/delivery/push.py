@@ -9,7 +9,8 @@ pinned by a test against the real library and a fake push service:
 - `webpush()` writes `aud` and `exp` into the claims dict it is given, so every send builds a
   fresh dict (a reused one would keep the first push service's `aud` for every later device: Apple
   refuses it while Google doesn't care);
-- `webpush()`'s timeout is `None` (no timeout) unless one is passed;
+- `webpush()`'s timeout is `None` (no timeout) unless one is passed, and it follows redirects
+  unless the session it is given won't;
 - a refusal comes back as an exception carrying the response, and a failure to connect as a bare
   `requests` error.
 
@@ -23,8 +24,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from enum import StrEnum
 from typing import Any, Protocol
-from urllib.parse import urlsplit
 
+import requests
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from py_vapid import Vapid
@@ -32,7 +33,13 @@ from pywebpush import WebPushException, webpush
 
 from fantasy_helper.config import Settings
 from fantasy_helper.config.settings import app_address
-from fantasy_helper.domain.push import PushDevice, PushMessage, PushPath
+from fantasy_helper.domain.push import (
+    PushDevice,
+    PushMessage,
+    PushPath,
+    endpoint_host,
+    is_push_service,
+)
 from fantasy_helper.domain.reports import ReportKind
 from fantasy_helper.observability.logs import get_logger
 
@@ -41,12 +48,16 @@ log = get_logger(__name__)
 # How long a push service keeps a message for a phone that is off or out of range. After that the
 # report is old news (the app shows it anyway), so a morning push never turns up in the evening.
 TTL_SECONDS = 6 * 60 * 60
-TIMEOUT_SECONDS = 10.0
+# Per request, for connecting and for each read. A push service answers in well under a second;
+# pipeline/notify.py also caps each send, and the whole push, by the clock, because a server that
+# trickles its answer a byte at a time never trips a per-read timeout.
+TIMEOUT_SECONDS = 5.0
 
 
 class PushStatus(StrEnum):
     DELIVERED = "delivered"  # the push service accepted it for the device
     GONE = "gone"  # 404 or 410, or keys that can never work: the device is lost, delete it
+    BLOCKED = "blocked"  # not an address on a known push service: never sent to, deleted
     REFUSED = "refused"  # 400, 401, 403, 413: our key, subject or message is wrong for everyone
     FAILED = "failed"  # the push service is down or limiting us, or we couldn't reach it: later
 
@@ -151,10 +162,22 @@ class WebPushSender:
         self._session = session
         self._timeout = timeout
 
+    def _new_session(self) -> Any:
+        """A session that never follows a redirect: a push service answers where it was asked,
+        so a redirect would only send the push, and our signed token, somewhere else."""
+        session = self._session if self._session is not None else requests.Session()
+        session.max_redirects = 0
+        return session
+
     def send(self, device: PushDevice, message: PushMessage) -> PushResult:
-        host = urlsplit(device.endpoint).hostname or "unknown"
+        host = endpoint_host(device.endpoint)
+        # Checked again here, not only when the API saved it: a row written before the list
+        # existed, or by anything but the API, must not send a request off to some other server.
+        if not is_push_service(device.endpoint):
+            return PushResult(PushStatus.BLOCKED, host, reason="not a known push service")
         if not _usable(device):
             return PushResult(PushStatus.GONE, host, reason="malformed subscription keys")
+        session = self._new_session()
         try:
             webpush(
                 subscription_info={
@@ -168,7 +191,7 @@ class WebPushSender:
                 vapid_claims={"sub": self._subject},
                 ttl=TTL_SECONDS,
                 timeout=self._timeout,
-                requests_session=self._session,
+                requests_session=session,
             )
         except WebPushException as exc:
             status = exc.status_code
@@ -177,8 +200,11 @@ class WebPushSender:
             if status in (400, 401, 403, 413):
                 return PushResult(PushStatus.REFUSED, host, status, _reason(exc))
             return PushResult(PushStatus.FAILED, host, status, _reason(exc))
-        except Exception as exc:  # couldn't connect, timed out: requests' own errors
+        except Exception as exc:  # couldn't connect, timed out, redirected: requests' own errors
             return PushResult(PushStatus.FAILED, host, reason=type(exc).__name__)
+        finally:
+            if session is not self._session:
+                session.close()
         return PushResult(PushStatus.DELIVERED, host)
 
 

@@ -151,7 +151,7 @@ def test_push_subscriptions_belong_to_one_user_each(
     engine: Engine, people: tuple[Person, Person]
 ) -> None:
     a, b = people
-    endpoint = f"https://push.example.com/send/{uuid4().hex}"
+    endpoint = f"https://fcm.googleapis.com/fcm/send/{uuid4().hex}"
     sub = {"endpoint": endpoint, "keys": {"p256dh": "key", "auth": "secret"}}
     with make_client(engine, FH_VAPID_PUBLIC_KEY="BPublicKey") as client:
         assert (
@@ -193,15 +193,60 @@ def test_a_push_subscription_must_be_https_and_complete(
 ) -> None:
     a, _ = people
     with make_client(engine) as client:
-        plain = {"endpoint": "http://push.example.com/x1234", "keys": {"p256dh": "k", "auth": "a"}}
+        plain = {"endpoint": "http://fcm.googleapis.com/x1", "keys": {"p256dh": "k", "auth": "a"}}
         assert (
             client.put("/v1/push/subscriptions", headers=a.headers(), json=plain).status_code == 422
         )
-        partial = {"endpoint": "https://push.example.com/x1234", "keys": {"p256dh": "k"}}
+        partial = {"endpoint": "https://fcm.googleapis.com/x1", "keys": {"p256dh": "k"}}
         assert (
             client.put("/v1/push/subscriptions", headers=a.headers(), json=partial).status_code
             == 422
         )
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "https://push.example.com/send/x1234",  # any other server
+        "https://web.push.apple.com.attacker.example/x",  # a known host as a prefix
+        "https://attacker.example/web.push.apple.com/x",  # a known host in the path
+        "https://web.push.apple.com@attacker.example/x",  # a user name that looks like the host
+        "https://web.push.apple.com:8443/x",  # a port
+        "https://169.254.169.254/computeMetadata/v1/",  # the cloud's metadata server
+    ],
+)
+def test_a_push_subscription_is_saved_only_on_a_known_push_service(
+    engine: Engine, people: tuple[Person, Person], endpoint: str
+) -> None:
+    """The report jobs send to whatever is saved here, so anything but a push service's address is
+    refused before it is written (ADR 0030)."""
+    a, _ = people
+    sub = {"endpoint": endpoint, "keys": {"p256dh": "k", "auth": "a"}}
+    with make_client(engine) as client:
+        assert (
+            client.put("/v1/push/subscriptions", headers=a.headers(), json=sub).status_code == 422
+        )
+        with Session(engine) as session:
+            assert push_subscriptions.endpoints_for_user(session, a.user.id) == []
+
+
+def test_each_known_push_service_is_accepted(engine: Engine, people: tuple[Person, Person]) -> None:
+    a, _ = people
+    endpoints = [
+        f"https://web.push.apple.com/{uuid4().hex}",
+        f"https://fcm.googleapis.com/fcm/send/{uuid4().hex}",
+        f"https://updates.push.services.mozilla.com/wpush/v2/{uuid4().hex}",
+        f"https://wns2-bl2p.notify.windows.com/w/?token={uuid4().hex}",
+    ]
+    with make_client(engine) as client:
+        for endpoint in endpoints:
+            sub = {"endpoint": endpoint, "keys": {"p256dh": "k", "auth": "a"}}
+            put = client.put("/v1/push/subscriptions", headers=a.headers(), json=sub)
+            assert put.status_code == 200, endpoint
+        with Session(engine) as session:
+            assert sorted(push_subscriptions.endpoints_for_user(session, a.user.id)) == sorted(
+                endpoints
+            )
 
 
 def test_the_push_key_is_unavailable_until_it_is_set(

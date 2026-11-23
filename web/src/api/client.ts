@@ -36,6 +36,8 @@ function failure(kind: ApiErrorKind, message: string): { ok: false; error: ApiEr
 function failureFor(status: number): { ok: false; error: ApiError } {
   if (status === 401) return failure('unauthorized', 'Your sign-in expired.');
   if (status === 403) return failure('forbidden', 'This sign-in isn’t set up for this app.');
+  // Trying again won't change a refusal (for push: a browser whose push service isn't on the list).
+  if (status === 422) return failure('server', 'The server didn’t accept this request (status 422).');
   return failure('server', `The server had a problem (status ${status}). Try again in a minute.`);
 }
 

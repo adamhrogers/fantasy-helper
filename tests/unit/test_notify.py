@@ -2,6 +2,8 @@
 failed push becomes. The database is replaced by recorders here; tests/integration/test_push.py
 holds the same rules against Postgres."""
 
+import threading
+import time
 from collections.abc import Collection, Iterator
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
@@ -25,6 +27,7 @@ USER = User(email="a@example.com", display_name="A", timezone="America/New_York"
 DAY = date(2026, 11, 20)  # a Friday
 FRIDAY_MORNING = datetime(2026, 11, 20, 11, 20, tzinfo=UTC)  # 06:20 in New York
 MONDAY_MORNING = datetime(2026, 11, 23, 11, 20, tzinfo=UTC)
+MESSAGE = PushMessage(title="t", body="b", path="/today", tag="daily-2026-11-20")
 
 
 def device(n: int = 1) -> PushDevice:
@@ -43,7 +46,7 @@ class FakeSender:
             raise self.raises
         status = self.statuses[min(len(self.sent), len(self.statuses)) - 1]
         http = {PushStatus.DELIVERED: None, PushStatus.GONE: 410, PushStatus.REFUSED: 403,
-                PushStatus.FAILED: 503}[status]  # fmt: skip
+                PushStatus.FAILED: 503, PushStatus.BLOCKED: None}[status]  # fmt: skip
         reason = "BadJwtToken" if status is PushStatus.REFUSED else None
         return PushResult(status, "push.example.test", http, reason)
 
@@ -308,3 +311,75 @@ def test_the_network_is_never_called_inside_a_transaction(world: World) -> None:
         now=FRIDAY_MORNING,
     )  # fmt: skip
     assert seen_open_during_send == [0, 0]
+
+
+def test_a_device_not_on_a_known_push_service_is_deleted_and_the_run_says_so(world: World) -> None:
+    """The sender refuses to send to it (delivery/push.py); the notifier removes it, since the API
+    would never save it again, and warns once, naming its host, in case the list is missing a
+    real browser's push service."""
+    blocked = PushResult(PushStatus.BLOCKED, "attacker.example", reason="not a known push service")
+
+    class Blocking(FakeSender):
+        def send(self, d: PushDevice, message: PushMessage) -> PushResult:
+            self.sent.append((d, message))
+            return blocked if d is world.devices[0] else PushResult(PushStatus.DELIVERED, "x")
+
+    outcome = run(world, Blocking())
+    assert world.deleted == [world.devices[0].id]
+    assert outcome.removed == 1
+    assert outcome.delivered == 1
+    (problem,) = outcome.problems
+    assert "attacker.example" in problem
+    assert "domain/push.py" in problem
+
+
+class Stuck(FakeSender):
+    """A push service that never answers, until the test lets it go."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.release = threading.Event()
+
+    def send(self, d: PushDevice, message: PushMessage) -> PushResult:
+        self.sent.append((d, message))
+        self.release.wait(5)
+        return PushResult(PushStatus.DELIVERED, "push.example.test")
+
+
+def test_a_send_that_never_finishes_is_cut_off_by_the_clock() -> None:
+    """The HTTP timeout is per read, so a server that trickles its answer could outlast it; the
+    clock's limit can't be outlasted."""
+    stuck = Stuck()
+    started = time.monotonic()
+    ((_device, result),) = notify.deliver(
+        stuck, [device(1)], MESSAGE, send_limit=0.05, push_limit=10
+    )
+    took = time.monotonic() - started
+    stuck.release.set()
+    assert result.status is PushStatus.FAILED
+    assert result.reason == "timed out"
+    assert result.host == "push.example.test"
+    assert took < 1
+
+
+def test_the_whole_push_has_a_limit_and_the_devices_left_are_not_tried() -> None:
+    stuck = Stuck()
+    started = time.monotonic()
+    results = notify.deliver(
+        stuck, [device(1), device(2), device(3)], MESSAGE, send_limit=0.05, push_limit=0.08
+    )
+    took = time.monotonic() - started
+    stuck.release.set()
+    assert [r.reason for _d, r in results] == ["timed out", "timed out", "out of time"]
+    assert len(stuck.sent) == 2  # the third was never started
+    assert took < 1
+
+
+def test_a_send_within_its_limit_is_kept() -> None:
+    results = notify.deliver(FakeSender(), [device(1), device(2)], MESSAGE)
+    assert [r.status for _d, r in results] == [PushStatus.DELIVERED, PushStatus.DELIVERED]
+
+
+def test_the_limits_are_short_enough_to_keep_the_morning_moving() -> None:
+    assert notify.SEND_LIMIT_SECONDS <= 10
+    assert notify.PUSH_LIMIT_SECONDS <= 60

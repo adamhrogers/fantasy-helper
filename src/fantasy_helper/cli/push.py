@@ -36,6 +36,8 @@ _MEANING = {
     PushStatus.DELIVERED: "the push service accepted it",
     PushStatus.GONE: "the push service says this device's subscription is gone, so it was "
     "deleted: open the app and tap Enable notifications again",
+    PushStatus.BLOCKED: "this device's address isn't on a known push service, so nothing was "
+    "sent and it was deleted (the list is in domain/push.py)",
     PushStatus.REFUSED: "the push service refused our credentials: the app's address in "
     "fh-app-origins, or a VAPID key that isn't the pair the app subscribed with (after "
     "scripts/vapid-setup.sh --rotate every device must turn notifications off and on again)",

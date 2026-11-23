@@ -92,6 +92,14 @@ describe('the push calls', () => {
     });
   });
 
+  it('says a refused subscription was refused, not that the server had a problem', async () => {
+    const { client } = api(() => json({ detail: [{ msg: 'not the address of a known push service' }] }, 422));
+    const body = { endpoint: 'https://push.example.test/x', keys: { p256dh: 'p', auth: 'a' } };
+    const result = await client.saveSubscription(body);
+    expect(result).toMatchObject({ ok: false, error: { kind: 'server' } });
+    expect(result.ok ? '' : result.error.message).toBe('The server didn’t accept this request (status 422).');
+  });
+
   it('answers 503 from the key route as a server problem the app can show', async () => {
     const { client } = api(() => json({ detail: 'notifications aren’t set up yet' }, 503));
     expect(await client.pushPublicKey()).toMatchObject({ ok: false, error: { kind: 'server' } });

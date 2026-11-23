@@ -42,7 +42,7 @@ fantasy-helper/
 │   │   ├── recommendations.py        #   Recommendation, Claim, CallType, Grade, MissCause
 │   │   ├── evaluations.py            #   EvaluationPoint (one point on a timeline graph)
 │   │   ├── reports.py                #   ReportDocument, Card (the contract the PWA renders)
-│   │   ├── push.py                   #   PushDevice, PushMessage (counts and a path, under 4 KB)
+│   │   ├── push.py                   #   PushDevice, PushMessage (counts and a path, under 4 KB), the push-service allow-list
 │   │   ├── runs.py                   #   RunRecord
 │   │   └── ports.py                  #   Protocols: LeaguePlatform, ProjectionSource, NewsSource, StatsSource, Notifier, Clock
 │   │

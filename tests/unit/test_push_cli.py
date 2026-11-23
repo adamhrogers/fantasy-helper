@@ -121,6 +121,14 @@ def test_an_unreachable_push_service_says_to_try_again(world: World) -> None:
     assert "run it again in a minute" in outcome.output
 
 
+def test_a_device_not_on_a_known_push_service_is_explained_and_fails(world: World) -> None:
+    world.sender = Sender(PushResult(PushStatus.BLOCKED, "attacker.example", None, "x"))
+    outcome = runner.invoke(app, ["push", "test"])
+    assert outcome.exit_code == 1
+    assert "isn't on a known push service" in outcome.output
+    assert world.recorded == [[PushStatus.BLOCKED]]  # record() deletes it
+
+
 def test_no_devices_says_what_to_do_in_the_app(world: World) -> None:
     world.devices = []
     outcome = runner.invoke(app, ["push", "test"])
