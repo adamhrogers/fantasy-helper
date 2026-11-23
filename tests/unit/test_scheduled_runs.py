@@ -3,7 +3,7 @@ take turns, ping the watchdog, and exit non-zero for anything but a clean run (A
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -17,12 +17,16 @@ from fantasy_helper.cli import run as cli_run
 from fantasy_helper.cli._common import REPORTED_EXIT
 from fantasy_helper.cli.main import app
 from fantasy_helper.domain.league import League, Platform
+from fantasy_helper.domain.ports import Alert
+from fantasy_helper.domain.reports import Card, CardKind, ReportDocument, ReportKind
 from fantasy_helper.domain.runs import FailureKind, RunRecord, RunStatus
 from fantasy_helper.domain.users import Role, User
-from fantasy_helper.pipeline.daily import DailyResult
+from fantasy_helper.observability.events import RunEvents
+from fantasy_helper.pipeline.daily import DailyResult, LeagueDaily
 from fantasy_helper.pipeline.freshness import mark_snapshot_complete
 from fantasy_helper.pipeline.ingest import IngestReport, LeagueResult
-from fantasy_helper.pipeline.weekly import WeeklyResult
+from fantasy_helper.pipeline.notify import NotifyOutcome
+from fantasy_helper.pipeline.weekly import LeagueWeekly, WeeklyResult
 from fantasy_helper.storage import crypto
 from fantasy_helper.storage.raw_store import LocalRawStore
 
@@ -52,6 +56,7 @@ class Harness:
         self.slugs: list[str] = []
         self.sleeps: list[float] = []
         self.locked = 0  # transactions that took the run lock
+        self.open_transactions = 0  # begun and not yet committed (a push must wait for zero)
         self.logged: list[RunRecord] = []
         self.pipeline_calls = 0
 
@@ -72,7 +77,11 @@ def h(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Harness:
     @contextmanager
     def locked_transaction(_url: str) -> Iterator[object]:
         harness.locked += 1
-        yield object()
+        harness.open_transactions += 1
+        try:
+            yield object()
+        finally:
+            harness.open_transactions -= 1
 
     @contextmanager
     def no_client() -> Iterator[None]:
@@ -410,3 +419,148 @@ def test_a_bad_secret_fails_the_check_at_once_not_an_hour_later(
     assert result.exit_code == 1
     assert "FH_ENCRYPTION_KEY is invalid" in result.output
     assert h.beat.pings == ["start", "fail"]
+
+
+# ------------------------------------------------------------------ the push (ADR 0030)
+
+
+def a_report(kind: ReportKind, day: date = date(2026, 11, 20)) -> ReportDocument:
+    return ReportDocument(
+        user_id=OWNER.id, league_id=league().id, kind=kind, for_date=day, generated_at=today(),
+        cards=(Card(id="c1", kind=CardKind.RECAP, title="t", body="b"),),
+    )  # fmt: skip
+
+
+class Pushes:
+    """Replaces the notifier the runs call: records each call, and answers with a prepared
+    outcome (by default, a push that went out)."""
+
+    def __init__(self, harness: Harness, outcome: NotifyOutcome | None = None) -> None:
+        self.harness = harness
+        self.outcome = outcome or NotifyOutcome(devices=1, delivered=1)
+        self.calls: list[dict[str, Any]] = []
+        self.open_when_called: list[int] = []
+
+    def __call__(self, _open: object, _make: object, **kwargs: Any) -> NotifyOutcome:
+        self.calls.append(kwargs)
+        self.open_when_called.append(self.harness.open_transactions)
+        return self.outcome
+
+
+@pytest.fixture
+def pushes(h: Harness, monkeypatch: pytest.MonkeyPatch) -> Pushes:
+    recorder = Pushes(h)
+    monkeypatch.setattr(_runs, "notify_report_ready", recorder)
+    return recorder
+
+
+def daily_with_a_report(harness: Harness) -> Any:
+    def run(*_a: object, **_k: object) -> DailyResult:
+        harness.pipeline_calls += 1
+        report = a_report(ReportKind.DAILY)
+        return DailyResult(ingest=IngestReport(), leagues=[LeagueDaily(league(), report=report)])
+
+    return run
+
+
+def test_a_daily_run_tells_the_phone_after_its_reports_are_committed(
+    h: Harness, pushes: Pushes, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    snapshot_from(monkeypatch, tmp_path, today())
+    monkeypatch.setattr(cli_run, "run_daily", daily_with_a_report(h))
+    result = runner.invoke(app, ["run", "daily", "--require-snapshot-today"])
+    assert result.exit_code == 0, result.output
+    (call,) = pushes.calls
+    assert call["kind"] is ReportKind.DAILY
+    assert call["dates"] == {date(2026, 11, 20)}
+    assert call["user_id"] == OWNER.id
+    assert pushes.open_when_called == [0]  # the transaction had ended: the reports are committed
+    assert "push: 1 of 1 devices notified." in result.output
+    assert h.logged[0].status is RunStatus.SUCCEEDED
+
+
+def test_a_dry_run_never_pushes(
+    h: Harness, pushes: Pushes, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A dry run rolled everything back: there is no report to announce."""
+    snapshot_from(monkeypatch, tmp_path, today())
+    monkeypatch.setattr(cli_run, "run_daily", daily_with_a_report(h))
+    result = runner.invoke(app, ["run", "daily", "--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert pushes.calls == []
+    assert "push:" not in result.output
+
+
+def test_a_run_with_no_report_has_nothing_to_announce(
+    h: Harness, pushes: Pushes, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    snapshot_from(monkeypatch, tmp_path, today())
+    monkeypatch.setattr(cli_run, "run_daily", clean_daily(h))
+    assert runner.invoke(app, ["run", "daily"]).exit_code == 0
+    assert pushes.calls == []
+
+
+def test_a_refused_push_is_a_warning_the_run_still_exits_zero_and_the_chain_goes_on(
+    h: Harness, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The report is built either way (ADR 0030): a 403 from the push service ends the run with
+    a warning (DEGRADED in the log, an alert on the ops topic), not a failure."""
+    snapshot_from(monkeypatch, tmp_path, today())
+    monkeypatch.setattr(cli_run, "run_daily", daily_with_a_report(h))
+    refused = NotifyOutcome(
+        devices=1, problems=("Report built, but the push service refused the push (HTTP 403).",)
+    )
+    monkeypatch.setattr(_runs, "notify_report_ready", Pushes(h, refused))
+    alerts: list[Alert] = []
+
+    class Recorder:
+        def send(self, alert: Alert) -> None:
+            alerts.append(alert)
+
+    monkeypatch.setattr(
+        cli_run, "events_from_settings",
+        lambda _settings, kind, label=None: RunEvents(kind, Recorder(), label=label),
+    )  # fmt: skip
+    started: list[str] = []
+    with_next_job(monkeypatch, started)
+    result = runner.invoke(app, ["run", "daily", "--require-snapshot-today"])
+    assert result.exit_code == 0, result.output
+    assert h.beat.pings == ["start", "success"]  # a warning doesn't fail the watchdog's check
+    assert h.logged[0].status is RunStatus.DEGRADED
+    (warning,) = [a for a in alerts if a.title == "Daily run finished with warnings"]
+    assert "the push service refused the push (HTTP 403)" in warning.message
+    assert not any(a.title == "Daily run failed" for a in alerts)
+    assert len(started) == 1  # the weekly overview still starts
+
+
+def test_the_weekly_run_asks_for_a_weekly_push_too(
+    h: Harness, pushes: Pushes, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Whether today is the one weekday it notifies on is decided in the notifier, where it can
+    use the user's own time zone (tests/unit/test_notify.py)."""
+    snapshot_from(monkeypatch, tmp_path, today())
+
+    def weekly(*_a: object, **_k: object) -> WeeklyResult:
+        report = a_report(ReportKind.WEEKLY)
+        return WeeklyResult(ingest=IngestReport(), leagues=[LeagueWeekly(league(), report=report)])
+
+    monkeypatch.setattr(cli_run, "run_weekly", weekly)
+    result = runner.invoke(app, ["run", "weekly", "--require-snapshot-today"])
+    assert result.exit_code == 0, result.output
+    (call,) = pushes.calls
+    assert call["kind"] is ReportKind.WEEKLY
+    assert pushes.open_when_called == [0]
+
+
+def test_the_push_settings_are_read_only_by_the_run_that_has_something_to_send(
+    h: Harness, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A laptop run has no VAPID key and no devices: it must neither fail nor warn."""
+    snapshot_from(monkeypatch, tmp_path, today())
+    monkeypatch.setattr(cli_run, "run_daily", daily_with_a_report(h))
+    monkeypatch.delenv("FH_VAPID_PRIVATE_KEY", raising=False)
+    quiet = NotifyOutcome(skipped="no devices have notifications on")
+    monkeypatch.setattr(_runs, "notify_report_ready", Pushes(h, quiet))
+    result = runner.invoke(app, ["run", "daily"])
+    assert result.exit_code == 0, result.output
+    assert h.logged[0].status is RunStatus.SUCCEEDED

@@ -486,6 +486,10 @@ class ReportRow(Base):
     generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     engine_only: Mapped[bool] = mapped_column(Boolean)
     cards: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
+    # When the push announcing this report was accepted by a device's push service (ADR 0030).
+    # Set after the report is committed, once per user, kind and date: a rerun finds it set and
+    # stays quiet. A report is replaced on a rerun but this is never reset.
+    notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 # ------------------------------------------------------------- M2: read models (ADR 0020)
