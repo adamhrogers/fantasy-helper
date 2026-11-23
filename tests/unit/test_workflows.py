@@ -388,14 +388,22 @@ def test_the_morning_chain_is_the_same_in_the_job_table_the_workflow_and_the_set
     assert 'gcloud scheduler jobs delete "$job"' in setup  # a chained job has no clock of its own
 
 
-def test_dependabot_updates_to_the_deploy_path_and_the_phone_app_wait_for_a_person() -> None:
-    """The deploy workflow's identity can deploy code that reads the prod database and the key
-    that decrypts every league login, so an automatic bump of anything it runs isn't merged. The
-    phone app is held too: it runs on a phone with a signed-in session, and Cloudflare builds it
-    from main as soon as a PR merges (ADR 0024, Update 2026-11-16)."""
+def test_dependabot_holds_only_deploy_yml_and_waits_for_the_image_and_app_checks() -> None:
+    """Only an update to deploy.yml waits for a person: any action in the deploy job can ask for the
+    token of the identity that deploys to prod. The Dockerfile and the phone app merge themselves,
+    but only after their own checks pass, since main's ruleset doesn't require those
+    (ADR 0024, Update 2026-11-23)."""
     text = AUTO_MERGE.read_text()
     assert 'gh pr diff "$PR_URL" --name-only' in text
-    assert r"^(\.github/workflows/deploy\.yml|Dockerfile|\.dockerignore)$|^web/" in text
+    assert r"grep -E '^\.github/workflows/deploy\.yml$'" in text
+    assert "^web/' || true" not in text  # the phone app is no longer held
+    assert 'need+=("Image builds and starts")' in text
+    assert 'need+=("Types, lint, tests, build")' in text
+    # The names it waits for are the jobs' real names.
+    assert "name: Image builds and starts" in (WORKFLOWS / "container.yml").read_text()
+    assert "name: Types, lint, tests, build" in (WORKFLOWS / "web.yml").read_text()
+    assert "checks: read" in text
+    assert "completed:success) break" in text  # anything but a pass leaves it open
     merge = text.split("- name: Merge once the required checks pass", 1)[1]
     assert "if: steps.deploy_path.outputs.hold != 'true'" in merge
     assert "gh pr merge --auto --squash" in merge
@@ -423,9 +431,12 @@ def test_the_web_workflow_checks_the_phone_app_and_holds_nothing_secret() -> Non
     for forbidden in ("secrets.", "id-token", "environment:"):
         assert forbidden not in text, forbidden
     assert "\npermissions:\n  contents: read\n" in text
-    # Not a required check, like container.yml, so the ruleset and the auto-merge guard (which
-    # name ci.yml's jobs) are unaffected.
-    assert "Types, lint, tests, build" not in AUTO_MERGE.read_text()
+    # Not a required check, like container.yml: the auto-merge guard's list of what main's ruleset
+    # must require names only ci.yml's jobs. (The auto-merge job waits for this check itself on a
+    # PR that changes web/.)
+    guard = AUTO_MERGE.read_text().split("- name: Require CI on the base branch", 1)[1]
+    guard = guard.split("- name:", 1)[0]
+    assert "Types, lint, tests, build" not in guard
 
 
 def test_the_phone_app_is_a_workers_static_assets_site_with_a_pinned_node() -> None:
