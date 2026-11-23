@@ -1,11 +1,13 @@
 """Saved reports: what the scheduled runs built, read back for the phone app and `fh report open`
 (ADR 0026). One row per league, kind and date, replaced when a run repeats."""
 
-from datetime import date, timedelta
+from collections.abc import Collection
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import DateTime, Select, and_, cast, func, select
+from sqlalchemy import DateTime, Select, and_, cast, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -109,3 +111,48 @@ def to_domain(row: ReportRow) -> ReportDocument:
             "cards": row.cards, "engine_only": row.engine_only,
         }
     )  # fmt: skip
+
+
+@dataclass(frozen=True)
+class Announcement:
+    """What a report push would announce: the reports of one kind for some dates, as saved."""
+
+    reports: int
+    cards: int
+    already_sent: bool  # a push for any of them was already accepted (ADR 0030)
+
+
+def announcement(
+    session: Session, user_id: UUID, kind: ReportKind, dates: Collection[date]
+) -> Announcement:
+    """Counts for the push, read from what is committed, and whether it already went out."""
+    total_cards, total_reports, sent = session.execute(
+        select(
+            func.coalesce(func.sum(func.jsonb_array_length(ReportRow.cards)), 0),
+            func.count(ReportRow.id),
+            func.count(ReportRow.notified_at),
+        ).where(
+            ReportRow.user_id == user_id,
+            ReportRow.kind == kind.value,
+            ReportRow.for_date.in_(dates),
+        )
+    ).one()
+    return Announcement(reports=total_reports, cards=int(total_cards), already_sent=sent > 0)
+
+
+def mark_notified(
+    session: Session, user_id: UUID, kind: ReportKind, dates: Collection[date], at: datetime
+) -> int:
+    """Record that the push for these reports went out. Rows already marked keep their time."""
+    result = session.execute(
+        update(ReportRow)
+        .where(
+            ReportRow.user_id == user_id,
+            ReportRow.kind == kind.value,
+            ReportRow.for_date.in_(dates),
+            ReportRow.notified_at.is_(None),
+        )
+        .values(notified_at=at)
+        .returning(ReportRow.id)
+    )
+    return len(result.all())

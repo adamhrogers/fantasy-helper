@@ -56,8 +56,13 @@ jobs:
         FH_R2_ENDPOINT=fh-r2-endpoint:latest,FH_R2_ACCESS_KEY_ID=fh-r2-access-key-id:latest,FH_R2_SECRET_ACCESS_KEY=fh-r2-secret-access-key:latest,FH_NTFY_TOPIC=fh-ntfy-topic:latest,FH_HEALTHCHECKS_PING_KEY=fh-healthchecks-ping-key:latest
       DATABASE_SECRETS: >-
         DATABASE_URL=fh-database-url:latest,FH_ENCRYPTION_KEY=fh-encryption-key:latest
+      # The API serves the PUBLIC push key and never holds the private one (ADR 0030).
       API_SECRETS: >-
-        DATABASE_URL=fh-api-database-url:latest,FH_SUPABASE_URL=fh-supabase-url:latest,FH_APP_ORIGINS=fh-app-origins:latest
+        DATABASE_URL=fh-api-database-url:latest,FH_SUPABASE_URL=fh-supabase-url:latest,FH_APP_ORIGINS=fh-app-origins:latest,FH_VAPID_PUBLIC_KEY=fh-vapid-public-key:latest
+      # The report jobs, and only they, sign pushes: the private key, and the app's own address
+      # (the first of FH_APP_ORIGINS), which is the VAPID subject (ADR 0030).
+      PUSH_SECRETS: >-
+        FH_VAPID_PRIVATE_KEY=fh-vapid-private-key:latest,FH_APP_ORIGINS=fh-app-origins:latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
@@ -131,7 +136,7 @@ jobs:
               --tasks 1 --max-retries 0 --task-timeout "$5" --cpu 1 --memory "$6" \
               --set-env-vars "$envs"
           }
-          REPORT_SECRETS="$SNAPSHOT_SECRETS,$DATABASE_SECRETS"
+          REPORT_SECRETS="$SNAPSHOT_SECRETS,$DATABASE_SECRETS,$PUSH_SECRETS"
           deploy snapshot-morning "$JOBS_SA" "$SNAPSHOT_SECRETS" snapshot,--set,morning 30m 512Mi daily
           deploy snapshot-evening "$JOBS_SA" "$SNAPSHOT_SECRETS" snapshot,--set,evening 30m 512Mi -
           deploy migrate "$REPORTS_SA" DATABASE_URL=fh-database-url:latest migrate 10m 512Mi -

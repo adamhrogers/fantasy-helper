@@ -28,6 +28,7 @@ cd web && npm run typecheck && npm run lint && npm test && npm run build   # wha
 cd web && npm run gen:api                 # regenerate src/api/schema.d.ts after web/openapi.json changes (CI fails on drift)
 uv run fh run daily [--dry-run] [--open]  # ingest, lock-or-pass calls (logged), recap cards, daily report page
 uv run fh run weekly [--open]             # ingest, weekly overview per league (FactSheets, calls)
+uv run fh push test                       # a test notification to the owner's devices (the cloud runs it: docs/runbooks/phone-app.md Part 3)
 uv run fh fixtures record                 # re-record redacted fixtures (then update contract test counts)
 scripts/snapshot-schedule.sh status       # snapshot schedule state and logs
 scripts/fh-prod.sh league add ...         # ONE fh command against prod (league|report|doctor only); secrets never touch disk
@@ -35,6 +36,7 @@ scripts/fh-sql.sh "select ..."            # look at prod through the read-only l
 scripts/readonly-setup.sh                 # create or refresh that login (once, and after a migration adds a table)
 scripts/api-smoke.sh https://<api>        # signs in through Supabase and checks every API route; prints statuses and counts only
 scripts/gcp-setup.sh infra|schedule|show  # Google Cloud: accounts, secrets, jobs, schedules (docs/runbooks/scheduled-jobs.md)
+scripts/vapid-setup.sh [--rotate]         # make the Web Push key pair straight into Secret Manager (docs/runbooks/phone-app.md Part 3)
 scripts/healthchecks-setup.sh             # set the Healthchecks schedules from scripts/jobs.conf (always Eastern)
 ```
 

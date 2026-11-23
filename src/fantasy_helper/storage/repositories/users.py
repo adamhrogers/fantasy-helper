@@ -18,6 +18,11 @@ def _to_domain(row: UserRow) -> User:
     )
 
 
+def get_by_id(session: Session, user_id: UUID) -> User | None:
+    row = session.get(UserRow, user_id)
+    return _to_domain(row) if row else None
+
+
 def get_by_email(session: Session, email: str) -> User | None:
     row = session.scalar(select(UserRow).where(UserRow.email == email.strip().lower()))
     return _to_domain(row) if row else None

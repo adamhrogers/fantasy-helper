@@ -10,6 +10,7 @@ Claude API key cannot leak into the shell you run Claude Code in.
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -58,11 +59,15 @@ class Settings(BaseSettings):
     next_job: str | None = Field(default=None, alias="FH_NEXT_JOB")
 
     # The phone app's API (ADR 0029). The Supabase project it checks sign-ins against, the
-    # addresses the app is served from (comma-separated, for CORS), and the public half of the
+    # addresses the app is served from (comma-separated: the API's CORS allow-list, and the first
+    # is the VAPID subject the report jobs sign pushes with, ADR 0030), and the public half of the
     # Web Push key the app subscribes with.
     supabase_url: str | None = Field(default=None, alias="FH_SUPABASE_URL")
     app_origins: str = Field(default="", alias="FH_APP_ORIGINS")
     vapid_public_key: str | None = Field(default=None, alias="FH_VAPID_PUBLIC_KEY")
+    # The private half, which signs every push (ADR 0030). Only the report jobs hold it: the API,
+    # which faces the internet, has the public half only.
+    vapid_private_key: SecretStr | None = Field(default=None, alias="FH_VAPID_PRIVATE_KEY")
 
     # Local working folder (git-ignored): the raw store when FH_RAW_STORE=local, and HTML reports.
     data_dir: Path = Field(default=Path("data"), alias="FH_DATA_DIR")
@@ -83,6 +88,20 @@ class Settings(BaseSettings):
 def origins(settings: Settings) -> list[str]:
     """The addresses the phone app may call the API from."""
     return [o.strip().rstrip("/") for o in settings.app_origins.split(",") if o.strip()]
+
+
+def app_address(settings: Settings) -> str | None:
+    """The app's own address, which is the VAPID subject a push is signed with (ADR 0030): the
+    first of the app's addresses, if it is a real https one. The placeholder the API's secret holds
+    before the app exists (`*.invalid`) is not one, and Apple refuses a subject that isn't a URL."""
+    first = origins(settings)[:1]
+    if not first:
+        return None
+    parts = urlsplit(first[0])
+    host = parts.hostname or ""
+    if parts.scheme != "https" or not host or host.endswith(".invalid"):
+        return None
+    return first[0]
 
 
 @lru_cache(maxsize=1)

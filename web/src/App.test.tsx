@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
@@ -14,6 +14,7 @@ import {
   report,
   reports,
 } from './test-fixtures';
+import { FakeBrowser, IPHONE_APP } from './test-push-fixtures';
 
 beforeEach(() => {
   window.history.replaceState(null, '', '/');
@@ -170,5 +171,62 @@ describe('when something is wrong', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('status 500');
     await user.click(screen.getByRole('link', { name: 'This Week' }));
     expect(await screen.findByText('Card for Test League A')).toBeInTheDocument();
+  });
+});
+
+describe('notifications', () => {
+  /** The page's side of the service worker: it posts {type: 'OPEN', path} when a notification is tapped. */
+  function serviceWorker() {
+    const worker = new EventTarget();
+    Object.defineProperty(navigator, 'serviceWorker', { value: worker, configurable: true });
+    return (data: unknown) => act(() => void worker.dispatchEvent(new MessageEvent('message', { data })));
+  }
+
+  afterEach(() => {
+    Reflect.deleteProperty(navigator, 'serviceWorker');
+  });
+
+  it('shows the control below the report, and turns them on from a tap', async () => {
+    const user = userEvent.setup();
+    const push = { platform: new FakeBrowser(), device: IPHONE_APP };
+    render(<App auth={fakeAuth(true)} api={fakeApi()} codeSignIn={false} push={push} />);
+    await user.click(await screen.findByRole('button', { name: 'Enable notifications' }));
+    expect(await screen.findByRole('button', { name: 'Turn off' })).toBeInTheDocument();
+  });
+
+  it('offers nothing while signed out, and asks the push service for nothing', async () => {
+    const api = fakeApi();
+    const push = { platform: new FakeBrowser(), device: IPHONE_APP };
+    render(<App auth={fakeAuth(false)} api={api} codeSignIn={false} push={push} />);
+    await screen.findByRole('form', { name: 'Sign in' });
+    expect(screen.queryByRole('button', { name: 'Enable notifications' })).toBeNull();
+    expect(api.pushPublicKey).not.toHaveBeenCalled();
+    expect(push.platform.subscription).not.toHaveBeenCalled();
+  });
+
+  it('goes to the tab a tapped notification names, and loads the latest reports', async () => {
+    const send = serviceWorker();
+    const api = fakeApi();
+    render(<App auth={fakeAuth(true)} api={api} codeSignIn={false} />);
+    await screen.findByRole('region', { name: 'Test League A' });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh' })).toBeEnabled());
+    expect(api.me).toHaveBeenCalledTimes(1);
+    send({ type: 'OPEN', path: '/week' });
+    expect(await screen.findByRole('heading', { level: 1, name: 'This Week' })).toBeInTheDocument();
+    expect(window.location.pathname).toBe('/week');
+    await waitFor(() => expect(api.me).toHaveBeenCalledTimes(2)); // the report it announced is fetched
+  });
+
+  it('ignores any other message from the service worker', async () => {
+    const send = serviceWorker();
+    const api = fakeApi();
+    render(<App auth={fakeAuth(true)} api={api} codeSignIn={false} />);
+    await screen.findByRole('region', { name: 'Test League A' });
+    send({ type: 'SOMETHING_ELSE', path: '/week' });
+    send('/week');
+    send(null);
+    send({ type: 'OPEN' });
+    expect(screen.getByRole('heading', { level: 1, name: 'Today' })).toBeInTheDocument();
+    expect(api.me).toHaveBeenCalledTimes(1);
   });
 });

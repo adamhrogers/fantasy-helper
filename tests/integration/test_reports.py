@@ -219,7 +219,7 @@ def test_fh_migrate_and_fh_report_open_against_a_real_database(
 
     migrated = runner.invoke(app, ["migrate"])
     assert migrated.exit_code == 0, migrated.output
-    assert "already at head (0007)" in migrated.output
+    assert "already at head (0008)" in migrated.output
 
     # Other tests commit an owner of their own, and the command reads "the owner": use that one
     # if it's there, and leave nothing of ours behind either way.

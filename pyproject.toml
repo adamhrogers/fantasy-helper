@@ -15,6 +15,7 @@ dependencies = [
     "pydantic>=2.14.1",
     "pydantic-settings>=2.16.1",
     "pyjwt[crypto]>=2.15.1",
+    "pywebpush>=2.5.0",
     "sqlalchemy>=2.1.6",
     "structlog>=26.1.0",
     "typer>=0.27.3",
@@ -62,6 +63,11 @@ python_version = "3.12"
 strict = true
 files = ["src", "tests"]
 plugins = ["pydantic.mypy"]
+
+# Push libraries that ship no type information (delivery/push.py, ADR 0030).
+[[tool.mypy.overrides]]
+module = ["pywebpush", "py_vapid", "http_ece", "requests", "requests.*"]
+ignore_missing_imports = true
 
 [tool.pydantic-mypy]
 init_forbid_extra = true

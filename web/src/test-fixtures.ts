@@ -47,12 +47,39 @@ export const fail = (kind: ApiError['kind'], message = 'went wrong') => ({
   error: { kind, message },
 });
 
-export function fakeApi(overrides: Partial<Record<keyof Api, ReturnType<typeof vi.fn>>> = {}) {
+/** The server's public push key: 65 bytes (an uncompressed P-256 point starts with 0x04), URL-safe. */
+export const PUSH_KEY = keyText(7);
+
+/** A key in the form the API sends it, made from one number so two keys can differ. */
+export function keyText(seed: number): string {
+  const bytes = new Uint8Array(65).map((_, i) => (i === 0 ? 4 : (i * seed) % 251));
+  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+type Replacement = (...args: never[]) => unknown;
+
+/** The API with every call answered; `overrides` replace some (a plain function or a vi.fn). */
+export function fakeApi(overrides: Partial<Record<keyof Api, Replacement>> = {}) {
+  const replaced = Object.fromEntries(
+    Object.entries(overrides).map(([name, replacement]) => [
+      name,
+      vi.isMockFunction(replacement) ? replacement : vi.fn(replacement),
+    ]),
+  );
   return {
     me: vi.fn(async () => ok(ME)),
     reports: vi.fn(async () => ok(reports('2026-11-16', [report(LEAGUE_A), report(LEAGUE_B)]))),
-    ...overrides,
-  } as unknown as Api & { me: ReturnType<typeof vi.fn>; reports: ReturnType<typeof vi.fn> };
+    pushPublicKey: vi.fn(async () => ok({ public_key: PUSH_KEY })),
+    saveSubscription: vi.fn(async (body: { endpoint: string }) => ok({ endpoint: body.endpoint })),
+    removeSubscription: vi.fn(async () => ok(null)),
+    ...replaced,
+  } as unknown as Api & {
+    me: ReturnType<typeof vi.fn>;
+    reports: ReturnType<typeof vi.fn>;
+    pushPublicKey: ReturnType<typeof vi.fn>;
+    saveSubscription: ReturnType<typeof vi.fn>;
+    removeSubscription: ReturnType<typeof vi.fn>;
+  };
 }
 
 export function fakeAuth(signedIn: boolean) {

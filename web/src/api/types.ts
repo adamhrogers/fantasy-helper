@@ -9,3 +9,6 @@ export type ReportDocument = components['schemas']['ReportDocument'];
 export type Card = components['schemas']['Card'];
 export type GameDay = components['schemas']['GameDay'];
 export type ReportKind = 'daily' | 'weekly';
+export type PushKey = components['schemas']['PushKey'];
+/** What the API takes to save a device: only the address and the two keys, nothing else. */
+export type SubscriptionBody = components['schemas']['SubscriptionIn'];

@@ -4,11 +4,13 @@ import type { ReportsOut } from './api/types';
 import type { AuthClient } from './auth/types';
 import { InstallHelp } from './components/InstallHelp';
 import { LoadProblem, NotSetUp } from './components/Notices';
+import { Notifications, type NotificationsProps } from './components/Notifications';
 import { ReportsView } from './components/ReportsView';
 import { SignIn } from './components/SignIn';
 import { UpdateBar } from './components/UpdateBar';
 import { formatTime } from './lib/freshness';
-import { TAB_PATHS, useTab, type Tab } from './route';
+import { TAB_PATHS, tabFromPath, useTab, type Tab } from './route';
+import { useNotificationOpens } from './useNotificationOpens';
 import { useAuthStatus } from './useAuthStatus';
 import { useDashboard, type Resource } from './useDashboard';
 import { useNow } from './useNow';
@@ -19,9 +21,11 @@ export interface AppProps {
   auth: AuthClient;
   api: Api;
   codeSignIn: boolean;
+  /** For tests: the browser's push support and the phone, in place of the real ones. */
+  push?: Pick<NotificationsProps, 'platform' | 'device'>;
 }
 
-export function App({ auth, api, codeSignIn }: AppProps) {
+export function App({ auth, api, codeSignIn, push }: AppProps) {
   const status = useAuthStatus(auth);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -36,21 +40,32 @@ export function App({ auth, api, codeSignIn }: AppProps) {
 
   if (status === 'loading') return <p className="splash">Loading…</p>;
   if (status === 'signed-out') return <SignIn auth={auth} codeSignIn={codeSignIn} notice={notice} />;
-  return <SignedIn api={api} onExpired={expired} onSignOut={signOut} />;
+  return <SignedIn api={api} onExpired={expired} onSignOut={signOut} push={push} />;
 }
 
 interface SignedInProps {
   api: Api;
   onExpired: () => void;
   onSignOut: () => void;
+  push: AppProps['push'];
 }
 
-function SignedIn({ api, onExpired, onSignOut }: SignedInProps) {
+function SignedIn({ api, onExpired, onSignOut, push }: SignedInProps) {
   const dashboard = useDashboard(api);
   const [tab, goTo] = useTab();
   const now = useNow();
   const [installDismissed, setInstallDismissed] = useState(false);
-  const { me, daily, weekly } = dashboard;
+  const { me, daily, weekly, refresh } = dashboard;
+
+  // Tapping a notification while the app is open: go to its tab, and show the report it announced.
+  const openFromNotification = useCallback(
+    (path: string) => {
+      goTo(tabFromPath(path));
+      refresh();
+    },
+    [goTo, refresh],
+  );
+  useNotificationOpens(openFromNotification);
 
   const signInLost = [me, daily, weekly].some((resource) => resource.error?.kind === 'unauthorized');
   useEffect(() => {
@@ -103,6 +118,7 @@ function SignedIn({ api, onExpired, onSignOut }: SignedInProps) {
         ) : (
           <p className="muted">Loading…</p>
         )}
+        <Notifications api={api} {...push} />
         <footer className="foot">
           <p className="muted">
             Signed in as {me.data.name} · build {__APP_BUILD__}
