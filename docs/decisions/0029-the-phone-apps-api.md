@@ -34,3 +34,11 @@ The app needs somewhere to read reports and save a push subscription, and friend
 - **If the first deploy fails with `PERMISSION_DENIED`,** grant the deployer the narrowest role that fixes it, on the service, and record it here; never `run.admin` on the project.
 - **Supabase's `anon` and `service_role` keys are retiring (end of 2026).** The app uses the publishable key. The API uses neither.
 - `scripts/api-smoke.sh` is the check: 200s with Adam's token and his real report counts, 401 without one, and "sign-ups refused" for an unknown email. It prints statuses and counts only.
+
+## Update, 2026-11-22: the daily reports carry the day's games
+
+`GET /v1/reports/daily` now answers with `games`: the NBA schedule for the reports' date (`day`, how many `games`, and `first_tip_utc`, null exactly when there are none). The app shows the first game's time once at the top of the Today tab, in the user's zone, or says there are no games. Weekly answers, and dates with no reports, carry `games: null`.
+
+- **Read in the same query, not saved with each report.** `storage/repositories/reports.with_game_day` selects the report rows with two correlated subqueries on `nba_games`' indexed `tip_utc` (the Eastern day's bounds are computed in SQL, so daylight time is right). The route is still one statement (ADR 0020, and the test that counts its SELECTs). The schedule is the same for every league, so copying it into each league's row would repeat it; reading it at request time also stays right when a tip time moves.
+- **Rejected:** a column on `reports` (a migration, and a copy per league of a fact the schedule already holds); a second query in the route (two round trips on the hot path); a card in each league's report (it would show once per league, and the app would have to fish it out).
+- **The app stays honest when it's missing.** It shows the line only when `games.day` is today in the user's zone (an older report's games are over, and the freshness banner already says today's report isn't built). An older API that sends no `games` shows nothing, never a guess.

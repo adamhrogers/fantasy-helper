@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from fantasy_helper.adapters.sleeper import mapper as sleeper
 from fantasy_helper.domain.league import League, Platform
-from fantasy_helper.domain.reports import CardKind
+from fantasy_helper.domain.reports import Card, CardKind, GameDay, ReportDocument, ReportKind
 from fantasy_helper.engine.distributions import GameDistribution
 from fantasy_helper.engine.lock_in import decide
 from fantasy_helper.facts.lock_in import (
@@ -110,3 +110,27 @@ def test_cards_say_what_was_logged_and_when_to_decide() -> None:
     page = render([report], title="Daily report", league_names={str(s.league.id): s.league.name})
     assert "Lock Big Night: 52.0" in page
     assert "Friends &lt;League&gt;" in page  # escaped
+
+
+def test_the_local_page_draws_bullets_as_a_list_and_the_days_first_game() -> None:
+    card = Card(
+        id="daily-standouts", kind=CardKind.RECAP, title="Last night's top game: A <b>, 61.5",
+        body="The best games of Thu Nov 5.", items=("Player A 61.5 (yours)", "Player <B> 55.0"),
+    )  # fmt: skip
+    old = Card(id="old", kind=CardKind.RECAP, title="Saved before items existed", body="Text.")
+    report = ReportDocument(
+        user_id=uuid4(), league_id=uuid4(), kind=ReportKind.DAILY, for_date=date(2026, 11, 6),
+        generated_at=NOW, cards=(card, old),
+    )  # fmt: skip
+    games = GameDay(day=date(2026, 11, 6), games=7, first_tip_utc=TONIGHT)
+    page = render([report], title="Daily report", league_names={}, games=games)
+    assert "<ul><li>Player A 61.5 (yours)</li><li>Player &lt;B&gt; 55.0</li></ul>" in page
+    assert page.count("<ul>") == 1  # the old card has no list
+    assert "First game on Fri Nov 6: 8:00 PM EST" in page
+    pacific = render([report], title="x", league_names={}, games=games, time_zone="US/Pacific")
+    assert "First game on Fri Nov 6: 5:00 PM PST" in pacific
+    off = render(
+        [report], title="x", league_names={}, games=GameDay(day=date(2026, 11, 6), games=0)
+    )
+    assert "No NBA games on Fri Nov 6." in off
+    assert "First game" not in render([report], title="x", league_names={})  # nothing to say
